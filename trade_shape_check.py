@@ -19,6 +19,7 @@ Reports both, plus what happens to the cut player and what the fee actually cost
 """
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import shutil
@@ -121,6 +122,28 @@ async def main(seasons, treasury):
             why[k] += v - before.get(k, 0)
         return out
 
+    def _assertForwards(spy, real, name):
+        """⚠️ A FIXED-ARITY SPY IS A SILENT MEASUREMENT FAILURE, AND IT HAS NOW HAPPENED
+        TWICE IN ONE DAY. `_findBackfill` grew a `week=` parameter and `_cutToMakeRoom` a
+        `week=` parameter; each time the 3-arg wrapper raised TypeError into
+        `_runTradePass`'s best-effort except, trades collapsed, and the run looked like a
+        clean measurement of a regression that did not exist — 61 trades read as 17, then
+        61 read as 21-28. Nothing in the output said anything was wrong.
+
+        So the harness checks itself at wiring time: a spy must either be variadic or match
+        the real signature exactly, and it says so loudly rather than mis-measuring.
+        """
+        sig = inspect.signature(spy)
+        variadic = any(pp.kind in (pp.VAR_POSITIONAL, pp.VAR_KEYWORD)
+                       for pp in sig.parameters.values())
+        if variadic:
+            return
+        if len(sig.parameters) != len(inspect.signature(real).parameters):
+            raise SystemExit(
+                f"HARNESS BUG: {name} takes {len(sig.parameters)} args but the real "
+                f"function takes {len(inspect.signature(real).parameters)}. Make the spy "
+                f"variadic (*a, **kw) — a fixed-arity wrapper silently kills every call.")
+
     tradeManager.TradeMarket.listingsFor = spyListings
     tradeManager.TradeMarket.bidFor = spyBid
     tradeManager.TradeMarket.inquiriesFor = spyInquiries
@@ -130,19 +153,19 @@ async def main(seasons, treasury):
     realBackfill = tradeManager._findBackfill
     realSettle = tradeManager.settleTrade
 
-    def spyOpen(team, player):
-        return realOpen(team, player)
+    def spyOpen(*a, **kw):
+        return realOpen(*a, **kw)
 
     pending = {}
 
-    def spyCut(seasonManager, buyer, incoming):
+    def spyCut(seasonManager, buyer, incoming, *a, **kw):
         from managers.frontOfficeBrain import cutFeeFor
         posValue = getattr(getattr(incoming, 'position', None), 'value', None)
         held = [buyer.rosterDict.get(sl)
                 for sl in tradeManager.POSITION_SLOTS.get(posValue, [])]
         held = [h for h in held if h is not None]
         worst = min(held, key=lambda h: h.playerRating) if held else None
-        out = realCut(seasonManager, buyer, incoming)
+        out = realCut(seasonManager, buyer, incoming, *a, **kw)
         if out is not None and worst is not None:
             pending['cut'] = {'name': worst.name,
                               'position': getattr(worst.position, 'name', None),
@@ -298,6 +321,11 @@ async def main(seasons, treasury):
             if before:
                 shape['hadEmptySlot'] += 1
         return out
+
+    _assertForwards(spyOpen, realOpen, 'spyOpen')
+    _assertForwards(spyCut, realCut, 'spyCut')
+    _assertForwards(spyBackfill, realBackfill, 'spyBackfill')
+    _assertForwards(spySettle, realSettle, 'settleTrade')
 
     tradeManager._cutToMakeRoom = spyCut
     tradeManager._findBackfill = spyBackfill
