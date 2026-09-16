@@ -38,6 +38,9 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
                        TRADE_HUMP_APPETITE, TRADE_INQUIRY_APPETITE, TRADE_BUYER_NEEDS,
                        TRADE_PICK_SWAP_ENABLED, TRADE_PICK_SWAP_MIN_GAIN,
+                       TRADE_WINDOW_DECLINE_HIGH,
+                       TRADE_WINDOW_ASCENT_HIGH, TRADE_WINDOW_NOW_CLOSING,
+                       TRADE_WINDOW_NOW_OPENING,
                        TRADE_PICK_PREMIUM_TOP, TRADE_PICK_PREMIUM_TOP_SLOTS,
                        TRADE_POSITION_APPETITE, TRADE_KICKER_CRISIS_FG_PCT,
                        TRADE_KICKER_CRISIS_MIN_ATT, TRADE_LOW_APPETITE_MAX_PIECES)
@@ -143,6 +146,7 @@ class TradeMarket:
         self._playoffCut = None
         self._posMeanCache = {}
         self._needsCache = {}
+        self._windowCache = {}
         # Why bundles fail, for the market harness. Three reasons, three different answers.
         self.assembleFail = {}
         # ⚠️ Why an INQUIRY never happened, which "0 trades" cannot distinguish between:
@@ -188,9 +192,87 @@ class TradeMarket:
         values = list(self._contention.values())
         self._leagueMean = (sum(values) / len(values)) if values else 0.0
 
+    def teamWindow(self, team) -> str:
+        """Where this club sits in its contention cycle: opening / open / closing / closed.
+
+        ⚠️ THE MARKET READ THIS SEASON'S RECORD AND NOTHING ELSE (owner, 2026-09-16:
+        "there's a contention cycle ... where a team is in this cycle should direct how they
+        conduct trades"). Everything it turns on — contention, `nowWeight`, the hump — is
+        wins and losses, and the only career arc in the system is per-PLAYER with nothing
+        aggregating it. Measured over 224 club-seasons, **corr(win%, regressing share) =
+        +0.000**: the record carries literally zero information about the cycle. Cranes went
+        .893 with **60%** of their weighted starters in decline and were priced exactly like
+        a club at .750 with none.
+
+        ⚠️ TWO AXES, NOT ONE. The record says whether a club is winning; the arc mix says
+        whether that is about to continue. A closing window is a club winning NOW on players
+        who will not be here — which is the most interesting club in the league to trade
+        with, and was indistinguishable from a young one.
+
+        ⚠️ POSITION-WEIGHTED, so a fading quarterback counts for more than a fading kicker —
+        the same weighting the valuation already uses. An unweighted head count says a club
+        whose kicker is old is as compromised as one whose quarterback is.
+        """
+        cached = self._windowCache.get(id(team))
+        if cached is not None:
+            return cached
+        window = self._computeWindow(team)
+        self._windowCache[id(team)] = window
+        return window
+
+    def _computeWindow(self, team) -> str:
+        # ⚠️ READ LAZILY, NOT BOUND AT IMPORT. `from constants import X` copies the value,
+        # so flipping `constants.X` at runtime does nothing to it — the flag would have been
+        # untestable and unusable as a kill switch. `_coreOf` already reads its constants
+        # this way.
+        from constants import TRADE_WINDOW_ENABLED
+        from managers.frontOfficeBrain import positionValue
+        if not TRADE_WINDOW_ENABLED:
+            return 'open'
+        decline = ascent = total = 0.0
+        for player in (getattr(team, 'rosterDict', None) or {}).values():
+            if player is None:
+                continue
+            try:
+                weight = float(positionValue(player))
+            except Exception:
+                weight = 1.0
+            try:
+                arc = self.brain.classifyArc(player)
+            except Exception:
+                arc = 'prime'
+            total += weight
+            if arc == 'regressing':
+                decline += weight
+            elif arc == 'developing':
+                ascent += weight
+        if total <= 0:
+            return 'open'
+        decline /= total
+        ascent /= total
+        contending = self.isContending(team)
+        if contending:
+            return 'closing' if decline >= TRADE_WINDOW_DECLINE_HIGH else 'open'
+        # ⚠️ NOT CONTENDING SPLITS TWO WAYS AND THE SPLIT IS THE POINT. A young club going
+        # nowhere is BUILDING toward something and must not sell its core; an old one going
+        # nowhere is finished and should sell everything. Both looked identical before.
+        if decline >= TRADE_WINDOW_DECLINE_HIGH:
+            return 'closed'
+        return 'opening' if ascent >= TRADE_WINDOW_ASCENT_HIGH else 'open'
+
     def nowWeight(self, team) -> float:
-        return trading.nowWeight(self._contention.get(getattr(team, 'id', None), 0.5),
+        # ⚠️ THE WINDOW RIDES THE ONE DIAL THE WHOLE MARKET ALREADY TURNS ON. A closing
+        # contender pays up because next season is worse — its alternative to winning now is
+        # not winning later, it is not winning at all. A club whose window has not opened
+        # does the reverse and accumulates.
+        base = trading.nowWeight(self._contention.get(getattr(team, 'id', None), 0.5),
                                  self._leagueMean, self.week)
+        window = self.teamWindow(team)
+        if window == 'closing':
+            return base * TRADE_WINDOW_NOW_CLOSING
+        if window == 'opening':
+            return base * TRADE_WINDOW_NOW_OPENING
+        return base
 
     def isContending(self, team) -> bool:
         """Is this club's season worth protecting?
@@ -744,6 +826,18 @@ class TradeMarket:
             roster.sort(key=lambda p: -self.brain.decisionValue(p, coach=coach, team=team))
         except Exception:
             roster.sort(key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+        # ⚠️ A CLUB WHOSE WINDOW HAS CLOSED HAS NOTHING TO BUILD AROUND. The core rule
+        # protects the players a rebuild is FOR — and on a finished roster the best two are
+        # not that, they are the last assets of the team that just ended. Before the window
+        # existed, a young club going nowhere and an old one going nowhere were
+        # indistinguishable, so both sat on their stars while one of them should have been
+        # selling. ⚠️ The declining-player exclusion below already catches the individual
+        # case; this catches the club-level one, where a still-prime star is stranded on a
+        # roster that is finished around him.
+        if self.teamWindow(team) == 'closed':
+            self._coreCache[id(team)] = set()
+            return set()
+
         core = set()
         for p in roster[:int(TRADE_CORE_SIZE)]:
             if (getattr(p, 'playerRating', 0) or 0) < TRADE_CORE_MIN_RATING:

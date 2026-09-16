@@ -2838,6 +2838,41 @@ TRADE_INQUIRY_APPETITE = 1.50
 # ⚠️ OFFSEASON ONLY, because a pick's SLOT is only known once the season has finished, and
 # because the buyer is shopping for an upgrade (owner, 2026-09-16: "offseason is buyers
 # looking for ways to upgrade, which can include jumping up in the draft").
+# ---- Where a club is in its contention cycle ----
+# ⚠️ THE MARKET READ THIS SEASON'S RECORD AND NOTHING ELSE, so a club's window was invisible
+# to it. `_computeContention`, `isContending`, `nowWeight`/`laterWeight` and `isOverTheHump`
+# all key off wins and losses, and the only career arc in the system is per-PLAYER
+# (`frontOfficeBrain.classifyArc`) with nothing aggregating it.
+#
+# ⚠️ MEASURED OVER 224 CLUB-SEASONS (seasons 8+ of a 14-season run): **corr(win%,
+# regressing share) = +0.000**. The record carries literally zero information about where a
+# club is in its cycle. The pair that makes the case: Caddies at **.750 with 0% of their
+# weighted starters in decline**, and Cranes at **.893 with 60%** — the best team in the
+# league, two-thirds of it fading, priced identically to a young one.
+#
+# ⚠️ AND THE POPULATION ONLY EXISTS AFTER SEASON 6 (owner, 2026-09-16: "you'd need to let
+# the sim run for 10+ seasons to see it, thats when players start retiring, so there's a mix
+# of old vets and rookies"). Measured: 0% regressing through season 5, 8% at season 6,
+# settling at ~20% from season 10. A six-season sample says this feature is inert; it is not,
+# it is just younger than the question.
+TRADE_WINDOW_ENABLED = True
+
+# Position-weighted share of the starting six, so a fading quarterback counts for more than
+# a fading kicker. Bands chosen off the measured spread (median 17%, max 68%).
+# ⚠️ SIZED SO ONE FADING QUARTERBACK CLOSES A WINDOW AND ONE FADING KICKER DOES NOT, which
+# is the whole reason it is position-weighted. Against a starting six weighing 4.17, one
+# fading man is: QB 24%, RB 19%, WR 17%, TE 14%, K 8%. At 0.30 nothing short of two starters
+# qualified and an aging franchise quarterback — the textbook closing window — read as wide
+# open. The measured median regressing share is 17%, so this sits just above it.
+TRADE_WINDOW_DECLINE_HIGH = 0.22
+TRADE_WINDOW_ASCENT_HIGH = 0.70     # this much still climbing = the window is ahead
+
+# ⚠️ IT MOVES `nowWeight`, WHICH IS THE ONE DIAL THE WHOLE MARKET ALREADY TURNS ON. A
+# closing contender pays up because next season is worse — the alternative to winning now is
+# not winning later, it is not winning. A club whose window has not opened does the reverse.
+TRADE_WINDOW_NOW_CLOSING = 1.25
+TRADE_WINDOW_NOW_OPENING = 0.80
+
 TRADE_PICK_SWAP_ENABLED = True
 
 # How much better the target pick must be, as a share of the buyer's own best, before it is
