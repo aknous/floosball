@@ -50,21 +50,72 @@ STARTERS = {'qb': (80, Position.QB), 'rb': (80, Position.RB),
 
 # -------------------------------------------------- 1. when it may happen
 
-def test_no_inquiry_during_the_season():
-    """⚠️ OFFSEASON ONLY (owner). In-season the market stays contract congestion — a
-    contender buying the present from clubs that cannot keep it."""
+def test_a_CONTENDER_kicks_the_tires_in_season_on_clubs_going_nowhere():
+    """Owner, 2026-09-16: "in season trades should also be buyers kicking the tires on
+    seller teams, not just sellers posting players they want to sell."
+
+    ⚠️ BEFORE THIS THE ONLY IN-SEASON PATH WAS A SELLER POSTING A PLAYER, so a contender
+    could never go and ask about one it wanted. ⚠️ THE PREDECESSOR OF THIS TEST ASSERTED THE
+    OPPOSITE ("no inquiry during the season") and, once the rule changed, still PASSED —
+    because its fixture's buyer was not contending, so the new gate refused it for an
+    unrelated reason. Rewritten rather than left to pass by accident.
+    """
     teams = _league()
     for t in teams:
         _fill(t, STARTERS)
-    buyer = teams[-1]
-    buyer.rosterDict['qb'] = FakePlayer(777, 60, Position.QB, termRemaining=3)
-    teams[0].rosterDict['qb'] = FakePlayer(778, 95, Position.QB, termRemaining=3)
+    contender, goingNowhere = teams[0], teams[-1]
+    contender.rosterDict['qb'] = FakePlayer(777, 58, Position.QB, termRemaining=3)
+    goingNowhere.rosterDict['qb'] = FakePlayer(778, 92, Position.QB, termRemaining=3)
+    # ⚠️ A RIVAL CONTENDER HOLDS A BETTER ONE, deliberately. Without that the sellers-only
+    # rule is untestable: the non-contender happens to hold the best available player, so
+    # dropping the rule changes nothing and the check passes either way.
+    rival = teams[1]
+    rival.rosterDict['qb'] = FakePlayer(781, 96, Position.QB, termRemaining=3)
 
-    inSeason = _market(teams, week=20)
-    offseason = _market(teams, week=None)
-    assert inSeason.inquiriesFor(buyer) == [], "a blockbuster fired during the season"
-    assert offseason.inquiriesFor(buyer), "the offseason produced no inquiry at all"
-    print("PASS a club kicks tires between seasons, never during one")
+    market = _market(teams, week=18)
+    assert market.isContending(contender) and market.isContending(rival)
+    assert not market.isContending(goingNowhere)
+    calls = market.inquiriesFor(contender)
+    assert calls, "a contender could not go and ask about a player it needs"
+    assert all(getattr(c.team, 'id', None) == goingNowhere.id for c in calls), \
+        "a contender approached a rival contender about its 96 instead of the 92 on offer"
+    print("PASS a contender phones the clubs going nowhere")
+
+
+def test_without_an_in_season_appetite_no_inquiry_could_ever_clear():
+    """⚠️ THE SAME ARITHMETIC THAT DEFEATED THE BLOCKBUSTER TWICE. The holder quotes
+    `TRADE_INQUIRY_PREMIUM` on an unsolicited approach and the buyer's plain ceiling is
+    1.0x, so opening the season to inquiries without an appetite term produces calls that
+    can never become trades.
+
+    ⚠️ `deadlineUrgency` CANNOT SUBSTITUTE: it scales the bar AND the ceiling together, so
+    it changes the SIZE of the package and never whether the buyer clears — and it peaks at
+    1.36 in week 22 for a strong contender, which would make this "the last week,
+    sometimes" rather than a market."""
+    assert constants.TRADE_INQUIRY_APPETITE > constants.TRADE_INQUIRY_PREMIUM, (
+        "an in-season buyer cannot reach the quote a holder puts on an unsolicited call")
+    assert constants.TRADE_HUMP_APPETITE > constants.TRADE_INQUIRY_APPETITE, (
+        "a hump club should pay MORE than a comfortable contender — the marginal win is "
+        "worth most exactly at the cut line")
+    print(f"PASS in-season appetite {constants.TRADE_INQUIRY_APPETITE} clears the "
+          f"{constants.TRADE_INQUIRY_PREMIUM} quote, under the hump's "
+          f"{constants.TRADE_HUMP_APPETITE}")
+
+
+def test_a_club_going_nowhere_does_not_kick_tires_in_season():
+    """⚠️ THE IN-SEASON BUYER IS A CONTENDER. A club out of the race buying for now is the
+    shape the whole market is built to run against — and it is the OFFSEASON where a club
+    below the line goes shopping, under the hump rule."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    alsoRan = teams[-1]
+    alsoRan.rosterDict['qb'] = FakePlayer(779, 58, Position.QB, termRemaining=3)
+    teams[0].rosterDict['qb'] = FakePlayer(780, 92, Position.QB, termRemaining=3)
+    market = _market(teams, week=18)
+    assert not market.isContending(alsoRan)
+    assert market.inquiriesFor(alsoRan) == [], "a non-contender went shopping mid-season"
+    print("PASS only a contender buys during the season")
 
 
 def test_a_qualifier_does_not_need_a_blockbuster():

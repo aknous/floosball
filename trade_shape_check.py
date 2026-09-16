@@ -146,7 +146,40 @@ async def main(seasons, treasury):
 
     tradeManager.TradeMarket.listingsFor = spyListings
     tradeManager.TradeMarket.bidFor = spyBid
+    realPick = tradeManager.TradeMarket.pickInquiriesFor
+    realPickBid = tradeManager.TradeMarket.bidForPick
+
+    def spyPick(self, *a, **kw):
+        before = dict(getattr(self, 'pickFail', {}))
+        out = realPick(self, *a, **kw)
+        why = shape.setdefault('pickWhy', Counter())
+        for k, v in getattr(self, 'pickFail', {}).items():
+            why[k] += v - before.get(k, 0)
+        return out
+
+    def spyPickBid(self, *a, **kw):
+        before = dict(getattr(self, 'pickFail', {}))
+        out = realPickBid(self, *a, **kw)
+        why = shape.setdefault('pickWhy', Counter())
+        for k, v in getattr(self, 'pickFail', {}).items():
+            why[k] += v - before.get(k, 0)
+        return out
+
+    realPickSettle = tradeManager.settlePickTrade
+
+    def spyPickSettle(*a, **kw):
+        """⚠️ COUNTED HERE BECAUSE NOTHING ELSE SEES IT. `settlePickTrade` is a separate
+        path, so the ledger spy on `settleTrade` never reaches it — and the harness sets the
+        root logger to ERROR, so its own INFO line is invisible too. Grepping the log for
+        "TRADE UP" therefore reported zero whether or not any happened."""
+        out = realPickSettle(*a, **kw)
+        shape.setdefault('pickWhy', Counter())['SETTLED' if out else 'settle_refused'] += 1
+        return out
+
+    tradeManager.settlePickTrade = spyPickSettle
     tradeManager.TradeMarket.inquiriesFor = spyInquiries
+    tradeManager.TradeMarket.pickInquiriesFor = spyPick
+    tradeManager.TradeMarket.bidForPick = spyPickBid
 
     realCut = tradeManager._cutToMakeRoom
     realOpen = tradeManager._openSlotFor
@@ -398,6 +431,14 @@ async def main(seasons, treasury):
               f"  |  offseason {shape['byWeek'].get('offseason', 0)}")
         detail = ', '.join(f"w{w}x{shape['byWeek'][w]}" for w in weeks)
         print(f"    detail: {detail}")
+    pk = shape.get('pickWhy') or Counter()
+    if pk:
+        print("\n  \u2500\u2500 trading up the draft \u2500\u2500")
+        for k in ('called','no_pick_to_swap','no_jump_worth_making','listed',
+                  'gain_under_bar','cannot_cover','bid','settle_refused','SETTLED'):
+            if pk.get(k):
+                print(f"    {k:<26} {pk[k]:>5}")
+
     inq = shape.get('inqWhy') or Counter()
     if inq:
         print("\n  \u2500\u2500 the blockbuster: who picked up the phone? \u2500\u2500")

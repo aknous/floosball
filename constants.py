@@ -2809,6 +2809,53 @@ TRADE_CORE_PREMIUM = 1.25
 # is precisely the window this path runs in.
 TRADE_HUMP_APPETITE = 1.70
 
+# ⚠️ AND THE SEASON NEEDS ITS OWN, because an unsolicited quote is unpayable without one.
+# Owner, 2026-09-16: "in season trades should also be buyers kicking the tires on seller
+# teams, not just sellers posting players they want to sell." A contender approaching a
+# club that is going nowhere pays above the player's linear worth for the same reason a
+# hump club does — the man converts a contending season into a deeper run — but LESS than
+# a hump club, because the marginal win is worth most exactly at the cut line.
+#
+# ⚠️ `deadlineUrgency` CANNOT DO THIS JOB and it is worth recording why: it scales the bar
+# AND the ceiling together, so it changes the SIZE of the package and never whether the
+# buyer clears at all. It also peaks at 1.36 (week 22, a strong contender), which would put
+# in-season inquiries at "the final week, sometimes" rather than a market.
+TRADE_INQUIRY_APPETITE = 1.50
+
+# ---- Trading UP the draft ----
+# ⚠️ A PICK COULD ONLY EVER BE CHANGE, NEVER THE THING BEING BOUGHT. A `Listing` was always
+# a player, so there was no pick-for-pick trade in the system at all and the classic
+# draft-day move could not be expressed. Measured over 8 seasons before this: of 86 picks
+# that changed hands, **one** was a top-8 and 66% sat in the 17-24 band — because picks flow
+# FROM buyers, buyers are contenders (median win% .641), and a contender's own pick lands
+# late. The valuable picks belong to the clubs that never pay with them.
+#
+# ⚠️ AND THE PRICES ALREADY MAKE THE TRADE WORK. Slot 1 is worth 55.0 against slot 4's 40.2,
+# so moving down three spots costs 14.8 — while a 78-rated starter on two years is worth
+# 15.8. "Drop a few spots and take a real player" is close to break-even with a slight edge
+# to the club moving down, which is exactly why both sides do it in real drafts.
+#
+# ⚠️ OFFSEASON ONLY, because a pick's SLOT is only known once the season has finished, and
+# because the buyer is shopping for an upgrade (owner, 2026-09-16: "offseason is buyers
+# looking for ways to upgrade, which can include jumping up in the draft").
+TRADE_PICK_SWAP_ENABLED = True
+
+# How much better the target pick must be, as a share of the buyer's own best, before it is
+# worth a phone call. Below this the two slots are interchangeable and the move is churn.
+TRADE_PICK_SWAP_MIN_GAIN = 1.6
+
+# ⚠️ A TOP PICK IS A CENTERPIECE AND IS PRICED LIKE ONE. Slots 1-3 carry an extra premium on
+# top of the unsolicited one — a club does not give up the first selection in the draft at
+# the going rate (owner: "a pick in the 1-3 zone would be considered a centerpiece just
+# because of what kind of player comes with a pick that high").
+# ⚠️ AND IT MUST STAY UNDER THE BUYER'S APPETITE OR THE FEATURE CANNOT FIRE AT ALL. At 1.30
+# the top-3 quote came to 1.35 x 1.30 = 1.755 against a ceiling of 1.70, so the only picks
+# the feature exists for were the ones it could never move — the same arithmetic that
+# defeated the blockbuster twice, for the third time. `test_pick_swap.py` pins the
+# relationship rather than the number.
+TRADE_PICK_PREMIUM_TOP = 1.20
+TRADE_PICK_PREMIUM_TOP_SLOTS = 3
+
 # So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
 # sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
 # above the league's read and its incumbent is genuinely poor. A club's franchise player

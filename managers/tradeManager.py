@@ -36,7 +36,9 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_INQUIRIES_PER_TEAM, TRADE_HUMP_BAND,
                        TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
                        TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
-                       TRADE_HUMP_APPETITE, TRADE_BUYER_NEEDS,
+                       TRADE_HUMP_APPETITE, TRADE_INQUIRY_APPETITE, TRADE_BUYER_NEEDS,
+                       TRADE_PICK_SWAP_ENABLED, TRADE_PICK_SWAP_MIN_GAIN,
+                       TRADE_PICK_PREMIUM_TOP, TRADE_PICK_PREMIUM_TOP_SLOTS,
                        TRADE_POSITION_APPETITE, TRADE_KICKER_CRISIS_FG_PCT,
                        TRADE_KICKER_CRISIS_MIN_ATT, TRADE_LOW_APPETITE_MAX_PIECES)
 
@@ -64,6 +66,7 @@ TRIGGER_URGENCY = {
     # `listingsFor`, so it never competes with a real listing for the per-club cap; the
     # entry exists only so a sort over a mixed list is total.
     'inquiry': 9,
+    'pick_swap': 9,
 }
 
 
@@ -80,6 +83,30 @@ class Listing:
     def __repr__(self):
         return (f"<Listing {self.team.name}: {self.player.name} "
                 f"({self.trigger}, ask {self.ask:.1f}, floor {self.floor:.1f})>")
+
+
+class PickListing:
+    """A DRAFT SLOT on the block, rather than a player.
+
+    ⚠️ IT IS NOT A `Listing` AND MUST NOT BE, even though the auction treats them alike.
+    Everything downstream of a `Listing` reads `.player` — roster slots, the backfill, the
+    cut to make room — and a pick has none of that. Sharing the class would mean threading
+    "is this actually a player?" through every one of those, which is how the two paths
+    quietly grow different rules. The auction only needs `.team`, `.ask` and `.floor`, so
+    that is all this carries in common.
+    """
+
+    def __init__(self, team, pick, ask, floor):
+        self.team = team
+        self.pick = pick            # the dict from `picksOwnedBy`
+        self.player = None          # explicit: nothing here has a player
+        self.trigger = 'pick_swap'
+        self.ask = ask
+        self.floor = floor
+
+    def __repr__(self):
+        return (f"<PickListing {self.team.name}: S{self.pick['season']} "
+                f"slot {self.pick['slot']} ask {self.ask:.1f}>")
 
 
 class Bid:
@@ -122,6 +149,7 @@ class TradeMarket:
         # the club was not close enough, it had no gap worth filling, or nobody in the
         # league was a big enough upgrade on the man it already has.
         self.inquiryFail = {}
+        self.pickFail = {}
         self._computeContention()
 
     # ------------------------------------------------------------ context
@@ -407,11 +435,30 @@ class TradeMarket:
         code — an inquiry differs in who starts it and what it costs, not in what a trade
         is. The holder is `listing.team`, exactly as for a posted player.
         """
-        if not TRADE_INQUIRY_ENABLED or self.week is not None:
+        if not TRADE_INQUIRY_ENABLED:
             return []
-        if not self.isOverTheHump(buyer):
-            self._noteInquiry('not_close_enough')
-            return []
+
+        # ⚠️ TWO PHASES, TWO DIFFERENT BUYERS, AND THE GATE IS WHAT SEPARATES THEM.
+        #   OFFSEASON — a club at the cut line mortgaging for a star (the blockbuster).
+        #   IN-SEASON — a contender kicking the tires on clubs going nowhere (owner,
+        #   2026-09-16: "in season trades should also be buyers kicking the tires on seller
+        #   teams, not just sellers posting players they want to sell"). Before this, the
+        #   only in-season path was a seller POSTING a player, so a contender could never
+        #   go and ask about one it wanted.
+        if self.week is None:
+            if not self.isOverTheHump(buyer):
+                self._noteInquiry('not_close_enough')
+                return []
+            sellersOnly = False
+        else:
+            if not self.hasClarity() or not self.isContending(buyer):
+                self._noteInquiry('not_a_buyer_yet')
+                return []
+            # ⚠️ SELLERS ONLY, which is the owner's phrase and also the only version that
+            # is not a free-for-all: a contender approaching another contender is asking a
+            # club to damage its own season, and the whole in-season market already runs on
+            # the contention gradient.
+            sellersOnly = True
 
         out = []
         for slot, incumbent in self._positionalGaps(buyer)[:TRADE_INQUIRIES_PER_TEAM]:
@@ -427,6 +474,8 @@ class TradeMarket:
             best, bestSeen = None, 0.0
             for holder in (getattr(self.teamManager, 'teams', None) or []):
                 if getattr(holder, 'id', None) == getattr(buyer, 'id', None):
+                    continue
+                if sellersOnly and self.isContending(holder):
                     continue
                 for held in (getattr(holder, 'rosterDict', None) or {}).values():
                     if held is None or getattr(held, 'willRetire', False):
@@ -455,6 +504,144 @@ class TradeMarket:
             self._noteInquiry('called')
             out.append(Listing(holder, target, 'inquiry', ask, floor))
         return out
+
+    def pickInquiriesFor(self, buyer) -> list:
+        """Draft slots this club would move UP for. Offseason only.
+
+        ⚠️ THE MOVE COULD NOT BE EXPRESSED AT ALL BEFORE THIS. A `Listing` was always a
+        player, so a pick could only ever be CHANGE inside somebody else's deal — measured
+        over 8 seasons, of 86 picks that changed hands exactly ONE was a top-8 and 66% sat
+        in the 17-24 band, because picks flow FROM buyers, buyers are contenders (median
+        win% .641), and a contender's own pick lands late. The picks worth having belong to
+        the clubs that never pay with them.
+
+        ⚠️ THE BUYER PAYS WITH ITS OWN SLOT PLUS THE DIFFERENCE, which is what makes this a
+        move UP rather than a purchase. Its own pick is an ordinary asset in
+        `_tradeableAssets`, so `_assemble` will reach for it first when it is the cheapest
+        thing that clears — no special casing needed.
+
+        ⚠️ OFFSEASON ONLY: a slot is only known once the season has finished, and this is a
+        buyer shopping for an upgrade (owner, 2026-09-16).
+        """
+        if not (TRADE_PICK_SWAP_ENABLED and TRADE_INQUIRY_ENABLED) or self.week is not None:
+            return []
+        self.pickFail['called'] = self.pickFail.get('called', 0) + 1
+        mine = self.picksOwnedBy(buyer)
+        if not mine:
+            self.pickFail['no_pick_to_swap'] = self.pickFail.get('no_pick_to_swap', 0) + 1
+            # ⚠️ A CLUB WITH NO PICK CANNOT MOVE UP — it has nothing to move up FROM, and
+            # buying a slot outright is a different trade this market has no seller for.
+            return []
+        # ⚠️ THE PICK IT WOULD SWAP IN IS ITS BEST, not its cheapest: moving up means giving
+        # up your place in the queue, and offering a worse pick than the one you hold makes
+        # the deal strictly harder for the seller to accept.
+        swapFor = max(mine, key=lambda p: self._pickValueTo(buyer, p))
+        mineValue = self._pickValueTo(buyer, swapFor)
+
+        out = []
+        for holder in (getattr(self.teamManager, 'teams', None) or []):
+            if getattr(holder, 'id', None) == getattr(buyer, 'id', None):
+                continue
+            for pick in self.picksOwnedBy(holder):
+                if pick['season'] != swapFor['season']:
+                    continue        # you move up WITHIN a draft, not across two
+                if self._pickValueTo(buyer, pick) < mineValue * TRADE_PICK_SWAP_MIN_GAIN:
+                    continue        # the two slots are interchangeable; moving is churn
+                ask, floor = self._pricePick(holder, pick, swapFor=swapFor)
+                if ask > 0:
+                    listing = PickListing(holder, pick, ask, floor)
+                    listing.swapFor = swapFor
+                    out.append(listing)
+        # ⚠️ THE BEST JUMP IT CAN AFFORD, NOT THE BIGGEST ONE AVAILABLE. Ranking by the
+        # target's raw value always points a club at slot 1 — and the drop from slot 31 to
+        # slot 1 is so large that no bundle in the league covers it, so every call was to
+        # the one club that could never be paid. Measured: 2 inquiries a club, 0 bids.
+        # Ranking by the buyer's own surplus finds the jump that is both worth making and
+        # payable, which is what a real trade-up is.
+        def surplus(l):
+            gain = (self._pickValueTo(buyer, l.pick)
+                    - self._pickValueTo(buyer, l.swapFor)) * TRADE_HUMP_APPETITE
+            return gain - l.floor
+        out.sort(key=lambda l: -surplus(l))
+        if not out:
+            self.pickFail['no_jump_worth_making'] = self.pickFail.get('no_jump_worth_making', 0) + 1
+        else:
+            self.pickFail['listed'] = self.pickFail.get('listed', 0) + 1
+        return out[:TRADE_INQUIRIES_PER_TEAM]
+
+    def _pickValueTo(self, team, pick) -> float:
+        return trading.pickValue(pick['slot'], pick['season'] - self.season,
+                                 weight=trading.laterWeight(self.nowWeight(team)))
+
+    def _pricePick(self, holder, pick, swapFor=None):
+        """What a club quotes to DROP from this slot to another — not to hand it over.
+
+        ⚠️ PRICING THE SLOT ABSOLUTELY MAKES THE TRADE IMPOSSIBLE AND DESCRIBES THE WRONG
+        DEAL. A club moving up swaps its own pick in, so the seller does not lose slot 1, it
+        loses the DIFFERENCE between slot 1 and slot N — which is the same shape the rest of
+        this market already uses (`_priceListing` prices surplus over the backfill;
+        `bidFor` prices the upgrade over the man displaced). Measured on the absolute
+        reading: a rebuilder holding slot 2 quoted **107** for it, against 31 for the
+        slot-10 pick coming back, so nothing could ever clear.
+
+        ⚠️ AND THE DIFFERENCE IS WHAT THE OWNER DESCRIBED: "the team with the top pick
+        doesnt need the highest rated player in the draft and can afford to drop down a bit
+        and still grab a good player, and by doing so can also get a good roster player at
+        the same time." A club drops a few places and is paid for the drop.
+
+        ⚠️ A TOP PICK IS STILL A CENTERPIECE and carries an extra premium on top of the
+        ordinary unsolicited markup — but on the drop, not on the slot.
+        """
+        value = self._pickValueTo(holder, pick)
+        if swapFor is not None:
+            value -= self._pickValueTo(holder, swapFor)
+        if value <= 0:
+            return 0.0, 0.0
+        premium = TRADE_INQUIRY_PREMIUM
+        if int(pick.get('slot') or 99) <= TRADE_PICK_PREMIUM_TOP_SLOTS:
+            premium *= TRADE_PICK_PREMIUM_TOP
+        # ⚠️ BOTH ENDS, for the same reason as `_priceInquiry` — `settle` clears at the
+        # FLOOR, so a premium on the ask alone is a number nobody pays.
+        return value * premium, value * premium
+
+    def bidForPick(self, listing, buyer):
+        """What this club offers for a draft slot, or None.
+
+        ⚠️ NO ROSTER MECHANICS AT ALL. Nobody is displaced, nothing is cut and no slot is
+        backfilled — a pick trade touches `draft_picks` and the pipeline and stops there,
+        which is why it gets its own path instead of a flag threaded through `bidFor`.
+        """
+        swapFor = getattr(listing, 'swapFor', None)
+        if swapFor is None:
+            return None
+        # ⚠️ THE GAIN IS THE JUMP, NOT THE SLOT. The buyer keeps a pick either way; what it
+        # is buying is the distance between the two, which is why the seller's bar is
+        # priced the same way (see `_pricePick`).
+        gain = (self._pickValueTo(buyer, listing.pick)
+                - self._pickValueTo(buyer, swapFor)) * TRADE_HUMP_APPETITE
+        if gain <= 0 or gain < listing.floor:
+            self.pickFail['gain_under_bar'] = self.pickFail.get('gain_under_bar', 0) + 1
+            return None
+
+        # ⚠️ THE SWAP PICK GOES OVER SEPARATELY AND IS NOT PART OF THE ASSEMBLED BUNDLE.
+        # `_assemble` takes the CHEAPEST assets that clear, so left to itself it would
+        # happily pay with prospects and keep the pick — which is not a move up, it is
+        # buying a second pick. Excluded from the pool so it cannot be offered twice.
+        extras = self._assemble(buyer, listing.team, listing.floor, gain, 0.0,
+                                maxPieces=TRADE_INQUIRY_MAX_PIECES,
+                                excludeIds={('pick', swapFor['id'])})
+        if not extras:
+            self.pickFail['cannot_cover'] = self.pickFail.get('cannot_cover', 0) + 1
+            return None
+        self.pickFail['bid'] = self.pickFail.get('bid', 0) + 1
+        swapPiece = {
+            'kind': 'pick', 'id': swapFor['id'],
+            'name': f"S{swapFor['season']} R{swapFor['round']} pick",
+            'detail': swapFor,
+            'value': self._pickValueTo(listing.team, swapFor),
+        }
+        pieces = [swapPiece] + extras
+        return Bid(buyer, pieces, sum(p['value'] for p in pieces))
 
     def _noteInquiry(self, reason: str) -> None:
         self.inquiryFail[reason] = self.inquiryFail.get(reason, 0) + 1
@@ -864,7 +1051,14 @@ class TradeMarket:
         #
         # ⚠️ Applied to WILLINGNESS, never to the bundle. The package is still sized to the
         # seller's bar, so this buys a club the right to say yes, not a bigger haul.
-        appetite = TRADE_HUMP_APPETITE if listing.trigger == 'inquiry' else 1.0
+        # ⚠️ TWO APPETITES, ONE PER PHASE. The offseason case is a club at the cut line
+        # mortgaging for a star; the in-season case is a contender approaching a club going
+        # nowhere. Both pay above linear worth — an unsolicited quote is unpayable
+        # otherwise — but the hump club pays more, because the marginal win is worth most
+        # exactly at the cut line.
+        appetite = 1.0
+        if listing.trigger == 'inquiry':
+            appetite = TRADE_HUMP_APPETITE if self.week is None else TRADE_INQUIRY_APPETITE
 
         displaced, fee = self._displacedBy(buyer, player)
         net = gross - displaced
@@ -1041,7 +1235,7 @@ class TradeMarket:
         return None
 
     def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
-                  swapPosition=None, maxPieces=None) -> list:
+                  swapPosition=None, maxPieces=None, excludeIds=None) -> list:
         """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
@@ -1064,6 +1258,9 @@ class TradeMarket:
         buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer,
                                             swapPosition=swapPosition)
         # Cheapest FOR THE BUYER first, so it parts with what it minds least.
+        if excludeIds:
+            buyerAssets = [a for a in buyerAssets
+                           if (a['kind'], a['id']) not in excludeIds]
         buyerAssets.sort(key=lambda a: a['value'])
         pieces, toSeller, toBuyer = [], 0.0, 0.0
         usedPlayer = False
@@ -1091,6 +1288,27 @@ class TradeMarket:
             if not buyerAssets:
                 self.assembleFail['noAssets'] = self.assembleFail.get('noAssets', 0) + 1
             return []
+
+        # ⚠️ DROP WHAT THE BAR NO LONGER NEEDS. Cheapest-first is greedy and the assets are
+        # LUMPY, so the last piece added can overshoot badly and carry earlier pieces that
+        # are now redundant — and the buyer is then refused for a package it never had to
+        # offer. Measured on a trade-up: cheapest-first took 7.5 + 10.3 + 27.0 = 44.8 to
+        # clear a bar of 35.3, which exceeded the buyer's own ceiling of 44.4 by a hair;
+        # dropping the redundant 7.5 leaves 37.3, still clearing, comfortably under.
+        #
+        # ⚠️ Most expensive FOR THE BUYER first, because that is what it minds losing most —
+        # the same reason the accumulation runs cheapest-first.
+        for piece in sorted(pieces, key=lambda p: -p['value']):
+            if len(pieces) <= 1:
+                break
+            if toSeller - piece['value'] < bar:
+                continue
+            if piece['kind'] == 'player':
+                continue        # the swap is structural, not change
+            pieces.remove(piece)
+            toSeller -= piece['value']
+            toBuyer -= next((a['value'] for a in buyerAssets
+                             if (a['kind'], a['id']) == (piece['kind'], piece['id'])), 0.0)
         # ⚠️ THE DISPLACED PLAYER IS COUNTED ONCE, NOT TWICE. When the buyer pays WITH the
         # man it would otherwise have had to cut, the displacement and the payment are the
         # same event — charging both makes a swap look twice as expensive as it is and
@@ -1286,6 +1504,26 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> 
                 'winner': winner,
             })
 
+    # ── trading UP the draft: offseason only ─────────────────────────────────
+    # ⚠️ RUN BEFORE THE PLAYER INQUIRIES so a club that moves up has spent its picks before
+    # it starts shopping for bodies with them. The other order lets it promise the same
+    # pick to two different deals in one pass.
+    if week is None:
+        for buyer in list(getattr(teamManager, 'teams', None) or []):
+            if bidsUsed.get(getattr(buyer, 'id', None), 0) >= TRADE_BIDS_PER_TEAM_PER_WEEK:
+                continue
+            for listing in market.pickInquiriesFor(buyer):
+                bid = market.bidForPick(listing, buyer)
+                if bid is None:
+                    continue
+                winner = market.settle(listing, [bid])
+                if winner is None:
+                    continue
+                bidsUsed[getattr(buyer, 'id', None)] = \
+                    bidsUsed.get(getattr(buyer, 'id', None), 0) + 1
+                settled.append({'listing': listing, 'winner': winner, 'kind': 'pick'})
+                break
+
     # ── the blockbuster: buyer-initiated, offseason only ─────────────────────
     # ⚠️ NOT AN AUCTION. A club posting a player wants the best offer in the league, so
     # `counterpartiesFor` canvasses several. An inquiry is one club phoning another about a
@@ -1312,6 +1550,67 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> 
                 bidsUsed.get(getattr(buyer, 'id', None), 0) + 1
             settled.append({'listing': inquiry, 'winner': winner})
     return settled
+
+
+def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
+    """Execute a trade-up. Returns the manifest, or None.
+
+    ⚠️ DELIBERATELY SHORT, AND THAT IS THE WHOLE ARGUMENT FOR A SEPARATE PATH. Nobody is
+    displaced, nothing is cut, no slot is backfilled and no card is minted — the pick moves
+    and the bundle moves. `settleTrade`'s ordering comments are all about roster
+    consistency, none of which applies, and threading "is this a pick?" through it would
+    put a branch in every one of those steps.
+    """
+    from database.connection import get_session
+    from database.models import DraftPick
+
+    seller, buyer = listing.team, winner.team
+    pickId = listing.pick.get('id')
+
+    # ⚠️ RE-CHECK OWNERSHIP AT SETTLEMENT. An earlier trade in this same pass may already
+    # have moved it — the pass settles sequentially for exactly this reason.
+    session = get_session()
+    try:
+        row = session.get(DraftPick, pickId)
+        if row is None or row.used or row.current_owner_id != getattr(seller, 'id', None):
+            return None
+        row.current_owner_id = getattr(buyer, 'id', None)
+        session.commit()
+    except Exception as e:
+        logger.warning(f"Pick trade failed: {e}")
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        session.close()
+
+    given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season,
+                            sellerSlot=None, phase='offseason')
+
+    manifest = {
+        'season': season, 'week': 0, 'phase': 'offseason',
+        'teamAId': getattr(seller, 'id', None), 'teamBId': getattr(buyer, 'id', None),
+        'teamAName': seller.name, 'teamBName': buyer.name,
+        'aGave': [{'kind': 'pick', 'id': pickId,
+                   'name': f"S{listing.pick['season']} R{listing.pick['round']} pick",
+                   'detail': f"slot {listing.pick['slot']}"}],
+        'bGave': given,
+        'price': winner.value,
+        # ⚠️ `_persistTrade` READS `reserve`, and a manifest missing it fails INSIDE its own
+        # try/except — which logs a warning and returns 0, so the trade half-happens: the
+        # pick has already moved and no `trades` row records it. Every key that function
+        # touches has to be present.
+        'reserve': listing.floor,
+        'trigger': 'pick_swap',
+    }
+    tradeId = _persistTrade(manifest)
+    _recordTrade(seasonManager, manifest, tradeId)
+    _publishTrade(seasonManager, manifest)
+    logger.info(f"TRADE UP: {buyer.name} moved up to S{listing.pick['season']} "
+                f"slot {listing.pick['slot']} from {seller.name}")
+    return manifest
 
 
 def _stillListable(listing) -> bool:

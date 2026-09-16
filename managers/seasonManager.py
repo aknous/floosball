@@ -8030,8 +8030,15 @@ class SeasonManager:
             # seasons of control, and contention at parity.
             for entry in tradeManager.runWeeklyPass(
                     self.playerManager, teamManager, brain, season, None):
-                result = tradeManager.settleTrade(
-                    self, entry['listing'], entry['winner'], season, None)
+                # ⚠️ A PICK TRADE HAS ITS OWN SETTLEMENT — nobody is displaced, nothing
+                # is cut and no slot is backfilled, so `settleTrade`'s roster ordering does
+                # not apply to it at all.
+                if entry.get('kind') == 'pick':
+                    result = tradeManager.settlePickTrade(
+                        self, entry['listing'], entry['winner'], season)
+                else:
+                    result = tradeManager.settleTrade(
+                        self, entry['listing'], entry['winner'], season, None)
                 if result is not None:
                     settled.append(result)
                     self._offseasonTransactions.append({
