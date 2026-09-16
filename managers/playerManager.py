@@ -4394,6 +4394,7 @@ class PlayerManager:
             if eligible:
                 candidates.append((team, eligible))
         if not candidates:
+            self.lastPickShopOutcome = 'no_buyer'
             return None, None
 
         session = get_session()
@@ -4409,6 +4410,7 @@ class PlayerManager:
 
         candidates = [(t, e) for t, e in candidates if getattr(t, 'id', None) in owns]
         if not candidates:
+            self.lastPickShopOutcome = 'nobody_could_pay'
             return None, None
 
         import trading
@@ -4443,16 +4445,29 @@ class PlayerManager:
                 slotByTeamId.get(getattr(team, 'id', None), 16), 1)
             return gain - cost, gain, cost
 
-        priced = []
+        priced, refused = [], []
         for team, eligible in candidates:
             try:
-                margin, _gain, _cost = worthIt(team, eligible)
+                margin, gain, cost = worthIt(team, eligible)
             except Exception:
                 continue
             if margin > 0:
                 priced.append((margin, team, eligible))
+            else:
+                refused.append((team, gain, cost))
         if not priced:
+            # ⚠️ "Nobody wanted it" and "nobody could use it" are DIFFERENT outcomes and a
+            # single skip line cannot tell them apart — one says the board is empty, the
+            # other says the slot is genuinely worth less than a future pick. Recorded so
+            # the split is measurable rather than inferred.
+            self.lastPickShopOutcome = ('refused_on_price' if refused else 'no_buyer')
+            if refused:
+                best = max(refused, key=lambda r: r[1])
+                logger.info(f"Rookie draft: {len(refused)} club(s) could use the slot but "
+                            f"none would pay — best offer was worth {best[1]:.1f} "
+                            f"against a future pick's {best[2]:.1f}")
             return None, None
+        self.lastPickShopOutcome = 'traded'
         # ⚠️ WHOEVER GAINS MOST, not whoever merely clears — the same rule the trade market
         # settles an auction by. Ranking on the rookie's raw rating instead would make
         # every club value the class identically and the choice arbitrary.
@@ -4565,10 +4580,12 @@ class PlayerManager:
                     teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
                     eligible = buyerEligible
                 else:
+                    why = getattr(self, 'lastPickShopOutcome', 'no_buyer')
                     logger.info(f"Rookie draft: {team.name} "
                                 + ("skipped (all prospect slots full)"
                                    if reason == 'pipeline_full'
-                                   else "passed (nobody at an open position)"))
+                                   else "passed (nobody at an open position)")
+                                + f" [shop: {why}]")
                     yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
                            'reason': reason}
                     continue

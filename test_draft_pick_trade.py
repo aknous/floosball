@@ -273,3 +273,32 @@ def test_the_slot_is_priced_on_WHO_IS_LEFT_not_on_the_slot_number():
                                 [skipper, buyer], SEASON, slotByTeamId={2: 16})
     assert found is buyer, "the deal was priced off the slot number and missed a 90"
     print("PASS a late slot holding a real player is still worth buying")
+
+
+def test_a_refused_slot_falls_back_to_the_forfeit():
+    """⚠️ THERE ARE THREE OUTCOMES, NOT TWO, and only one is a trade: the slot sells, or a
+    club could use it and will not pay, or nobody can use it at all. The middle case is the
+    one the pricing gate created, and it must resolve as a forfeit — the draft cannot hang
+    on a slot nobody wants, and silently selling it anyway is what the gate exists to
+    prevent."""
+    pm = _pm()
+    skipper, buyer = FakeTeam(1, 'Skippers'), FakeTeam(2, 'Buyers')
+    _seedPicks([1, 2], SEASON)
+    # ⚠️ THE SKIPPER MUST HAVE NO ROOM AT THE POSITION LEFT ON THE BOARD, or it simply
+    # drafts the player itself and there is no slot to shop. A first version filled it at
+    # QB/RB/WR/TE and left a KICKER on the board — which it had room for, so it picked.
+    skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
+        [Position.QB, Position.QB, Position.RB, Position.RB,
+         Position.WR, Position.WR, Position.TE, Position.TE,
+         Position.K, Position.K])]
+
+    # A 74 receiver: a real player the buyer CAN take, worth 8.4 against a future pick's
+    # 9.8 — above replacement, genuinely useful, and still not worth the price.
+    events = list(pm.rookieDraftPickGenerator(
+        [FakeRookie(1, Position.WR, 74)], [skipper], leagueHighlights=None,
+        season=SEASON, leagueTeams=[skipper, buyer]))
+    kinds = [e['type'] for e in events]
+    assert 'pick_traded' not in kinds, "the slot sold at a price the buyer loses on"
+    assert 'skip' in kinds, f"the draft did not resolve the slot: {kinds}"
+    assert pm.lastPickShopOutcome == 'refused_on_price', pm.lastPickShopOutcome
+    print("PASS a slot nobody will pay for is forfeited, and says so")
