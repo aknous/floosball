@@ -726,7 +726,7 @@ class TradeMarket:
             self._positionWeight(player))
         return ask, floor
 
-    def _bestAvailableAt(self, team, player):
+    def _bestAvailableAt(self, team, player, week=None):
         """The best man this club could put in that slot WITHOUT trading — a ready
         prospect of its own, or the best free agent anybody could sign.
 
@@ -734,6 +734,22 @@ class TradeMarket:
         (`_backfillRating`); for the buyer it is the alternative to trading at all
         (`_displacedBy`). Two clubs looking at the same pool is exactly right — it is the
         same pool.
+
+        ⚠️ THE POOL COUNTS IN THE OFFSEASON TOO, and gating it out was an over-correction.
+        The seller does not sign anybody at settlement any more (see `_findBackfill`) — the
+        hole waits for the FA draft, and `playerManager._attemptRosterFill` fills it with
+        the best player available across BOTH the pool and the club's own pipeline,
+        signing over a prospect where the free agent is better (owner, 2026-09-16: "the
+        team can decide to promote their prospects during that draft, or sign a better FA
+        even if it blocks their prospect. the goal is to build a better team from a skill
+        standpoint"). So the pool IS what replaces him, just later — and pricing the floor
+        against the club's own prospect alone made a weak pipeline a reason not to sell a
+        player the draft would have replaced perfectly well.
+
+        ⚠️ The real defect it was fixing lived in `_findBackfill`, which promoted a prospect
+        on the spot: Midnights sold a 77 TE and installed a **62** immediately, so the
+        floor's optimism was never tested against the draft. Leaving the hole fixes that at
+        the source, and the floor can go back to pricing the whole board.
         """
         posValue = getattr(getattr(player, 'position', None), 'value', None)
         best = None
@@ -765,7 +781,7 @@ class TradeMarket:
         requires `backfill > REPLACEMENT`. With mid-season signing every club can sell, but
         one with a good prospect sells far more readily than one drawing on the pool.
         """
-        best = self._bestAvailableAt(team, player)
+        best = self._bestAvailableAt(team, player, week=self.week)
         return float(getattr(best, 'playerRating', 0) or 0) if best is not None else 0.0
 
     # -------------------------------------------------------- the auction
@@ -1388,14 +1404,15 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     # `RESIGN_ONCE_ENABLED` is False.)
     player.teamResignCount = 0
     buyer.rosterDict[buyerSlot] = player
-    _stampAcquired(player, season)
+    _stampAcquired(player, season, phase='season' if week is not None else 'offseason')
     try:
         buyer.assignPlayerNumber(player)
     except Exception:
         pass
 
     given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season,
-                            sellerSlot=slot, resolved=resolved)
+                            sellerSlot=slot, resolved=resolved,
+                            phase='season' if week is not None else 'offseason')
 
     # ---- 3. backfill ------------------------------------------------------
     # ⚠️ Only when nobody came back the other way. A swap already filled the slot.
@@ -1433,7 +1450,8 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     return manifest
 
 
-def _stampAcquired(player, season: int, asPiece: bool = False) -> None:
+def _stampAcquired(player, season: int, asPiece: bool = False,
+                   phase: str = 'season') -> None:
     """Mark that this club got him in a trade THIS season.
 
     ⚠️ `asPiece` SEPARATES THE TWO WAYS A PLAYER ARRIVES, and the difference decides
@@ -1451,6 +1469,14 @@ def _stampAcquired(player, season: int, asPiece: bool = False) -> None:
     try:
         player._tradedInSeason = int(season or 0)
         player._acquiredAsPiece = bool(asPiece)
+        # ⚠️ THE PHASE, NOT JUST THE SEASON. "You may cut him next offseason" and "you may
+        # cut him ten minutes later in the SAME offseason" are different rules, and a
+        # season-only stamp cannot tell them apart — the offseason runs under the season
+        # number it follows. Measured in the ledger: Strangers took a 76 TE from Pinecones
+        # in a swap, then later in that SAME offseason bought a 77 TE from Midnights and
+        # cut the 76 to make room, paying 450F. Net, they gave up a 77, two picks and the
+        # fee to end up with a 77.
+        player._acquiredInPhase = str(phase or 'season')
     except Exception:
         pass
 
@@ -1470,7 +1496,7 @@ def wasAcquiredThisSeason(player, season: int) -> bool:
     return stamped is not None and int(stamped) == int(season or 0)
 
 
-def wasHeadlineAcquisition(player, season: int) -> bool:
+def wasHeadlineAcquisition(player, season: int, phase: str = None) -> bool:
     """Did this club go out and BUY him this season, as the point of the trade?
 
     ⚠️ NARROWER THAN `wasAcquiredThisSeason` ON PURPOSE — the two guard different rules and
@@ -1480,8 +1506,17 @@ def wasHeadlineAcquisition(player, season: int) -> bool:
     received in the trade was just a gap fill piece on a selling team, then its not out of
     the question that they could be cut"*).
     """
-    return (wasAcquiredThisSeason(player, season)
-            and not getattr(player, '_acquiredAsPiece', False))
+    if not wasAcquiredThisSeason(player, season):
+        return False
+    if getattr(player, '_acquiredAsPiece', False):
+        return False
+    # ⚠️ SAME PHASE, NOT MERELY SAME SEASON. An in-season acquisition may be cut once the
+    # offseason arrives (owner) — but a man acquired IN an offseason may not be cut later
+    # in that same offseason, which is where the churn moved to when the exemption was
+    # phase-blind.
+    if phase is None:
+        return True
+    return str(getattr(player, '_acquiredInPhase', 'season')) == str(phase)
 
 
 def _slotOf(team, player):
@@ -1555,10 +1590,11 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
     # position (only WR has two), so "cut somebody else instead" is nearly always no option
     # at all — and where it is one, the club is discarding a BETTER incumbent to protect a
     # man it just bought, which is not an improvement on the thing being prevented.
-    if week is not None and wasHeadlineAcquisition(worst, getattr(
-            getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0)):
+    phase = 'season' if week is not None else 'offseason'
+    if wasHeadlineAcquisition(worst, getattr(
+            getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0), phase):
         logger.info(f"Trade declined: {buyer.name} would have to cut "
-                    f"{worst.name}, bought this season")
+                    f"{worst.name}, bought in this same {phase}")
         return None
     # ⚠️ NO SECOND UPGRADE TEST HERE. `bidFor` already established that the incoming
     # player beats this exact man — on the buyer's own BELIEVED, position-weighted read —
@@ -1630,7 +1666,15 @@ def _findBackfill(seasonManager, team, player, week=None):
         if rating > bestRating:
             best, bestRating = ('prospect', prospect), rating
     if week is None:
-        return best             # offseason: a prospect or nothing — the draft fills holes
+        # ⚠️ NOTHING AT ALL IN THE OFFSEASON — not a signing, and not a promotion either
+        # (owner, 2026-09-16: "positions slots on the roster that are emptied due to a
+        # trade dont need to be filled right away, because the FA draft is coming up. the
+        # team can decide to promote their prospects during that draft, or sign a better FA
+        # even if it blocks their prospect"). Promoting on the spot pre-empts that choice
+        # and measurably made it badly: Midnights sold a 77 TE and installed its own 62.
+        # `playerManager._attemptRosterFill` already picks the best player available across
+        # the pool AND the pipeline, which is exactly the decision being deferred to.
+        return None
     pm = seasonManager.playerManager
     for fa in getattr(pm, 'freeAgents', None) or []:
         if getattr(fa, 'willRetire', False):
@@ -1697,7 +1741,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
 
 
 def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
-                    sellerSlot=None, resolved=None) -> list:
+                    sellerSlot=None, resolved=None, phase: str = 'season') -> list:
     """Move the bought side of the bundle — picks change owner, prospects change pipeline."""
     from database.connection import get_session
     from database.models import DraftPick
@@ -1734,7 +1778,7 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
                     swapped.teamResignCount = 0
                     if sellerSlot is not None:
                         toTeam.rosterDict[sellerSlot] = swapped
-                    _stampAcquired(swapped, season, asPiece=True)
+                    _stampAcquired(swapped, season, asPiece=True, phase=phase)
                     try:
                         toTeam.assignPlayerNumber(swapped)
                     except Exception:
@@ -1742,7 +1786,7 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
             elif piece['kind'] == 'prospect':
                 prospect = _findProspect(fromTeam, piece['id'])
                 if prospect is not None:
-                    _stampAcquired(prospect, season, asPiece=True)
+                    _stampAcquired(prospect, season, asPiece=True, phase=phase)
                 if prospect is None:
                     logger.warning(
                         f"TRADE PIECE MISSING: {fromTeam.name} does not hold prospect "

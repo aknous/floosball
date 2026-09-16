@@ -700,18 +700,60 @@ def test_the_offseason_still_trades_with_NO_backfill():
     print("PASS an offseason seller may leave the slot for the draft")
 
 
-def test_a_prospect_is_still_a_legal_offseason_backfill():
-    """The offseason closes the POOL, not the pipeline — a club's own ready prospect is
-    still the natural replacement, and is exactly who the promotion pass would have used."""
+def test_the_offseason_fills_NOTHING_at_settlement_not_even_a_promotion():
+    """⚠️ THE HOLE WAITS FOR THE DRAFT, AND PROMOTING ON THE SPOT PRE-EMPTS A DECISION THE
+    CLUB SHOULD MAKE THERE (owner, 2026-09-16: "positions slots on the roster that are
+    emptied due to a trade dont need to be filled right away, because the FA draft is
+    coming up. the team can decide to promote their prospects during that draft, or sign a
+    better FA even if it blocks their prospect").
+
+    Measured: promoting immediately made that choice badly — Midnights sold a 77 TE and
+    installed its own 62. `playerManager._attemptRosterFill` already picks the best player
+    available across the pool AND the pipeline, which is the decision being deferred to."""
     prospect = _FakeGuy(505, 'Ready Kid', rating=76)
     prospect.is_prospect = True
     pm = _FakePM([])
     sm = _FakeSM(pm)
     club = _FakeClub(1, 'Sellers')
     club.prospects = [prospect]
-    found = tradeManager._findBackfill(sm, club, _FakeGuy(506, 'Outgoing'), week=None)
+    outgoing = _FakeGuy(506, 'Outgoing')
+
+    assert tradeManager._findBackfill(sm, club, outgoing, week=None) is None, \
+        "the offseason promoted a prospect instead of leaving the slot for the draft"
+    # in-season there IS no draft coming, so the club must still fill the hole
+    found = tradeManager._findBackfill(sm, club, outgoing, week=18)
     assert found is not None and found[0] == 'prospect', found
-    print("PASS a club may still promote its own prospect in the offseason")
+    print("PASS the offseason defers the slot; the season still fills it")
+
+
+def test_the_FLOOR_prices_the_whole_board_in_the_offseason_too():
+    """⚠️ GATING THE POOL OUT OF THE OFFSEASON FLOOR WAS AN OVER-CORRECTION, and it is worth
+    recording because the first version of this test asserted the opposite.
+
+    The seller signs nobody at settlement now, so the pool IS what replaces him — just at
+    the draft, where `_attemptRosterFill` will sign over a prospect if the free agent is
+    better. Pricing the floor against the club's own prospect alone made a weak pipeline a
+    reason not to sell a player the draft would have replaced perfectly well."""
+    from test_trade_market import (FakeTeam, FakePlayer, FakeTeamManager,
+                                   FakePlayerManager, StubBrain)
+    from managers.tradeManager import TradeMarket
+    from floosball_player import Position
+
+    club = FakeTeam(1, 'Midnights')
+    star = FakePlayer(600, 77, Position.TE, termRemaining=3)
+    club.rosterDict['te'] = star
+    club.prospects = [FakePlayer(601, 62, Position.TE, termRemaining=3, isProspect=True)]
+    strongFA = FakePlayer(602, 80, Position.TE, termRemaining=2)
+    strongFA.team = 'Free Agent'
+
+    def market(week):
+        return TradeMarket(FakePlayerManager([strongFA]), FakeTeamManager([club]),
+                           StubBrain(), 3, week)
+
+    assert market(18)._backfillRating(club, star) == 80
+    assert market(None)._backfillRating(club, star) == 80, \
+        "the offseason floor ignored the pool the draft will actually draw from"
+    print("PASS both phases price the floor against the whole board")
 
 
 def test_handOverPieces_STAMPS_them_as_pieces():
@@ -735,3 +777,34 @@ def test_handOverPieces_STAMPS_them_as_pieces():
     assert not tradeManager.wasHeadlineAcquisition(piece, 7), \
         "a bundle piece was recorded as a purchase, so it is protected like one"
     print("PASS the hand-over records a piece AS a piece")
+
+
+def test_a_man_acquired_IN_an_offseason_cannot_be_cut_in_that_same_offseason():
+    """⚠️ THE EXEMPTION WAS PHASE-BLIND AND THE CHURN JUST MOVED INTO THE OFFSEASON.
+
+    Reported from the ledger: Strangers took a 76 TE from Pinecones in a swap, then later
+    in the SAME offseason bought a 77 TE from Midnights and cut the 76 to make room, paying
+    450F. Net they gave up a 77, two picks and the fee to end with a 77.
+
+    "You may cut him next offseason" and "you may cut him ten minutes later in the same
+    offseason" are different rules, and a season-only stamp cannot tell them apart because
+    the offseason runs under the season number it follows."""
+    pm = _FakePM([])
+    sm = _FakeSM(pm)
+    club = _FakeClub(1, 'Strangers')
+    justTraded = _FakeGuy(560, 'Arrived In The Offseason')
+    club.rosterDict = {'qb': justTraded}
+    incoming = _FakeGuy(561, 'Better Man', rating=85)
+
+    tradeManager._stampAcquired(justTraded, 7, phase='offseason')
+    assert tradeManager._cutToMakeRoom(sm, club, incoming, week=None) is None, \
+        "a club cut the man it acquired earlier in this same offseason"
+
+    # ...but an IN-SEASON acquisition may still be moved on from once the offseason comes.
+    club.rosterDict = {'qb': justTraded}
+    tradeManager._stampAcquired(justTraded, 7, phase='season')
+    assert tradeManager._cutToMakeRoom(sm, club, incoming, week=None) == 'qb', \
+        "the in-season gap-fill exemption was lost"
+    print("PASS an offseason arrival survives that offseason; an in-season one may go")
+
+
