@@ -2881,6 +2881,32 @@ TRADE_BUYER_NEEDS = 3
 # matters — cards, draft boards, re-sign decisions, the cut fee — because he is worth what
 # he is worth; clubs simply do not spend picks there.
 TRADE_POSITION_APPETITE = {'QB': 1.0, 'RB': 1.0, 'WR': 1.0, 'TE': 1.0, 'K': 0.35}
+
+# ⚠️ BUT A CLUB WHOSE KICKER IS ACTUALLY BLOWING GAMES SHOULD GO AND GET ONE (owner,
+# 2026-09-15: "if a team actually needs a K (their own K is underperforming, has blown
+# games) then it makes sense to look for one at the trade deadline. I just dont think it
+# makes sense for teams to unload mulitple assets for one in the offseason"). That is two
+# rules, not one, and they pull in opposite directions:
+#
+#   IN-SEASON the low appetite is LIFTED when the incumbent is genuinely missing kicks —
+#   read off what he has actually done this season, not his rating. A kicker can rate 82
+#   and be 9 for 17; the rating gap `_positionalGaps` measures cannot see that, and
+#   "has blown games" is precisely a performance claim.
+#
+#   IN THE OFFSEASON nothing is lifted and the bundle is capped at a single piece. There
+#   are no blown kicks to react to yet, and the objection is specifically to a club
+#   unloading several assets for one.
+#
+# League FG% runs ~80% (see the field-goal entry), so a kicker under 70 has cost his club
+# real games rather than been unlucky once.
+TRADE_KICKER_CRISIS_FG_PCT = 70.0
+TRADE_KICKER_CRISIS_MIN_ATT = 10    # enough kicks that it is a record, not a bad afternoon
+
+# ⚠️ AND IN THE OFFSEASON A LOW-APPETITE POSITION COSTS ONE PIECE, FULL STOP. Not a
+# discount — a hard cap, because the complaint is about the SHAPE of the deal ("unload
+# multiple assets") rather than its price, and a price rule can always be cleared by a
+# club that wants him enough.
+TRADE_LOW_APPETITE_MAX_PIECES = 1
 TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 
 # ---- Rookie picks ----

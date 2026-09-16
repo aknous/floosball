@@ -37,7 +37,8 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
                        TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
                        TRADE_HUMP_APPETITE, TRADE_BUYER_NEEDS,
-                       TRADE_POSITION_APPETITE)
+                       TRADE_POSITION_APPETITE, TRADE_KICKER_CRISIS_FG_PCT,
+                       TRADE_KICKER_CRISIS_MIN_ATT, TRADE_LOW_APPETITE_MAX_PIECES)
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +420,7 @@ class TradeMarket:
             # blockbusters"). The appetite already suppresses the bid, but a kicker's ask
             # is small enough that a cheap one still cleared it — and the objection is to
             # the KIND of trade, not its price, so the call is never made at all.
-            if self._positionAppetite(incumbent) < 1.0:
+            if self._basePositionAppetite(incumbent) < 1.0:
                 continue
             posValue = getattr(getattr(incumbent, 'position', None), 'value', None)
             mine = self.ratingFor(buyer, incumbent)
@@ -859,7 +860,7 @@ class TradeMarket:
         # `TRADE_POSITION_APPETITE`. It is the only place position value decides WHETHER a
         # trade happens rather than only what it costs, because the weight multiplies the
         # ask and the buyer's worth alike and cancels out of every ratio.
-        worthToBuyer = net * appetite * self._positionAppetite(player)
+        worthToBuyer = net * appetite * self._positionAppetite(player, buyer)
 
         bar = trading.requiredSurplus(
             listing.ask,
@@ -894,8 +895,7 @@ class TradeMarket:
                                 displaced,
                                 swapPosition=getattr(getattr(player, 'position', None),
                                                      'value', None),
-                                maxPieces=(TRADE_INQUIRY_MAX_PIECES
-                                           if listing.trigger == 'inquiry' else None))
+                                maxPieces=self._maxPiecesFor(listing, player))
         if not pieces:
             return None
         return Bid(buyer, pieces, sum(p['value'] for p in pieces))
@@ -927,7 +927,7 @@ class TradeMarket:
         return value, cutFeeFor(weakest)
 
     @staticmethod
-    def _positionAppetite(player) -> float:
+    def _basePositionAppetite(player) -> float:
         """How willing a club is to spend trade assets at this position.
 
         ⚠️ NOT THE SAME QUANTITY AS `_positionWeight`, and keeping them separate is the
@@ -936,6 +936,48 @@ class TradeMarket:
         """
         name = getattr(getattr(player, 'position', None), 'name', None)
         return float(TRADE_POSITION_APPETITE.get(name, 1.0))
+
+    def _positionAppetite(self, player, buyer=None) -> float:
+        """The base appetite, LIFTED in-season when the buyer's own man is failing.
+
+        ⚠️ A RATING GAP CANNOT SEE A BLOWN KICK (owner, 2026-09-15: "if a team actually
+        needs a K (their own K is underperforming, has blown games) then it makes sense to
+        look for one at the trade deadline"). A kicker can rate 82 and be 9 for 17, and
+        `_positionalGaps` compares him to the league on RATING — so the club least able to
+        trust its kicker is exactly the club this gate was silencing. "Has blown games" is
+        a claim about what he has done, so it is read off what he has done.
+
+        ⚠️ OFFSEASON IS NEVER LIFTED. There are no blown kicks to react to yet, and the
+        offseason is the case the owner objected to.
+        """
+        base = self._basePositionAppetite(player)
+        if base >= 1.0 or buyer is None or self.week is None:
+            return base
+        return 1.0 if self._incumbentIsFailing(buyer, player) else base
+
+    def _incumbentIsFailing(self, team, incoming) -> bool:
+        """Is this club's own man at that position actually costing it games?
+
+        Kickers only for now — the one position with a clean, universally-understood
+        conversion rate. Another low-appetite position would need its own read.
+        """
+        if getattr(getattr(incoming, 'position', None), 'name', None) != 'K':
+            return False
+        for slot in POSITION_SLOTS.get(
+                getattr(getattr(incoming, 'position', None), 'value', None), []):
+            held = (getattr(team, 'rosterDict', None) or {}).get(slot)
+            if held is None:
+                continue
+            kicking = (getattr(held, 'seasonStatsDict', None) or {}).get('kicking') or {}
+            att = float(kicking.get('fgAtt', 0) or 0)
+            made = float(kicking.get('fgs', 0) or 0)
+            # ⚠️ DERIVED, NOT READ FROM `fgPerc` — that key is only written on the GAME
+            # dict (`floosball_game.py:1266`), so on a season line it is 0 and every
+            # kicker in the league would read as failing.
+            if att >= TRADE_KICKER_CRISIS_MIN_ATT and \
+                    (100.0 * made / att) < TRADE_KICKER_CRISIS_FG_PCT:
+                return True
+        return False
 
     @staticmethod
     def _positionWeight(player) -> float:
@@ -966,6 +1008,21 @@ class TradeMarket:
         la = getattr(la, 'name', la)
         lb = getattr(lb, 'name', lb)
         return bool(la) and la == lb
+
+    def _maxPiecesFor(self, listing, player):
+        """How many assets this particular trade may involve.
+
+        ⚠️ THE OFFSEASON CAP ON A LOW-APPETITE POSITION IS A HARD CAP, NOT A DISCOUNT
+        (owner: "I just dont think it makes sense for teams to unload mulitple assets for
+        one in the offseason"). The complaint is about the SHAPE of the deal, and a price
+        rule can always be cleared by a club that wants him enough — so this limits the
+        bundle rather than the bar.
+        """
+        if self.week is None and self._basePositionAppetite(player) < 1.0:
+            return TRADE_LOW_APPETITE_MAX_PIECES
+        if listing.trigger == 'inquiry':
+            return TRADE_INQUIRY_MAX_PIECES
+        return None
 
     def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
                   swapPosition=None, maxPieces=None) -> list:

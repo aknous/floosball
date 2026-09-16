@@ -314,3 +314,110 @@ def test_a_kicker_is_never_a_blockbuster():
                for l in market.inquiriesFor(buyer)), \
         "a club built a blockbuster around a kicker"
     print("PASS no club mortgages its future for a kicker")
+
+
+# ------------------------- 6. a real need, and the shape of the deal ---------
+
+def _kicker(pid, rating, made, att, name='K'):
+    p = FakePlayer(pid, rating, Position.K, termRemaining=3, name=name)
+    p.seasonStatsDict = {'kicking': {'fgAtt': att, 'fgs': made}}
+    return p
+
+
+def test_a_club_whose_kicker_is_blowing_games_may_go_and_get_one():
+    """Owner, 2026-09-15: "if a team actually needs a K (their own K is underperforming,
+    has blown games) then it makes sense to look for one at the trade deadline."
+
+    ⚠️ A RATING GAP CANNOT SEE A BLOWN KICK. `_positionalGaps` compares the incumbent to
+    the league on RATING, so a kicker who rates 82 and is 9 for 17 reads as no hole at all
+    — the club least able to trust its kicker was exactly the club the low appetite was
+    silencing."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    market = _market(teams, week=20)
+    incoming = FakePlayer(810, 92, Position.K, termRemaining=3)
+
+    buyer.rosterDict['k'] = _kicker(811, 82, 15, 17)        # 88%, reliable
+    assert market._positionAppetite(incoming, buyer) < 1.0
+    market._needsCache.clear()
+
+    buyer.rosterDict['k'] = _kicker(812, 82, 9, 17)         # 53%, blowing games
+    assert market._positionAppetite(incoming, buyer) == 1.0, \
+        "a club 9 for 17 was still told not to shop for a kicker"
+    print("PASS a club whose kicker is missing goes and gets one at the deadline")
+
+
+def test_the_lift_reads_KICKS_not_the_fgPerc_key():
+    """⚠️ `fgPerc` IS ONLY WRITTEN ON THE GAME DICT (`floosball_game.py:1266`), so on a
+    season line it sits at 0 — trusting it would read EVERY kicker in the league as
+    failing, which is the same gate with the opposite polarity."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    market = _market(teams, week=20)
+    incoming = FakePlayer(813, 92, Position.K, termRemaining=3)
+    good = _kicker(814, 82, 16, 18)
+    good.seasonStatsDict['kicking']['fgPerc'] = 0          # as a real season row carries it
+    buyer.rosterDict['k'] = good
+    assert market._positionAppetite(incoming, buyer) < 1.0, \
+        "a 16-for-18 kicker read as failing because fgPerc was 0"
+    print("PASS the lift is derived from made/attempted, not from an unwritten key")
+
+
+def test_one_bad_afternoon_is_not_a_crisis():
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    market = _market(teams, week=20)
+    incoming = FakePlayer(815, 92, Position.K, termRemaining=3)
+    buyer.rosterDict['k'] = _kicker(816, 82, 1, 3)          # 33%, but only three kicks
+    assert market._positionAppetite(incoming, buyer) < 1.0, \
+        "three kicks was treated as a record"
+    print("PASS a club needs a sample before it panics")
+
+
+def test_the_lift_is_IN_SEASON_only():
+    """⚠️ There are no blown kicks to react to in the offseason, and the offseason is the
+    case the owner objected to."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    buyer.rosterDict['k'] = _kicker(817, 82, 9, 17)         # 53%, last season
+    incoming = FakePlayer(818, 92, Position.K, termRemaining=3)
+    assert _market(teams, week=20)._positionAppetite(incoming, buyer) == 1.0
+    assert _market(teams, week=None)._positionAppetite(incoming, buyer) < 1.0, \
+        "last season's misses unlocked an offseason kicker splurge"
+    print("PASS the deadline reacts to this season; the offseason does not")
+
+
+def test_the_offseason_cannot_spend_MULTIPLE_assets_on_a_kicker():
+    """Owner: "I just dont think it makes sense for teams to unload mulitple assets for one
+    in the offseason."
+
+    ⚠️ A HARD CAP ON THE BUNDLE, NOT A PRICE. The objection is to the SHAPE of the deal,
+    and any price rule can be cleared by a club that wants him enough."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    k = FakePlayer(819, 92, Position.K, termRemaining=3)
+    wr = FakePlayer(820, 92, Position.WR, termRemaining=3)
+    teams[0].rosterDict['k'] = k
+    teams[0].rosterDict['wr1'] = wr
+    listing = tradeManager.Listing(teams[0], k, 'expiring_surplus', 1.0, 1.0)
+    wrListing = tradeManager.Listing(teams[0], wr, 'expiring_surplus', 1.0, 1.0)
+
+    offseason = _market(teams, week=None)
+    assert offseason._maxPiecesFor(listing, k) == constants.TRADE_LOW_APPETITE_MAX_PIECES
+    assert offseason._maxPiecesFor(wrListing, wr) != constants.TRADE_LOW_APPETITE_MAX_PIECES, \
+        "the cap leaked onto every position"
+
+    inSeason = _market(teams, week=20)
+    assert inSeason._maxPiecesFor(listing, k) != constants.TRADE_LOW_APPETITE_MAX_PIECES, \
+        "the deadline was capped too, where the owner allowed the trade"
+    print(f"PASS an offseason kicker costs at most "
+          f"{constants.TRADE_LOW_APPETITE_MAX_PIECES} piece, a deadline one is unconstrained")
