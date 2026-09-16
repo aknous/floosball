@@ -259,6 +259,10 @@ async def main(seasons, treasury):
                 # knows where that club finishes two seasons out.
                 import trading as _t
                 entry.update({'pickSeason': d.get('season'), 'slot': d.get('slot'),
+                              'originalTeam': next(
+                                  (t.name for t in tm.teams
+                                   if getattr(t, 'id', None) == d.get('originalTeamId')),
+                                  None),
                               'expectedSlot': round(_t.expectedPickSlot(
                                   d.get('slot') or 16, out_), 1),
                               'seasonsOut': out_})
