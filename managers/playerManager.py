@@ -4330,7 +4330,8 @@ class PlayerManager:
         from constants import PROSPECT_SLOT_CAP_PER_POSITION
         return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
 
-    def findPickBuyer(self, skipper, available, candidateTeams, season):
+    def findPickBuyer(self, skipper, available, candidateTeams, season,
+                      slotByTeamId=None):
         """Somebody who CAN use this selection, and will pay next year's pick for it.
 
         ⚠️ A SKIPPED PICK IS A DESTROYED ASSET, AND THE CLUB COULD NOT HAVE SEEN IT COMING
@@ -4359,6 +4360,22 @@ class PlayerManager:
         precisely a club that might want back into this draft. Passing the order would
         exclude the most motivated buyers and silently shrink the market to whoever already
         had a selection.
+
+        ⚠️ AND THE BUYER HAS TO COME OUT AHEAD, WHICH MOSTLY IT DOES NOT (owner,
+        2026-09-15: *"the buying club may be buying a worse pick than what theyd get with
+        the pick they gave up. I imagine most of the time when this happens its towards the
+        end of the draft"*). Exactly so, and it is structural rather than incidental: a
+        board only empties at a club's open positions once most of the class is gone, so
+        these slots are late by construction — and a late slot is worth **less than any
+        future pick** (slot 24 prices at 5.6 against 9.8 for a mid pick a year out; slot 28
+        at 0.2). Unpriced, this would have swapped a real asset for a dead one and called
+        it compensation.
+
+        ⚠️ VALUED ON THE PLAYER ACTUALLY THERE, NOT ON THE SLOT'S EXPECTATION. `pickValue`
+        prices a slot by what the class USUALLY yields there, which is near zero at the
+        back — but this board emptied unevenly, and the specific man still sitting on it at
+        a position this club has room for may be worth a good deal more than slot 30
+        implies. What the buyer is being offered is that player, so that is what it prices.
         """
         from database.connection import get_session
         from database.models import DraftPick
@@ -4394,20 +4411,53 @@ class PlayerManager:
         if not candidates:
             return None, None
 
-        # ⚠️ WHOEVER WANTS IT MOST, on their OWN board — the same rule the trade market
-        # settles an auction by. Ranking on the rookie's raw rating instead would make
-        # every club value the class identically and the choice arbitrary.
-        def appetite(pair):
-            team, eligible = pair
+        import trading
+        from managers.frontOfficeBrain import FrontOfficeBrain, positionValue
+        brain = getattr(self, '_draftBrain', None) or FrontOfficeBrain(self)
+        slotByTeamId = slotByTeamId or {}
+
+        def bestFor(team, eligible):
             coach = getattr(team, 'coach', None)
             try:
-                from managers.frontOfficeBrain import FrontOfficeBrain
-                brain = getattr(self, '_draftBrain', None) or FrontOfficeBrain(self)
-                return max(brain.decisionValue(r, coach=coach, team=team) for r in eligible)
+                return max(eligible,
+                           key=lambda r: brain.decisionValue(r, coach=coach, team=team))
             except Exception:
-                return max(float(getattr(r, 'playerRating', 0) or 0) for r in eligible)
+                return max(eligible, key=lambda r: float(getattr(r, 'playerRating', 0) or 0))
 
-        return max(candidates, key=appetite)
+        def worthIt(team, eligible):
+            """(does this beat their own next-season pick, by how much)."""
+            best = bestFor(team, eligible)
+            try:
+                skill = float(brain._ceilingRating(best, team))
+            except Exception:
+                skill = float(getattr(best, 'playerRating', 0) or 0)
+            try:
+                posW = positionValue(best)
+            except Exception:
+                posW = trading.averagePositionWeight()
+            gain = trading.prospectValue(
+                skill, 0, rookieTerm=trading.rookieTermForSkill(skill), positionWeight=posW)
+            # What they give up: their own pick a year out, which regresses toward the
+            # middle of the draft because nobody knows where they finish.
+            cost = trading.pickValue(
+                slotByTeamId.get(getattr(team, 'id', None), 16), 1)
+            return gain - cost, gain, cost
+
+        priced = []
+        for team, eligible in candidates:
+            try:
+                margin, _gain, _cost = worthIt(team, eligible)
+            except Exception:
+                continue
+            if margin > 0:
+                priced.append((margin, team, eligible))
+        if not priced:
+            return None, None
+        # ⚠️ WHOEVER GAINS MOST, not whoever merely clears — the same rule the trade market
+        # settles an auction by. Ranking on the rookie's raw rating instead would make
+        # every club value the class identically and the choice arbitrary.
+        margin, team, eligible = max(priced, key=lambda x: x[0])
+        return team, eligible
 
     def handOverNextSeasonPick(self, buyer, skipper, season) -> bool:
         """Move the buyer's next-season pick to the club that could not use this one."""
@@ -4470,6 +4520,10 @@ class PlayerManager:
             from managers.frontOfficeBrain import FrontOfficeBrain
             brain = FrontOfficeBrain(self)
         self._draftBrain = brain
+        # A club's own draft position, used to price the future pick it would give up.
+        slotByTeamId = {}
+        for i, t in enumerate(draftOrder):
+            slotByTeamId.setdefault(getattr(t, 'id', None), i + 1)
 
         for onTheClock in draftOrder:
             if not available:
@@ -4492,7 +4546,8 @@ class PlayerManager:
                 if season is not None:
                     try:
                         buyer, buyerEligible = self.findPickBuyer(
-                            team, available, leagueTeams or draftOrder, season)
+                            team, available, leagueTeams or draftOrder, season,
+                            slotByTeamId=slotByTeamId)
                     except Exception as e:
                         logger.warning(f"Rookie draft: could not shop the pick: {e}")
                 if buyer is not None and self.handOverNextSeasonPick(buyer, team, season):

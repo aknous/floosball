@@ -216,3 +216,60 @@ def test_the_buyer_pool_is_the_LEAGUE_not_the_draft_order():
     assert fromOrder is None
     assert fromLeague is soldTheirs, "a club outside the order could not buy back in"
     print("PASS a club with no selection of its own can still buy one")
+
+
+def test_the_buyer_refuses_a_slot_worth_less_than_its_own_future_pick():
+    """⚠️ AND MOSTLY IT SHOULD (owner, 2026-09-15: "the buying club may be buying a worse
+    pick than what theyd get with the pick they gave up. I imagine most of the time when
+    this happens its towards the end of the draft").
+
+    Exactly so, and it is structural: a board only empties at a club's open positions once
+    most of the class is gone, so these slots are late by construction — and a late slot is
+    worth LESS than any future pick (slot 24 prices at 5.6 against 9.8 for a mid pick a
+    year out). Unpriced, this swapped a real asset for a dead one and called it
+    compensation."""
+    pm = _pm()
+    skipper, buyer = FakeTeam(1, 'Skippers'), FakeTeam(2, 'Buyers')
+    _seedPicks([1, 2], SEASON)
+    skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
+        [Position.QB, Position.QB, Position.RB, Position.RB,
+         Position.WR, Position.WR, Position.TE, Position.TE])]
+
+    # ⚠️ ABOVE REPLACEMENT, DELIBERATELY. A 58 is worth exactly 0 on the trade scale
+    # (`REPLACEMENT_RATING` is 67), so it would be refused for being worthless rather than
+    # for costing too much — and the test would pass with the price check deleted. An 80
+    # kicker is worth 7.6 against a mid future pick's 9.8: a real player, and still not
+    # worth what it costs.
+    dregs = [FakeRookie(1, Position.K, 80)]
+    found, _ = pm.findPickBuyer(skipper, dregs, [skipper, buyer], SEASON,
+                                slotByTeamId={2: 16})
+    assert found is None, "a club gave up next year's pick for an 80-rated kicker worth 7.6"
+
+    # A genuine player still on the board: now it is worth doing.
+    prize = [FakeRookie(2, Position.WR, 88)]
+    found, _ = pm.findPickBuyer(skipper, prize, [skipper, buyer], SEASON,
+                                slotByTeamId={2: 16})
+    assert found is buyer, "a club passed on an 88 for nothing"
+    print("PASS the buyer pays for a player worth having and refuses the dregs")
+
+
+def test_the_slot_is_priced_on_WHO_IS_LEFT_not_on_the_slot_number():
+    """⚠️ `pickValue` prices a slot by what the class USUALLY yields there, which is near
+    zero at the back — but this board emptied unevenly, and the man still sitting on it at
+    a position this club has room for may be worth far more than slot 30 implies. What the
+    buyer is offered is that player, so that is what it prices."""
+    import trading
+    pm = _pm()
+    skipper, buyer = FakeTeam(1, 'Skippers'), FakeTeam(2, 'Buyers')
+    _seedPicks([1, 2], SEASON)
+    skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
+        [Position.QB, Position.QB, Position.RB, Position.RB,
+         Position.WR, Position.WR, Position.TE, Position.TE])]
+
+    # The generic value of a slot this late is nil...
+    assert trading.pickValue(30, 0) < 1.0, trading.pickValue(30, 0)
+    # ...yet a 90 is still sitting there, and the trade must see him.
+    found, _ = pm.findPickBuyer(skipper, [FakeRookie(3, Position.WR, 90)],
+                                [skipper, buyer], SEASON, slotByTeamId={2: 16})
+    assert found is buyer, "the deal was priced off the slot number and missed a 90"
+    print("PASS a late slot holding a real player is still worth buying")
