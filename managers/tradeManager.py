@@ -33,6 +33,7 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_CANDIDATES_PER_LISTING, TRADE_MAX_PIECES,
                        TRADE_PICK_HORIZON_SEASONS, FO_CUT_UPGRADE_MARGIN,
                        TRADE_MIN_CERTAINTY, TRADE_INQUIRY_ENABLED,
+                       RESIGN_LIMIT_PER_OFFSEASON,
                        TRADE_INQUIRIES_PER_TEAM, TRADE_HUMP_BAND,
                        TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
                        TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
@@ -76,12 +77,16 @@ TRIGGER_URGENCY = {
 class Listing:
     """One asset on the block, with the ask and the walk-away that price it."""
 
-    def __init__(self, team, player, trigger, ask, floor):
+    def __init__(self, team, player, trigger, ask, floor, why=None):
         self.team = team
         self.player = player
         self.trigger = trigger
         self.ask = ask
         self.floor = floor
+        # ⚠️ RECORDED WHERE THE DECISION IS MADE. Every fact in it was computed to REACH the
+        # decision, and reconstructing it later means recomputing state that has since moved
+        # on — a trade pass changes rosters underneath itself by design.
+        self.why = why
 
     def __repr__(self):
         return (f"<Listing {self.team.name}: {self.player.name} "
@@ -99,13 +104,14 @@ class PickListing:
     that is all this carries in common.
     """
 
-    def __init__(self, team, pick, ask, floor):
+    def __init__(self, team, pick, ask, floor, why=None):
         self.team = team
         self.pick = pick            # the dict from `picksOwnedBy`
         self.player = None          # explicit: nothing here has a player
         self.trigger = 'pick_swap'
         self.ask = ask
         self.floor = floor
+        self.why = why
 
     def __repr__(self):
         return (f"<PickListing {self.team.name}: S{self.pick['season']} "
@@ -115,10 +121,14 @@ class PickListing:
 class Bid:
     """What one club offers for one listing, and what it is worth to the SELLER."""
 
-    def __init__(self, team, pieces, value):
+    def __init__(self, team, pieces, value, why=None):
         self.team = team
         self.pieces = pieces        # [{kind, id, name, detail, value}]
         self.value = value
+        # ⚠️ THE BUYER'S SIDE WAS NEVER RECORDED. The trigger is the SELLER's reason, so a
+        # ledger carrying only that reads as half a conversation: a club is moved for a
+        # locker-room problem and nothing says why anyone wanted him.
+        self.why = why
 
     def __repr__(self):
         return f"<Bid {self.team.name}: {len(self.pieces)} piece(s) worth {self.value:.1f}>"
@@ -388,7 +398,8 @@ class TradeMarket:
             ask, floor = self._priceListing(team, player, trigger)
             if ask <= 0:
                 continue
-            out.append(Listing(team, player, trigger, ask, floor))
+            out.append(Listing(team, player, trigger, ask, floor,
+                               why=self.sellerWhy(team, player, trigger)))
 
         # ⚠️ RANKED BY URGENCY, NOT BY ASK — a club posts the man it most needs to move,
         # not the one worth most. Sorting by ask looks sensible and is precisely wrong: a
@@ -591,7 +602,8 @@ class TradeMarket:
                 self._noteInquiry('unpriceable')
                 continue
             self._noteInquiry('called')
-            out.append(Listing(holder, target, 'inquiry', ask, floor))
+            out.append(Listing(holder, target, 'inquiry', ask, floor,
+                               why=self.sellerWhy(holder, target, 'inquiry')))
         return out
 
     def pickInquiriesFor(self, buyer) -> list:
@@ -638,7 +650,15 @@ class TradeMarket:
                     continue        # the two slots are interchangeable; moving is churn
                 ask, floor = self._pricePick(holder, pick, swapFor=swapFor)
                 if ask > 0:
-                    listing = PickListing(holder, pick, ask, floor)
+                    listing = PickListing(
+                        holder, pick, ask, floor,
+                        why=(f"Paid to drop from slot {pick['slot']} to "
+                             f"{swapFor['slot']}. The club does not need the very best "
+                             f"player in this draft to fill the hole it has, so the "
+                             f"distance is worth more to somebody else than to it."
+                             + (" The window is shut, so what it needs is assets, not one "
+                                "more good player."
+                                if self.teamWindow(holder) == 'closed' else '')))
                     listing.swapFor = swapFor
                     out.append(listing)
         # ⚠️ THE BEST JUMP IT CAN AFFORD, NOT THE BIGGEST ONE AVAILABLE. Ranking by the
@@ -730,7 +750,15 @@ class TradeMarket:
             'value': self._pickValueTo(listing.team, swapFor),
         }
         pieces = [swapPiece] + extras
-        return Bid(buyer, pieces, sum(p['value'] for p in pieces))
+        why = (f"Moving up to slot {listing.pick['slot']} from "
+               f"{swapFor['slot']} \u2014 the jump is worth more to this club than the "
+               f"distance it gives up, and it keeps a pick either way.")
+        window = self.teamWindow(buyer)
+        if window == 'opening':
+            why += " It is building, and this is the kind of asset it is building with."
+        elif window == 'closing':
+            why += " The window is closing, so the player has to arrive now."
+        return Bid(buyer, pieces, sum(p['value'] for p in pieces), why=why)
 
     def _noteInquiry(self, reason: str) -> None:
         self.inquiryFail[reason] = self.inquiryFail.get(reason, 0) + 1
@@ -998,6 +1026,100 @@ class TradeMarket:
             return term >= 3        # years it will not be around to use
         return False                # a rebuilder's long deals are exactly what it wants
 
+    def sellerWhy(self, team, player, trigger) -> str:
+        """Why this club is willing to move him, in its own terms.
+
+        ⚠️ WRITTEN AT THE MOMENT THE DECISION IS MADE, not reconstructed afterwards. Every
+        fact here is already computed to REACH the decision — the trigger, the re-sign cap,
+        the prospect behind him, the attitude, the window — so recording it costs a string
+        and reconstructing it later would mean recomputing state that has since moved on.
+        """
+        window = self.teamWindow(team)
+        name = getattr(player, 'name', 'him')
+        pos = getattr(getattr(player, 'position', None), 'name', '')
+
+        if trigger == 'expiring_surplus':
+            why = (f"Cannot re-sign {name} \u2014 he is past the club's "
+                   f"{int(RESIGN_LIMIT_PER_OFFSEASON)}-player re-sign limit and walks for "
+                   f"nothing at season end. Anything beats that.")
+        elif trigger == 'expiring_keeper':
+            why = (f"Could keep {name}, so he is priced on the contract that would follow "
+                   f"rather than the weeks left. Available only to a return that beats "
+                   f"re-signing him.")
+        elif trigger == 'blocked_prospect':
+            prospect = next((p for p in (getattr(team, 'prospects', None) or [])
+                             if getattr(getattr(p, 'position', None), 'name', '') == pos),
+                            None)
+            who = getattr(prospect, 'name', 'a prospect')
+            why = (f"{who} is ready at {pos} and stuck behind {name}. Moving him opens the "
+                   f"slot rather than letting the pipeline rot.")
+        elif trigger == 'locker_room':
+            att = self._attitudeOf(player)
+            why = (f"{name}'s attitude ({int(att)}) is dragging the room down every week he "
+                   f"stays." if att else f"{name} is a locker-room problem.")
+        elif trigger == 'horizon_mismatch':
+            why = ("Holding term this club cannot use." if not self.isContending(team)
+                   else "Holding a rental this club cannot keep.")
+        elif trigger == 'inquiry':
+            why = f"Nobody put {name} on the block \u2014 another club called and asked."
+        else:
+            why = f"{name} is available."
+
+        if window == 'closed':
+            why += (" The window is shut and the core is fading, so there is nothing here "
+                    "to build around.")
+        elif window == 'opening':
+            why += " The club is still building, so the return matters more than the man."
+        elif window == 'closing':
+            why += " Selling from a side that is still winning, which is the hard call."
+        return why
+
+    def buyerWhy(self, buyer, listing) -> str:
+        """Why this club wants him, in its own terms.
+
+        ⚠️ THE BUYER'S SIDE WAS NEVER RECORDED AT ALL. The trigger is the SELLER's reason,
+        and a ledger showing only that reads as half a conversation — a club is moved for a
+        locker-room problem and nothing says why anyone wanted him.
+        """
+        player = listing.player
+        pos = getattr(getattr(player, 'position', None), 'name', '')
+        bits = []
+
+        needs = self.topNeeds(buyer)
+        posValue = getattr(getattr(player, 'position', None), 'value', None)
+        if posValue in needs:
+            gaps = [getattr(getattr(p, 'position', None), 'name', '')
+                    for _s, p in self._positionalGaps(buyer)]
+            rank = (gaps.index(pos) + 1) if pos in gaps else None
+            bits.append(f"{pos} is this club's "
+                        f"{'biggest' if rank == 1 else 'number ' + str(rank)} hole against "
+                        f"the rest of the league" if rank else
+                        f"{pos} is one of this club's holes")
+
+        tilt = self.needTilt(buyer)
+        if abs(tilt) > 0.25:
+            side = 'defense' if tilt > 0 else 'offense'
+            bits.append(f"it is short on {side} relative to the league, and he helps there")
+
+        window = self.teamWindow(buyer)
+        if window == 'closing':
+            bits.append("the window is closing \u2014 its alternative to winning now is not "
+                        "winning later, it is not winning")
+        elif window == 'open':
+            bits.append("the window is open and the core is intact")
+        elif window == 'opening':
+            bits.append("it is still building, so this has to be worth more than the assets")
+
+        # ⚠️ THE CUT IS DELIBERATELY NOT NAMED HERE. This is written when the BID is made
+        # and settlement may still take a different path — a same-position swap needs no cut
+        # at all — so predicting it would put a second, guessing source of truth beside the
+        # aftermath strip, which records what actually happened. Two sources for one fact is
+        # the failure this codebase keeps repeating.
+        if not bits:
+            return "An upgrade the club could afford."
+        return bits[0][0].upper() + bits[0][1:] + (
+            ('; ' + '; '.join(bits[1:]) + '.') if len(bits) > 1 else '.')
+
     def _priceListing(self, team, player, trigger=None):
         # ⚠️ NOT A RENTAL IF THE CLUB CAN RE-SIGN HIM. `retentionTerm` is the single rule,
         # and it returns 0 for a player over the club's cap — so `expiring_surplus` prices
@@ -1209,7 +1331,8 @@ class TradeMarket:
                                 maxPieces=self._maxPiecesFor(listing, player))
         if not pieces:
             return None
-        return Bid(buyer, pieces, sum(p['value'] for p in pieces))
+        return Bid(buyer, pieces, sum(p['value'] for p in pieces),
+                   why=self.buyerWhy(buyer, listing))
 
     def _displacedBy(self, buyer, incoming):
         """(value of the man this club must cut, the fee to cut him).
@@ -1705,6 +1828,11 @@ def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
         # touches has to be present.
         'reserve': listing.floor,
         'trigger': 'pick_swap',
+        # ⚠️ BOTH SIDES OF THE CONVERSATION. The trigger is the SELLER's reason and was
+        # all the ledger ever carried, so a trade read as half an exchange: a club moves a
+        # man for a locker-room problem and nothing says why anyone wanted him.
+        'sellerWhy': getattr(listing, 'why', None),
+        'buyerWhy': getattr(winner, 'why', None),
     }
     tradeId = _persistTrade(manifest)
     _recordTrade(seasonManager, manifest, tradeId)
@@ -1842,6 +1970,11 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
         'price': winner.value,
         'reserve': listing.floor,
         'trigger': listing.trigger,
+        # ⚠️ BOTH SIDES OF THE CONVERSATION. The trigger is the SELLER's reason and was
+        # all the ledger ever carried, so a trade read as half an exchange: a club moves a
+        # man for a locker-room problem and nothing says why anyone wanted him.
+        'sellerWhy': getattr(listing, 'why', None),
+        'buyerWhy': getattr(winner, 'why', None),
     }
     tradeId = _persistTrade(manifest)
     manifest['tradeId'] = tradeId

@@ -221,6 +221,8 @@ async def main(seasons, treasury):
                               if getattr(t, 'id', None) == listing.pick.get('originalTeamId')),
                              None)}],
                 'back': back, 'buyerCut': None, 'sellerBackfill': None,
+                'sellerWhy': getattr(listing, 'why', None),
+                'buyerWhy': getattr(winner, 'why', None),
             })
         return out
 
@@ -392,6 +394,8 @@ async def main(seasons, treasury):
             # ⚠️ ONLY WHAT THIS SETTLEMENT DID. `pending` is cleared immediately before the
             # call, so a cut or a promotion from an earlier trade in the same weekly pass
             # cannot be attributed to this one.
+            record['sellerWhy'] = getattr(listing, 'why', None)
+            record['buyerWhy'] = getattr(winner, 'why', None)
             record['buyerCut'] = pending.get('cut')
             record['sellerBackfill'] = pending.get('backfill')
             shape.setdefault('ledger', []).append(record)
