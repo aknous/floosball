@@ -1354,7 +1354,7 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
             # NEVER has an open slot, and a settlement that requires one shuts every
             # contender out of the market. Measured before this existed: 728 listings and
             # 709 clearing bids across a season, and ZERO trades.
-            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player)
+            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player, week=week)
             if buyerSlot is None:
                 return None
     else:
@@ -1433,8 +1433,15 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     return manifest
 
 
-def _stampAcquired(player, season: int) -> None:
+def _stampAcquired(player, season: int, asPiece: bool = False) -> None:
     """Mark that this club got him in a trade THIS season.
+
+    ⚠️ `asPiece` SEPARATES THE TWO WAYS A PLAYER ARRIVES, and the difference decides
+    whether cutting him wastes anything (owner, 2026-09-16). The HEADLINE player is the man
+    a club went out and bought. A PIECE is the roster player a seller took back inside a
+    bundle whose real return was picks and prospects — "the roster player was just someone
+    to fill a gap" — and moving on from him later wastes nothing, because he was never what
+    the trade was for.
 
     ⚠️ IN MEMORY ONLY, DELIBERATELY. The rule it feeds is a within-season one and the
     stamp is worthless the moment the season turns, so persisting it would add a column
@@ -1443,6 +1450,7 @@ def _stampAcquired(player, season: int) -> None:
     """
     try:
         player._tradedInSeason = int(season or 0)
+        player._acquiredAsPiece = bool(asPiece)
     except Exception:
         pass
 
@@ -1462,6 +1470,20 @@ def wasAcquiredThisSeason(player, season: int) -> bool:
     return stamped is not None and int(stamped) == int(season or 0)
 
 
+def wasHeadlineAcquisition(player, season: int) -> bool:
+    """Did this club go out and BUY him this season, as the point of the trade?
+
+    ⚠️ NARROWER THAN `wasAcquiredThisSeason` ON PURPOSE — the two guard different rules and
+    conflating them was the mistake. That one stops a player being passed around and must
+    cover every bundle piece. This one stops a club treating an acquisition as disposable
+    packaging, and a gap-filling piece is not that (owner, 2026-09-16: *"if the player
+    received in the trade was just a gap fill piece on a selling team, then its not out of
+    the question that they could be cut"*).
+    """
+    return (wasAcquiredThisSeason(player, season)
+            and not getattr(player, '_acquiredAsPiece', False))
+
+
 def _slotOf(team, player):
     for slot, rostered in (getattr(team, 'rosterDict', None) or {}).items():
         if rostered is player:
@@ -1477,7 +1499,7 @@ def _openSlotFor(team, player):
     return None
 
 
-def _cutToMakeRoom(seasonManager, buyer, incoming):
+def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
     """Cut the weakest incumbent at the incoming player's position. Returns the freed
     slot, or None.
 
@@ -1510,23 +1532,33 @@ def _cutToMakeRoom(seasonManager, buyer, incoming):
             worstSlot, worst, worstRating = slot, incumbent, rating
     if worst is None:
         return None
-    # ⚠️ YOU MAY NOT CUT A MAN YOU JUST ACQUIRED (owner, 2026-09-15: "the part I dont like
-    # is a team trading for a player and then cutting them immediately for another trade to
-    # happen"). Reported from the ledger: Phones traded for a quarterback, then a week later
-    # traded for a second one and CUT the first to make room — so a club could treat an
-    # acquisition as disposable packaging for the next deal, and the player it gave up real
-    # assets for lasted a week.
+    # ⚠️ YOU MAY NOT CUT, IN-SEASON, A MAN YOU WENT OUT AND BOUGHT THIS SEASON (owner,
+    # 2026-09-15: "a team trading for a player and then cutting them immediately ... it was
+    # just a waste of assets and no real team would do that"). Reported from the ledger:
+    # Phones traded for a quarterback, then a week later traded for a second and CUT the
+    # first to make room.
+    #
+    # ⚠️ TWO CARVE-OUTS, BOTH OWNER-SPECIFIED, AND A SEASON-LONG BAN GOT BOTH WRONG:
+    #
+    #   * THE OFFSEASON IS EXEMPT — "players that were signed to fill gaps during the
+    #     season can be cut in the offseason ... to make way for a better player". The
+    #     offseason runs under the SAME season number, so a season-matched stamp silently
+    #     protected every in-season acquisition right through it. And the blockbuster path
+    #     is offseason-only and needs `_cutToMakeRoom` to make room, so the ban was
+    #     throttling the one feature built to produce a star trade.
+    #   * A BUNDLE PIECE IS EXEMPT — "the seller got a roster player in return for sending
+    #     out a star player, but theyd also would have had to get prospects or picks, which
+    #     was the real return and the roster player was just someone to fill a gap". He was
+    #     never the point of the trade, so moving on from him wastes nothing.
     #
     # ⚠️ IT REFUSES RATHER THAN LOOKING FURTHER. There is at most one other slot at any
-    # position (only WR has two), so "cut somebody else instead" is nearly always no
-    # option at all — and where it is one, the club is choosing to discard a BETTER
-    # incumbent to protect a man it just bought, which is not an improvement on the thing
-    # being prevented. If the only body it can free is one it just traded for, the roster
-    # is genuinely full and the second trade does not happen.
-    if wasAcquiredThisSeason(worst, getattr(
+    # position (only WR has two), so "cut somebody else instead" is nearly always no option
+    # at all — and where it is one, the club is discarding a BETTER incumbent to protect a
+    # man it just bought, which is not an improvement on the thing being prevented.
+    if week is not None and wasHeadlineAcquisition(worst, getattr(
             getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0)):
         logger.info(f"Trade declined: {buyer.name} would have to cut "
-                    f"{worst.name}, acquired this season")
+                    f"{worst.name}, bought this season")
         return None
     # ⚠️ NO SECOND UPGRADE TEST HERE. `bidFor` already established that the incoming
     # player beats this exact man — on the buyer's own BELIEVED, position-weighted read —
@@ -1702,7 +1734,7 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
                     swapped.teamResignCount = 0
                     if sellerSlot is not None:
                         toTeam.rosterDict[sellerSlot] = swapped
-                    _stampAcquired(swapped, season)
+                    _stampAcquired(swapped, season, asPiece=True)
                     try:
                         toTeam.assignPlayerNumber(swapped)
                     except Exception:
@@ -1710,7 +1742,7 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
             elif piece['kind'] == 'prospect':
                 prospect = _findProspect(fromTeam, piece['id'])
                 if prospect is not None:
-                    _stampAcquired(prospect, season)
+                    _stampAcquired(prospect, season, asPiece=True)
                 if prospect is None:
                     logger.warning(
                         f"TRADE PIECE MISSING: {fromTeam.name} does not hold prospect "

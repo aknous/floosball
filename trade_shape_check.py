@@ -482,11 +482,44 @@ async def main(seasons, treasury):
     return shape
 
 
+def _seedEverything(seed: int) -> None:
+    """Make a run reproducible, so two arms are actually comparable.
+
+    ⚠️ THIS HARNESS WAS NEVER SEEDED, AND EVERY COMPARISON MADE WITH IT CARRIED THE NOISE.
+    Each run boots a fresh league with `force_fresh=True` and player generation goes
+    through `np.random.normal`, so back-to-back runs of IDENTICAL code produced different
+    leagues — measured, 61 trades over 8 seasons on one run and 23 on the next. Any
+    before/after read from single unseeded runs is mostly sampling, and two of this
+    project's test files had the same defect (see the numpy note in
+    `test_darts_format._seedAll`).
+
+    ⚠️ SEED BOTH GENERATORS. `random.seed` alone does not pin player generation, which is
+    what decides the league you are measuring.
+
+    ⚠️ AND IT STILL DOES NOT MAKE A RUN REPRODUCIBLE — measured, the same seed gave 9
+    trades and then 5, and pinning `PYTHONHASHSEED=0` as well did not fix it either. Some
+    ordering in the engine is keyed on object identity rather than on anything a seed
+    reaches. So this removes ONE source of variance and no more: **a single run is a
+    sample, not a measurement**, and an A/B needs several runs an arm. Every before/after
+    in this session's notes taken from one run each carries that noise.
+    """
+    import random as _r
+    _r.seed(seed)
+    try:
+        import numpy as _np
+        _np.random.seed(seed)
+    except Exception:
+        pass
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--seasons', type=int, default=2)
     ap.add_argument('--treasury', type=int, default=1900)
+    ap.add_argument('--seed', type=int, default=20260916,
+                    help='fixed by default so arms are comparable; vary it to sample')
     args = ap.parse_args()
+    _seedEverything(args.seed)
     try:
         asyncio.run(main(args.seasons, args.treasury))
     finally:

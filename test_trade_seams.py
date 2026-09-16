@@ -577,35 +577,77 @@ class _FakePM:
         player.team = 'Free Agent'
 
 
-def test_a_club_may_not_CUT_a_player_it_just_acquired():
+def test_a_club_may_not_CUT_a_player_it_BOUGHT_this_season():
     """⚠️ AN ACQUISITION IS NOT DISPOSABLE PACKAGING FOR THE NEXT DEAL (owner, 2026-09-15:
-    "the part I dont like is a team trading for a player and then cutting them immediately
-    for another trade to happen").
+    "a team trading for a player and then cutting them immediately ... it was just a waste
+    of assets and no real team would do that").
 
     Reported from the ledger: Phones traded for a quarterback, then a week later traded for
-    a second one and CUT the first to make room — so the player it gave up real assets for
-    lasted a week.
-
-    ⚠️ STAMPING THE SIGNED BACKFILL WAS TRIED FIRST AND IS THE WRONG FIX: signing a free
-    agent and trading him on is legitimate where somebody wants him, so that blocks the
-    honest half of the loop and leaves the dishonest half intact.
+    a second and CUT the first to make room.
     """
     pm = _FakePM([])
     sm = _FakeSM(pm)
     buyer = _FakeClub(2, 'Phones')
-    justArrived = _FakeGuy(510, 'Week Old')
-    buyer.rosterDict = {'qb': justArrived}
+    bought = _FakeGuy(510, 'Week Old')
+    buyer.rosterDict = {'qb': bought}
     incoming = _FakeGuy(511, 'Next Man', rating=80)
 
-    tradeManager._stampAcquired(justArrived, 7)
-    assert tradeManager._cutToMakeRoom(sm, buyer, incoming) is None, \
-        "a club cut the man it traded for last week to make room for another"
+    tradeManager._stampAcquired(bought, 7)                 # the headline of a trade
+    assert tradeManager._cutToMakeRoom(sm, buyer, incoming, week=21) is None, \
+        "a club cut the man it bought last week to make room for another"
 
     settled = _FakeGuy(512, 'Been Here A While')
     buyer.rosterDict = {'qb': settled}
-    assert tradeManager._cutToMakeRoom(sm, buyer, incoming) == 'qb', \
+    assert tradeManager._cutToMakeRoom(sm, buyer, incoming, week=21) == 'qb', \
         "a club could no longer cut a long-standing incumbent"
-    print("PASS a player a club traded for is not packaging for the next trade")
+    print("PASS a player a club bought is not packaging for the next trade")
+
+
+def test_a_GAP_FILL_PIECE_may_be_cut():
+    """⚠️ HE WAS NEVER THE POINT OF THE TRADE (owner, 2026-09-16: "the seller got a roster
+    player in return for sending out a star player, but theyd also would have had to get
+    prospects or picks, which was the real return and the roster player was just someone to
+    fill a gap").
+
+    ⚠️ THIS IS WHY `wasHeadlineAcquisition` IS NARROWER THAN `wasAcquiredThisSeason`. The
+    wide predicate still guards re-TRADING, where a piece must be covered; using it for the
+    cut rule too blocked a move a real club would obviously make."""
+    pm = _FakePM([])
+    sm = _FakeSM(pm)
+    club = _FakeClub(1, 'Sellers')
+    filler = _FakeGuy(520, 'Gap Filler')
+    club.rosterDict = {'qb': filler}
+    tradeManager._stampAcquired(filler, 7, asPiece=True)
+
+    assert tradeManager.wasAcquiredThisSeason(filler, 7), "the re-trade guard lost him"
+    assert not tradeManager.wasHeadlineAcquisition(filler, 7)
+    assert tradeManager._cutToMakeRoom(
+        sm, club, _FakeGuy(521, 'Upgrade', rating=85), week=21) == 'qb', \
+        "a gap-filling piece could not be moved on from"
+    print("PASS a gap-filling piece is not protected like a purchase")
+
+
+def test_the_cut_rule_does_not_reach_into_the_OFFSEASON():
+    """⚠️ THE OFFSEASON RUNS UNDER THE SAME SEASON NUMBER, so a season-matched stamp
+    silently protected every in-season acquisition right through it (owner, 2026-09-16:
+    "players that were signed to fill gaps during the season can be cut in the offseason").
+
+    ⚠️ AND IT WAS THROTTLING THE BLOCKBUSTER: that path is offseason-only and needs
+    `_cutToMakeRoom` to make room, so the season-long ban suppressed the one feature built
+    to produce a star trade."""
+    pm = _FakePM([])
+    sm = _FakeSM(pm)
+    club = _FakeClub(2, 'Phones')
+    bought = _FakeGuy(530, 'Bought In May')
+    club.rosterDict = {'qb': bought}
+    tradeManager._stampAcquired(bought, 7)
+    incoming = _FakeGuy(531, 'Star', rating=92)
+
+    assert tradeManager._cutToMakeRoom(sm, club, incoming, week=21) is None
+    club.rosterDict = {'qb': bought}
+    assert tradeManager._cutToMakeRoom(sm, club, incoming, week=None) == 'qb', \
+        "the offseason still protected an in-season acquisition"
+    print("PASS the rule is in-season; the offseason may reshape the roster")
 
 
 def test_a_signed_backfill_may_still_be_traded_on():
@@ -670,3 +712,26 @@ def test_a_prospect_is_still_a_legal_offseason_backfill():
     found = tradeManager._findBackfill(sm, club, _FakeGuy(506, 'Outgoing'), week=None)
     assert found is not None and found[0] == 'prospect', found
     print("PASS a club may still promote its own prospect in the offseason")
+
+
+def test_handOverPieces_STAMPS_them_as_pieces():
+    """⚠️ TESTING THE PREDICATE IS NOT TESTING THE CALL SITE. A first version of the
+    gap-filler test stamped `asPiece=True` by hand, so flipping the real `_handOverPieces`
+    call back to a headline stamp changed nothing and the check passed regardless. The
+    distinction only exists if the code that moves a piece actually records it."""
+    fromTeam, toTeam = _FakeClub(1, 'Buyers'), _FakeClub(2, 'Sellers')
+    piece = _FakeGuy(540, 'Coming Back')
+    fromTeam.rosterDict = {'qb': piece}
+    toTeam.rosterDict = {'qb': None}
+    pm = _FakePM([])
+    sm = _FakeSM(pm)
+
+    tradeManager._handOverPieces(
+        sm, [{'kind': 'player', 'id': 540, 'name': 'Coming Back'}],
+        fromTeam, toTeam, season=7, sellerSlot='qb')
+
+    assert toTeam.rosterDict['qb'] is piece, "the piece never arrived"
+    assert tradeManager.wasAcquiredThisSeason(piece, 7), "the re-trade guard lost him"
+    assert not tradeManager.wasHeadlineAcquisition(piece, 7), \
+        "a bundle piece was recorded as a purchase, so it is protected like one"
+    print("PASS the hand-over records a piece AS a piece")
