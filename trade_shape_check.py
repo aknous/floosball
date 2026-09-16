@@ -164,8 +164,12 @@ async def main(seasons, treasury):
             shape['inRatings'].append(round(incoming.playerRating, 1))
         return out
 
-    def spyBackfill(seasonManager, team, player):
-        out = realBackfill(seasonManager, team, player)
+    def spyBackfill(*a, **kw):
+        """⚠️ FORWARD EVERYTHING. A fixed 3-arg wrapper silently broke the moment
+        `_findBackfill` grew a `week=` parameter: every in-season settle raised TypeError
+        into `_runTradePass`'s best-effort except, trades fell from ~10 a season to 2, and
+        the run LOOKED like a clean measurement of a regression that did not exist."""
+        out = realBackfill(*a, **kw)
         if out is not None:
             shape['backfillKind'][out[0]] += 1
             kind, person = out
