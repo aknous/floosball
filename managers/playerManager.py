@@ -4330,8 +4330,112 @@ class PlayerManager:
         from constants import PROSPECT_SLOT_CAP_PER_POSITION
         return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
 
+    def findPickBuyer(self, skipper, available, candidateTeams, season):
+        """Somebody who CAN use this selection, and will pay next year's pick for it.
+
+        ⚠️ A SKIPPED PICK IS A DESTROYED ASSET, AND THE CLUB COULD NOT HAVE SEEN IT COMING
+        (owner, 2026-09-15: "the issue probably comes up when teams only have prospect
+        spots for 1 or two positions but there's no prospects left at those positions,
+        which teams won't be able to predict ahead of time. ideally, teams should be able
+        to trade their pick in the moment if they cant pick anyone, or get some kind of
+        compensation"). ⚠️ **MEASURED, AND IT IS EXACTLY THAT CASE**: over six seasons the
+        skip fired twice, **both `no_eligible_rookies` and ZERO `pipeline_full`** — the
+        `PROSPECT_SLOT_CAP_PER_POSITION` ceiling never binds, so nobody is skipping through
+        a choice they made. They are skipping because the board emptied at the one or two
+        positions they had room for, which is knowable only when they are on the clock.
+
+        ⚠️ ONLY `current_owner_id` MOVES, ON A ROW THAT ALREADY EXISTS. The right to select
+        HERE is the order position rather than a row, and this season's rows are already
+        stamped used by `_applyPickOwnership` — so the trade is "you pick in my slot, I take
+        your pick next year", which needs no new row and cannot collide with
+        `_ensureDraftPicks` (one row per club per season, and next season's already exists).
+
+        ⚠️ THE BUYER MUST STILL OWN ITS OWN NEXT-SEASON PICK. A club that already traded it
+        has nothing to pay with, and taking a pick it merely holds would let a club launder
+        a third party's pick through a slot nobody could use.
+
+        ⚠️ `candidateTeams` IS THE LEAGUE, NOT THE DRAFT ORDER. The order is a list of
+        OWNERS — a club that sold its own pick does not appear in it at all, and that is
+        precisely a club that might want back into this draft. Passing the order would
+        exclude the most motivated buyers and silently shrink the market to whoever already
+        had a selection.
+        """
+        from database.connection import get_session
+        from database.models import DraftPick
+        from floosball_player import Position
+
+        skipperId = getattr(skipper, 'id', None)
+        candidates = []
+        for team in candidateTeams:
+            tid = getattr(team, 'id', None)
+            if tid is None or tid == skipperId:
+                continue
+            openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
+                                             Position.TE, Position.K)
+                             if self.hasOpenProspectSlot(team, pos)]
+            eligible = [r for r in available if r.position in openPositions]
+            if eligible:
+                candidates.append((team, eligible))
+        if not candidates:
+            return None, None
+
+        session = get_session()
+        try:
+            owns = {r.original_team_id for r in session.query(DraftPick).filter_by(
+                season=int(season) + 1, round_number=1).all()
+                if r.current_owner_id == r.original_team_id and not r.used}
+        except Exception as e:
+            logger.warning(f"Could not read next season's picks: {e}")
+            owns = set()
+        finally:
+            session.close()
+
+        candidates = [(t, e) for t, e in candidates if getattr(t, 'id', None) in owns]
+        if not candidates:
+            return None, None
+
+        # ⚠️ WHOEVER WANTS IT MOST, on their OWN board — the same rule the trade market
+        # settles an auction by. Ranking on the rookie's raw rating instead would make
+        # every club value the class identically and the choice arbitrary.
+        def appetite(pair):
+            team, eligible = pair
+            coach = getattr(team, 'coach', None)
+            try:
+                from managers.frontOfficeBrain import FrontOfficeBrain
+                brain = getattr(self, '_draftBrain', None) or FrontOfficeBrain(self)
+                return max(brain.decisionValue(r, coach=coach, team=team) for r in eligible)
+            except Exception:
+                return max(float(getattr(r, 'playerRating', 0) or 0) for r in eligible)
+
+        return max(candidates, key=appetite)
+
+    def handOverNextSeasonPick(self, buyer, skipper, season) -> bool:
+        """Move the buyer's next-season pick to the club that could not use this one."""
+        from database.connection import get_session
+        from database.models import DraftPick
+        session = get_session()
+        try:
+            row = session.query(DraftPick).filter_by(
+                season=int(season) + 1, round_number=1,
+                original_team_id=getattr(buyer, 'id', None)).first()
+            if row is None or row.current_owner_id != row.original_team_id:
+                return False
+            row.current_owner_id = getattr(skipper, 'id', None)
+            session.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not hand over next season's pick: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            session.close()
+
     def rookieDraftPickGenerator(self, rookies: List, draftOrder: List,
-                                 leagueHighlights: list = None, brain=None):
+                                 leagueHighlights: list = None, brain=None,
+                                 season: int = None, leagueTeams: List = None):
         """The rookie draft — yields one event at a time for live broadcasting,
         mirroring `freeAgencyPickGenerator`.
 
@@ -4365,26 +4469,54 @@ class PlayerManager:
         if brain is None:
             from managers.frontOfficeBrain import FrontOfficeBrain
             brain = FrontOfficeBrain(self)
+        self._draftBrain = brain
 
-        for team in draftOrder:
-            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+        for onTheClock in draftOrder:
             if not available:
                 break
+            team = onTheClock
+            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 
             openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
                                              Position.TE, Position.K)
                              if self.hasOpenProspectSlot(team, pos)]
-            if not openPositions:
-                logger.info(f"Rookie draft: {team.name} skipped (all prospect slots full)")
-                yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
-                       'reason': 'pipeline_full'}
-                continue
             eligible = [r for r in available if r.position in openPositions]
             if not eligible:
-                logger.info(f"Rookie draft: {team.name} passed (nobody at an open position)")
-                yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
-                       'reason': 'no_eligible_rookies'}
-                continue
+                reason = 'pipeline_full' if not openPositions else 'no_eligible_rookies'
+                # ⚠️ TRADE THE SLOT RATHER THAN BURN IT. A skipped pick is an asset
+                # destroyed, and the club could not have foreseen it — measured, every
+                # skip is `no_eligible_rookies`, i.e. the board emptied at the one or two
+                # positions it had room for, which is knowable only on the clock. See
+                # `findPickBuyer`.
+                buyer, buyerEligible = (None, None)
+                if season is not None:
+                    try:
+                        buyer, buyerEligible = self.findPickBuyer(
+                            team, available, leagueTeams or draftOrder, season)
+                    except Exception as e:
+                        logger.warning(f"Rookie draft: could not shop the pick: {e}")
+                if buyer is not None and self.handOverNextSeasonPick(buyer, team, season):
+                    logger.info(f"Rookie draft: {team.name} could not use its pick — "
+                                f"traded the slot to {buyer.name} for their S{int(season)+1} pick")
+                    if leagueHighlights is not None:
+                        leagueHighlights.insert(0, {'event': {'text':
+                            f"{team.name} traded their draft slot to {buyer.name} "
+                            f"for a Season {int(season) + 1} pick"}})
+                    yield {'type': 'pick_traded', 'team': team.name, 'teamAbbr': teamAbbr,
+                           'to': buyer.name,
+                           'toAbbr': getattr(buyer, 'abbr', buyer.name[:3].upper()),
+                           'forSeason': int(season) + 1, 'reason': reason}
+                    team = buyer
+                    teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+                    eligible = buyerEligible
+                else:
+                    logger.info(f"Rookie draft: {team.name} "
+                                + ("skipped (all prospect slots full)"
+                                   if reason == 'pipeline_full'
+                                   else "passed (nobody at an open position)"))
+                    yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
+                           'reason': reason}
+                    continue
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 

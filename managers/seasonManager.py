@@ -7607,7 +7607,10 @@ class SeasonManager:
                 logger.warning(f"Could not broadcast rookie_draft_start: {e}")
 
         pickGen = self.playerManager.rookieDraftPickGenerator(
-            rookies, draftOrder, leagueHighlights, brain=brain)
+            rookies, draftOrder, leagueHighlights, brain=brain,
+            season=self.currentSeason.seasonNumber,
+            leagueTeams=list(getattr(
+                self.serviceContainer.getService('team_manager'), 'teams', None) or []))
         try:
             for entry in pickGen:
                 kind = entry.get('type')
@@ -7655,6 +7658,21 @@ class SeasonManager:
                             'event': 'rookie_draft_skip',
                             'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
                             'reason': reason,
+                        })
+                elif kind == 'pick_traded':
+                    # ⚠️ ANNOUNCED, NOT SILENT. It replaces the forfeit a reader used to
+                    # see, and a slot changing hands mid-draft is the single most
+                    # interesting thing that happens in one.
+                    self._recordOffseasonEvent(
+                        'trade', teamName=entry['team'],
+                        detail=(f"could not use their draft slot and traded it to "
+                                f"{entry['to']} for a Season {entry['forSeason']} pick"))
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_pick_traded',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            'to': entry['to'], 'toAbbr': entry['toAbbr'],
+                            'forSeason': entry['forSeason'],
                         })
                 elif kind == 'complete':
                     if BROADCASTING_AVAILABLE and broadcaster:
