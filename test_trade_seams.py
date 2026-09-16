@@ -524,3 +524,149 @@ def test_a_same_position_swap_leaves_NO_roster_hole():
     assert buyer.rosterDict['wr1'] is sold, "the sold player never reached the buyer"
     assert swap.team is seller and sold.team is buyer
     print("PASS a same-position swap fills both slots and leaves no hole")
+
+
+# ------------- 7. the free-agent pool is not an unlimited asset faucet -------
+
+class _FakePos:
+    def __init__(self, name, value):
+        self.name, self.value = name, value
+
+
+class _FakeGuy:
+    def __init__(self, pid, name, pos=('QB', 1), rating=70):
+        self.id, self.name = pid, name
+        self.position = _FakePos(*pos)
+        self.playerRating, self.termRemaining, self.term = rating, 2, 2
+        self.team, self.previousTeam = None, None
+        self.willRetire = False
+        self.freeAgentYears = 0
+        self.is_prospect = False
+        self.prospect_seasons = 0
+        self.drafting_team_id = None
+        self.teamResignCount = 0
+
+
+class _FakeClub:
+    def __init__(self, tid, name):
+        self.id, self.name = tid, name
+        self.rosterDict, self.prospects = {}, []
+
+    def assignPlayerNumber(self, p):
+        pass
+
+
+class _FakeSM:
+    def __init__(self, pm):
+        self.playerManager = pm
+        self.currentSeason = type('S', (), {'seasonNumber': 7})()
+
+    def _chargeCutFee(self, team, fee):
+        return True                 # the economy is not what these seams are testing
+
+
+class _FakePM:
+    def __init__(self, freeAgents):
+        self.freeAgents = list(freeAgents)
+
+    def _getPlayerTerm(self, p):
+        return 2
+
+    def releasePlayerToFreeAgency(self, player, team, _highlights):
+        self.freeAgents.append(player)
+        player.team = 'Free Agent'
+
+
+def test_a_club_may_not_CUT_a_player_it_just_acquired():
+    """⚠️ AN ACQUISITION IS NOT DISPOSABLE PACKAGING FOR THE NEXT DEAL (owner, 2026-09-15:
+    "the part I dont like is a team trading for a player and then cutting them immediately
+    for another trade to happen").
+
+    Reported from the ledger: Phones traded for a quarterback, then a week later traded for
+    a second one and CUT the first to make room — so the player it gave up real assets for
+    lasted a week.
+
+    ⚠️ STAMPING THE SIGNED BACKFILL WAS TRIED FIRST AND IS THE WRONG FIX: signing a free
+    agent and trading him on is legitimate where somebody wants him, so that blocks the
+    honest half of the loop and leaves the dishonest half intact.
+    """
+    pm = _FakePM([])
+    sm = _FakeSM(pm)
+    buyer = _FakeClub(2, 'Phones')
+    justArrived = _FakeGuy(510, 'Week Old')
+    buyer.rosterDict = {'qb': justArrived}
+    incoming = _FakeGuy(511, 'Next Man', rating=80)
+
+    tradeManager._stampAcquired(justArrived, 7)
+    assert tradeManager._cutToMakeRoom(sm, buyer, incoming) is None, \
+        "a club cut the man it traded for last week to make room for another"
+
+    settled = _FakeGuy(512, 'Been Here A While')
+    buyer.rosterDict = {'qb': settled}
+    assert tradeManager._cutToMakeRoom(sm, buyer, incoming) == 'qb', \
+        "a club could no longer cut a long-standing incumbent"
+    print("PASS a player a club traded for is not packaging for the next trade")
+
+
+def test_a_signed_backfill_may_still_be_traded_on():
+    """⚠️ EXPLICITLY ALLOWED (owner: "I dont think its an issue for teams to sign a free
+    agent and then trade them again if here's a willing partner"). The faucet worry is
+    handled on the other side — a buyer cannot churn him straight back out."""
+    signed = _FakeGuy(513, 'Just Signed')
+    pm = _FakePM([signed])
+    sm = _FakeSM(pm)
+    club = _FakeClub(1, 'Residents')
+    club.rosterDict = {'qb': None}
+    tradeManager._installBackfill(sm, club, 'qb', ('freeAgent', signed))
+    assert club.rosterDict['qb'] is signed
+    assert not tradeManager.wasAcquiredThisSeason(signed, 7), \
+        "a signed replacement was frozen out of the market"
+    print("PASS a club may sign a replacement and trade him on")
+
+
+def test_the_OFFSEASON_cannot_sign_a_free_agent_as_a_backfill():
+    """Owner, 2026-09-15: "teams are signing free agents as part of the trade ... this
+    shouldnt be happening in the offseason if its before the free agent draft."
+
+    ⚠️ `_findBackfill`'s OWN DOCSTRING ASSERTED THIS AND NOTHING ENFORCED IT. Both offseason
+    passes run BEFORE `_processFreeAgency`, so a club selling a starter was helping itself
+    to the best man in the pool ahead of the worst-first draft whose whole purpose is to
+    decide who gets him — a contender could sign a better free agent than the club picking
+    first ever saw."""
+    fa = _FakeGuy(502, 'Pool Man', rating=88)
+    pm = _FakePM([fa])
+    sm = _FakeSM(pm)
+    club = _FakeClub(1, 'Sellers')
+    club.rosterDict = {'qb': _FakeGuy(503, 'Starter')}
+    outgoing = _FakeGuy(504, 'Outgoing')
+
+    inSeason = tradeManager._findBackfill(sm, club, outgoing, week=18)
+    offseason = tradeManager._findBackfill(sm, club, outgoing, week=None)
+    assert inSeason is not None and inSeason[0] == 'freeAgent'
+    assert offseason is None, f"the offseason reached into the pool: {offseason}"
+    print("PASS the pool is closed until the draft opens it")
+
+
+def test_the_offseason_still_trades_with_NO_backfill():
+    """⚠️ AND LEAVING THE HOLE IS THE POINT, NOT A COMPROMISE. `_processFreeAgency` fills
+    every empty slot in worst-first order and both trade passes run before it, so refusing
+    an offseason trade for want of a backfill refuses it over a problem that resolves
+    itself a few steps later."""
+    src = inspect.getsource(tradeManager.settleTrade)
+    assert 'if backfill is None and week is not None:' in src, \
+        "the offseason still declines a trade it cannot backfill"
+    print("PASS an offseason seller may leave the slot for the draft")
+
+
+def test_a_prospect_is_still_a_legal_offseason_backfill():
+    """The offseason closes the POOL, not the pipeline — a club's own ready prospect is
+    still the natural replacement, and is exactly who the promotion pass would have used."""
+    prospect = _FakeGuy(505, 'Ready Kid', rating=76)
+    prospect.is_prospect = True
+    pm = _FakePM([])
+    sm = _FakeSM(pm)
+    club = _FakeClub(1, 'Sellers')
+    club.prospects = [prospect]
+    found = tradeManager._findBackfill(sm, club, _FakeGuy(506, 'Outgoing'), week=None)
+    assert found is not None and found[0] == 'prospect', found
+    print("PASS a club may still promote its own prospect in the offseason")

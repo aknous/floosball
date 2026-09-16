@@ -4454,15 +4454,22 @@ class PlayerManager:
             if margin > 0:
                 priced.append((margin, team, eligible))
             else:
-                refused.append((team, gain, cost))
+                refused.append((team, gain, cost, bestFor(team, eligible)))
         if not priced:
             # ⚠️ "Nobody wanted it" and "nobody could use it" are DIFFERENT outcomes and a
             # single skip line cannot tell them apart — one says the board is empty, the
             # other says the slot is genuinely worth less than a future pick. Recorded so
             # the split is measurable rather than inferred.
             self.lastPickShopOutcome = ('refused_on_price' if refused else 'no_buyer')
+            # ⚠️ WHAT THE MARKET SAID IT WAS WORTH, kept for the forfeit payout. The slot
+            # is worth the best offer anybody would have made on it, and that offer LOST to
+            # a future pick — which is what makes paying it out provably less than selling.
+            self.lastPickShopBestPlayer = None
+            self.lastPickShopBestCost = 0.0
             if refused:
                 best = max(refused, key=lambda r: r[1])
+                self.lastPickShopBestPlayer = best[3]
+                self.lastPickShopBestCost = best[2]
                 logger.info(f"Rookie draft: {len(refused)} club(s) could use the slot but "
                             f"none would pay — best offer was worth {best[1]:.1f} "
                             f"against a future pick's {best[2]:.1f}")
@@ -4473,6 +4480,82 @@ class PlayerManager:
         # every club value the class identically and the choice arbitrary.
         margin, team, eligible = max(priced, key=lambda x: x[0])
         return team, eligible
+
+    def forfeitPayoutFor(self, skipper, available) -> int:
+        """Floobits owed to a club whose draft slot nobody would buy.
+
+        ⚠️ NO NEW EXCHANGE RATE. `cutFeeFor` already converts "seasons of control x surplus
+        over replacement" into Floobits at `CUT_FEE_RATE`, and that is the same quantity
+        `playerValue` is built from — so the slot is paid at the rate the league already
+        uses for control destroyed, with nothing invented.
+
+        ⚠️ PRICED ON THE PLAYER THE BEST INTERESTED CLUB WOULD HAVE TAKEN — not on the slot
+        number, and NOT on the best man left on the board. Two different traps:
+
+          * the SLOT expects a replacement-level player this late and pays **0F at slot
+            30**, i.e. cosmetic exactly where it is owed;
+          * the BEST ON THE BOARD may be someone nobody can use. Measured, an 88 sitting
+            unusable paid **3,150F against a sale worth ~705F** — so passing outpaid
+            selling **4.5x** and a club would want to be unable to pick. That inversion is
+            the whole exploit, and it is why the payout follows the MARKET's read: the best
+            offer anyone would have made, which by construction LOST to a future pick.
+
+        ⚠️ AND IT IS CAPPED BELOW THE SALE ANYWAY (`FORFEIT_PAYOUT_RATE`). The market read
+        is an offer in value units and the cap is in Floobits, so the two are not the same
+        arithmetic — belt and braces on the one property that must hold.
+
+        ⚠️ FLOORED AT ZERO, like the cut fee. A board holding nothing above replacement is
+        worth nothing, and this must never become a way to EARN by passing.
+        """
+        from constants import (REPLACEMENT_RATING, CUT_FEE_RATE, FORFEIT_PAYOUT_RATE,
+                               FORFEIT_PAYOUT_ENABLED)
+        import trading
+        if not FORFEIT_PAYOUT_ENABLED:
+            return 0
+        best = getattr(self, 'lastPickShopBestPlayer', None)
+        if best is None:
+            # Nobody in the league could have used any of it — there is no market read,
+            # and a slot nobody can use is worth nothing.
+            return 0
+        skill = float(getattr(best, 'playerRating', 0) or 0)
+        surplus = max(0.0, skill - REPLACEMENT_RATING)
+        if surplus <= 0:
+            return 0
+        term = trading.rookieTermForSkill(skill)
+        payout = term * surplus * CUT_FEE_RATE
+        # The consolation must be worth less than the sale that did not happen.
+        cost = float(getattr(self, 'lastPickShopBestCost', 0.0) or 0.0)
+        if cost > 0:
+            saleInF = cost / max(0.01, trading.averagePositionWeight()) * CUT_FEE_RATE
+            payout = min(payout, saleInF * FORFEIT_PAYOUT_RATE)
+        return int(round(max(0.0, payout)))
+
+    def payForfeitedSlot(self, skipper, amount: int) -> bool:
+        """Credit the club's Treasury. Best-effort: the draft must not die on the economy."""
+        if amount <= 0:
+            return False
+        try:
+            from database.connection import get_session
+            from managers.facilitiesManager import addTreasury
+        except Exception:
+            return False            # facilities economy unavailable — do not block the draft
+        teamId = getattr(skipper, 'id', None)
+        if teamId is None:
+            return False
+        session = get_session()
+        try:
+            addTreasury(session, teamId, int(amount))
+            session.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not pay forfeited slot: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            session.close()
 
     def handOverNextSeasonPick(self, buyer, skipper, season) -> bool:
         """Move the buyer's next-season pick to the club that could not use this one."""
@@ -4581,13 +4664,23 @@ class PlayerManager:
                     eligible = buyerEligible
                 else:
                     why = getattr(self, 'lastPickShopOutcome', 'no_buyer')
+                    # ⚠️ PAID, NOT SIMPLY LOST. Nobody would give a future pick for this
+                    # slot — correctly, it is worth less than one — but that does not make
+                    # it worth NOTHING, and the club did nothing to deserve losing it.
+                    payout = self.forfeitPayoutFor(team, available)
+                    paid = self.payForfeitedSlot(team, payout) if payout > 0 else False
                     logger.info(f"Rookie draft: {team.name} "
                                 + ("skipped (all prospect slots full)"
                                    if reason == 'pipeline_full'
                                    else "passed (nobody at an open position)")
-                                + f" [shop: {why}]")
+                                + f" [shop: {why}]"
+                                + (f" compensated {payout}F" if paid else ""))
+                    if paid and leagueHighlights is not None:
+                        leagueHighlights.insert(0, {'event': {'text':
+                            f"{team.name} could not use their draft slot and received "
+                            f"{payout:,}F in compensation"}})
                     yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
-                           'reason': reason}
+                           'reason': reason, 'payout': payout if paid else 0}
                     continue
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}

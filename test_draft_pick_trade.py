@@ -302,3 +302,124 @@ def test_a_refused_slot_falls_back_to_the_forfeit():
     assert 'skip' in kinds, f"the draft did not resolve the slot: {kinds}"
     assert pm.lastPickShopOutcome == 'refused_on_price', pm.lastPickShopOutcome
     print("PASS a slot nobody will pay for is forfeited, and says so")
+
+
+# -------------------------- 3. paid for what could not be sold ---------------
+
+def _refusedMarket(pm, skipper, board, buyerSlot=16):
+    """Run the shop so the market read exists, and assert it really did refuse."""
+    buyer = FakeTeam(2, 'Buyers')
+    _seedPicks([1, 2], SEASON)
+    found, _ = pm.findPickBuyer(skipper, board, [skipper, buyer], SEASON,
+                                slotByTeamId={2: buyerSlot})
+    assert found is None, "the fixture sold the slot instead of refusing it"
+    return buyer
+
+
+def test_a_forfeited_slot_is_PAID_FOR():
+    """Owner, 2026-09-15: "what if the team that had their pick wasted was just compensated
+    with floobits".
+
+    ⚠️ NO NEW EXCHANGE RATE IS NEEDED. `cutFeeFor` already converts "seasons of control x
+    surplus over replacement" into Floobits at `CUT_FEE_RATE`, and that is the same
+    quantity `playerValue` is built from — so the slot is paid at the rate the league
+    already uses for control destroyed."""
+    pm = _pm()
+    skipper = FakeTeam(1, 'Skippers')
+    skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
+        [Position.QB, Position.QB, Position.RB, Position.RB,
+         Position.WR, Position.WR, Position.TE, Position.TE,
+         Position.K, Position.K])]
+    board = [FakeRookie(1, Position.WR, 74)]
+    _refusedMarket(pm, skipper, board)
+
+    payout = pm.forfeitPayoutFor(skipper, board)
+    assert payout > 0, "a slot with a real player on it paid nothing"
+    print(f"PASS a forfeited slot pays {payout}F, at the cut fee's own rate")
+
+
+def test_the_payout_follows_THE_MARKET_not_the_best_man_on_the_board():
+    """⚠️ TWO DIFFERENT TRAPS, and the second is an exploit.
+
+    Pricing on the SLOT expects a replacement-level player this late and pays 0F at slot
+    30 — cosmetic exactly where it is owed. Pricing on the BEST ON THE BOARD is worse: that
+    player may be someone nobody can use, and measured, an 88 sitting unusable paid
+    **3,150F against a sale worth ~705F**, so passing outpaid selling 4.5x and a club would
+    want to be unable to pick.
+
+    The payout follows what the MARKET would have given — the best offer anybody would have
+    made, which by construction lost to a future pick."""
+    pm = _pm()
+    skipper = FakeTeam(1, 'Skippers')
+    # Full everywhere except kicker; the board holds a superb receiver nobody can take
+    # (the only other club is full at WR too) and a modest kicker that IS usable.
+    skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
+        [Position.QB, Position.QB, Position.RB, Position.RB,
+         Position.WR, Position.WR, Position.TE, Position.TE])]
+    # ⚠️ THE USABLE MAN IS RATED 70 ON PURPOSE. At 74 the payout hits the sale cap (352F)
+    # and so does the 95 — both bases give the identical number and the test cannot tell
+    # them apart, which is exactly how the first version of it passed while pricing off the
+    # board. A 70 pays 300F uncapped, so the two bases finally differ.
+    board = [FakeRookie(1, Position.WR, 95), FakeRookie(2, Position.K, 70)]
+
+    buyer = FakeTeam(2, 'Buyers')
+    buyer.prospects = [FakeRookie(80 + i, Position.WR) for i in range(2)]   # full at WR
+    _seedPicks([1, 2], SEASON)
+    found, _ = pm.findPickBuyer(skipper, board, [skipper, buyer], SEASON,
+                                slotByTeamId={2: 16})
+    assert found is None, "the fixture sold the slot"
+
+    payout = pm.forfeitPayoutFor(skipper, board)
+    from constants import CUT_FEE_RATE, REPLACEMENT_RATING
+    import trading
+    onThe70 = int(round(trading.rookieTermForSkill(70) * (70 - REPLACEMENT_RATING)
+                        * CUT_FEE_RATE))
+    assert payout == onThe70, (payout, onThe70)
+    print(f"PASS the payout is {payout}F on the 70 the market wanted, "
+          f"not on the 95 nobody could take")
+
+
+def test_passing_can_never_EARN():
+    """⚠️ FLOORED AT ZERO, like the cut fee. A board holding nothing above replacement is
+    worth nothing, and this must never become a reason to pass."""
+    pm = _pm()
+    skipper = FakeTeam(1, 'Skippers')
+    assert pm.forfeitPayoutFor(skipper, [FakeRookie(1, Position.WR, 60)]) == 0
+    assert pm.forfeitPayoutFor(skipper, []) == 0
+    print("PASS a worthless board pays nothing")
+
+
+def test_forfeiting_pays_LESS_than_trading_the_slot():
+    """⚠️ THE ONE PROPERTY THAT KEEPS THIS EXPLOIT-FREE, and the first version broke it.
+
+    If passing ever paid better than selling, a club would want to be unable to pick and the
+    whole mechanism inverts. Priced on the best man on the BOARD, an 88 nobody could use
+    paid **3,150F against a sale worth ~705F** — 4.5x. Swept across the whole rating range
+    rather than spot-checked, because the failure was at one end of it."""
+    import trading
+    from constants import CUT_FEE_RATE
+    pm = _pm()
+    skipper = FakeTeam(1, 'Skippers')
+    skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
+        [Position.QB, Position.QB, Position.RB, Position.RB,
+         Position.WR, Position.WR, Position.TE, Position.TE,
+         Position.K, Position.K])]
+    soldInF = trading.pickValue(16, 1) / trading.averagePositionWeight() * CUT_FEE_RATE
+
+    checked = 0
+    for rating in (68, 70, 72, 74, 76, 80, 85, 90, 95, 99):
+        for pos in (Position.QB, Position.WR, Position.K):
+            pm.lastPickShopBestPlayer = None
+            board = [FakeRookie(1, pos, rating)]
+            buyer = FakeTeam(2, 'Buyers')
+            _seedPicks([1, 2], SEASON)
+            found, _ = pm.findPickBuyer(skipper, board, [skipper, buyer], SEASON,
+                                        slotByTeamId={2: 16})
+            if found is not None:
+                continue                # it sold; no forfeit to pay for
+            payout = pm.forfeitPayoutFor(skipper, board)
+            assert payout < soldInF, (rating, pos.name, payout, soldInF)
+            checked += 1
+    assert checked >= 10, f"the sweep only exercised {checked} refusals"
+    print(f"PASS across {checked} refusals, forfeiting never outpays the "
+          f"~{soldInF:.0f}F sale it did not get")

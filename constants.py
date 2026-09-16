@@ -2907,6 +2907,27 @@ TRADE_KICKER_CRISIS_MIN_ATT = 10    # enough kicks that it is a record, not a ba
 # multiple assets") rather than its price, and a price rule can always be cleared by a
 # club that wants him enough.
 TRADE_LOW_APPETITE_MAX_PIECES = 1
+
+# ---- A forfeited draft slot is paid out, not simply lost ----
+# ⚠️ NO NEW EXCHANGE RATE. `cutFeeFor` already converts "seasons of control x surplus over
+# replacement" into Floobits at `CUT_FEE_RATE`, and that is the same quantity `playerValue`
+# is built from — so a slot can be paid at the rate the league already uses for destroying
+# control, with nothing invented.
+#
+# ⚠️ PRICED ON WHO IS ACTUALLY LEFT, NOT ON THE SLOT NUMBER — the same correction the buyer
+# needed. A forfeit only happens late, where `pickSlotSkill` expects a replacement-level
+# player and would pay **0F at slot 30**, making the compensation cosmetic exactly where it
+# is owed. The board empties unevenly and the man still sitting there is what the slot was
+# actually worth.
+#
+# ⚠️ THE FAUCET IS NEGLIGIBLE AND THAT IS WHAT MAKES THIS SAFE. Measured over twelve
+# seasons, FOUR slots went unsold league-wide — so even a generous payment is on the order
+# of **4F per club-season** against a production median Treasury of 1,896F. There is also
+# no exploit: forfeiting pays LESS than trading the slot, and a club cannot engineer one
+# anyway (it would have to be full at exactly the positions the board still holds, which
+# depends on picks other clubs have not made yet).
+FORFEIT_PAYOUT_ENABLED = True
+FORFEIT_PAYOUT_RATE = 0.5           # share of the sale it did not get; must stay < 1.0
 TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 
 # ---- Rookie picks ----

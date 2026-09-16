@@ -71,9 +71,17 @@ class Harness:
     def sortPlayersByPosition(self):
         self.sorted = True
 
+    # ⚠️ BORROW THE REAL METHODS, DO NOT RE-IMPLEMENT THEM. Every one the generator
+    # reaches has to be listed here, and a method added to `PlayerManager` without being
+    # added here fails LOUDLY on an AttributeError rather than quietly testing a stub that
+    # has drifted from the class under test.
     countTeamProspectsAtPosition = PlayerManager.countTeamProspectsAtPosition
     hasOpenProspectSlot = PlayerManager.hasOpenProspectSlot
     rookieDraftPickGenerator = PlayerManager.rookieDraftPickGenerator
+    findPickBuyer = PlayerManager.findPickBuyer
+    handOverNextSeasonPick = PlayerManager.handOverNextSeasonPick
+    forfeitPayoutFor = PlayerManager.forfeitPayoutFor
+    payForfeitedSlot = PlayerManager.payForfeitedSlot
 
 
 def _run(rookies, teams, brain=None):

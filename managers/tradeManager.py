@@ -1337,10 +1337,14 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     swap = _swapPieceOf(winner.pieces, buyer, player)
 
     if swap is None:
-        backfill = _findBackfill(seasonManager, seller, player)
-        if backfill is None:
-            # ⚠️ The seller would be left with a hole. Declining is correct; the listing
-            # simply goes unsold this week and is re-derived next week.
+        backfill = _findBackfill(seasonManager, seller, player, week=week)
+        if backfill is None and week is not None:
+            # ⚠️ IN-SEASON ONLY. The seller would be left with a hole and there is no
+            # signing path to close it, so declining is correct; the listing goes unsold
+            # this week and is re-derived next week. In the OFFSEASON a hole is fine —
+            # `_processFreeAgency` fills every empty slot and both trade passes run before
+            # it, so refusing there would refuse a trade over a problem that resolves
+            # itself a few steps later.
             logger.info(f"Trade declined: {seller.name} cannot backfill {player.name}")
             return None
         buyerSlot = _openSlotFor(buyer, player)
@@ -1506,6 +1510,24 @@ def _cutToMakeRoom(seasonManager, buyer, incoming):
             worstSlot, worst, worstRating = slot, incumbent, rating
     if worst is None:
         return None
+    # ⚠️ YOU MAY NOT CUT A MAN YOU JUST ACQUIRED (owner, 2026-09-15: "the part I dont like
+    # is a team trading for a player and then cutting them immediately for another trade to
+    # happen"). Reported from the ledger: Phones traded for a quarterback, then a week later
+    # traded for a second one and CUT the first to make room — so a club could treat an
+    # acquisition as disposable packaging for the next deal, and the player it gave up real
+    # assets for lasted a week.
+    #
+    # ⚠️ IT REFUSES RATHER THAN LOOKING FURTHER. There is at most one other slot at any
+    # position (only WR has two), so "cut somebody else instead" is nearly always no
+    # option at all — and where it is one, the club is choosing to discard a BETTER
+    # incumbent to protect a man it just bought, which is not an improvement on the thing
+    # being prevented. If the only body it can free is one it just traded for, the roster
+    # is genuinely full and the second trade does not happen.
+    if wasAcquiredThisSeason(worst, getattr(
+            getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0)):
+        logger.info(f"Trade declined: {buyer.name} would have to cut "
+                    f"{worst.name}, acquired this season")
+        return None
     # ⚠️ NO SECOND UPGRADE TEST HERE. `bidFor` already established that the incoming
     # player beats this exact man — on the buyer's own BELIEVED, position-weighted read —
     # and re-deriving it from raw rating is two copies of one rule that disagree. They
@@ -1545,7 +1567,7 @@ def _isTrulyUnrostered(player) -> bool:
     return team is None or isinstance(team, str)
 
 
-def _findBackfill(seasonManager, team, player):
+def _findBackfill(seasonManager, team, player, week=None):
     """Who replaces him — a ready prospect, else the best signable free agent.
 
     ⚠️ `max(readyProspect, bestAvailableFreeAgent)`, and mid-season free-agent signing is
@@ -1553,6 +1575,19 @@ def _findBackfill(seasonManager, team, player):
     pipeline. A signing is available when a slot is EMPTY — after a trade, and nowhere
     else. Letting clubs sign over a filled slot would be a second, continuous free-agency
     market and would undo the position-lock logic the rest of this rests on.
+
+    ⚠️ AND IT IS MID-SEASON ONLY, WHICH THE DOCSTRING ABOVE ASSERTED AND NOTHING ENFORCED
+    (owner, 2026-09-15: *"teams are signing free agents as part of the trade ... this
+    shouldnt be happening in the offseason if its before the free agent draft"*). Both
+    offseason passes run BEFORE `_processFreeAgency`, so a club selling a starter was
+    reaching into the pool and helping itself to the best man in it — ahead of the
+    worst-first draft whose entire purpose is to decide who gets him. A contender could
+    sell a player and sign a better free agent than the club picking first ever saw.
+
+    ⚠️ IN THE OFFSEASON THE SELLER SIMPLY LEAVES THE HOLE. That is not a compromise, it is
+    what the FA draft is for: `_processFreeAgency` fills every empty slot in order, and
+    both trade passes precede it. So the offseason needs no backfill at all, and refusing
+    the trade for want of one was refusing it for a problem that resolves itself.
     """
     posValue = getattr(getattr(player, 'position', None), 'value', None)
     best, bestRating = None, -1.0
@@ -1562,6 +1597,8 @@ def _findBackfill(seasonManager, team, player):
         rating = float(getattr(prospect, 'playerRating', 0) or 0)
         if rating > bestRating:
             best, bestRating = ('prospect', prospect), rating
+    if week is None:
+        return best             # offseason: a prospect or nothing — the draft fills holes
     pm = seasonManager.playerManager
     for fa in getattr(pm, 'freeAgents', None) or []:
         if getattr(fa, 'willRetire', False):
@@ -1614,6 +1651,13 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
         person.term = int(TRADE_MIDSEASON_SIGNING_TERM)
         person.termRemaining = person.term
     team.rosterDict[slot] = person
+    # ⚠️ DELIBERATELY NOT STAMPED `wasAcquiredThisSeason`. Signing a free agent and trading
+    # him on is legitimate if somebody wants him (owner, 2026-09-15: "I dont think its an
+    # issue for teams to sign a free agent and then trade them again if here's a willing
+    # partner"). The churn that WAS wrong is on the other side of that deal — a club
+    # acquiring a player and cutting him immediately to make room for the next one — and
+    # that is guarded in `_cutToMakeRoom`, not here. Stamping the signing was tried and
+    # reverted: it blocks the honest half of the loop and leaves the dishonest half intact.
     try:
         team.assignPlayerNumber(person)
     except Exception:
