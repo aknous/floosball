@@ -13213,7 +13213,7 @@ def _requireOwnClub(user, teamId: int):
     if not favorite:
         raise HTTPException(400, "Pick a favorite team before having your say")
     if teamId is None or int(favorite) != int(teamId):
-        raise HTTPException(403, "You can only have your say about your own club")
+        raise HTTPException(403, "You can only have your say about your own team")
 
 
 def _playerTeamId(playerId: int):
@@ -13534,7 +13534,7 @@ def post_to_game_feed(gameId: int, req: _FeedPostRequest,
         raise HTTPException(400, "The feed is not enabled")
     teamId = getattr(user, 'favorite_team_id', None)
     if not teamId:
-        raise HTTPException(400, "Pick a club before you shout at a game")
+        raise HTTPException(400, "Pick a team before you shout at a game")
     from database.connection import get_session
     from database.repositories.feed_repository import FeedError
     session = get_session()
@@ -15132,7 +15132,7 @@ def _announcementIcon(icon: str, teamId):
         return None, icon, icon.capitalize()
     if icon == 'team':
         if teamId is None:
-            raise HTTPException(400, "Pick a club, or choose a different icon")
+            raise HTTPException(400, "Pick a team, or choose a different icon")
         return teamId, None, None
     if icon != 'none':
         raise HTTPException(400, f"Unknown icon '{icon}'")
