@@ -193,13 +193,24 @@ def test_a_pick_is_worth_exactly_the_prospect_it_yields():
     so USING the pick beat holding what it produced. Late picks suffered worst in relative
     terms, which is where it showed: a club traded a mid-90s tight end for a pick in the
     back half of a one-round, 32-player draft."""
+    # ⚠️ ON THE EXPECTED TERM, NOT THE STEP. `pickValue` prices an UNKNOWN player, so it
+    # uses `expectedRookieTerm` — a pick is a distribution, and the step applied to its mean
+    # put a 37% price cliff between slots 9 and 10 where the real gap is 4%. The invariant
+    # pinned here is the DELEGATION (a pick is worth what it yields, never more), which is
+    # untouched; only the term it yields on is now a fraction.
     for slot in (1, 8, 16, 24, 30):
         mature = trading.pickSlotSkill(slot)
         asPick = trading.pickValue(slot, 0)
         asProspect = trading.prospectValue(
-            mature, 0, rookieTerm=trading.rookieTermForSkill(mature),
+            mature, 0, rookieTerm=trading.expectedRookieTerm(mature),
             positionWeight=trading.averagePositionWeight())
         assert abs(asPick - asProspect) < 0.01, (slot, asPick, asProspect)
+
+    # ⚠️ AND THE TWO TERM FUNCTIONS AGREE AWAY FROM THE THRESHOLDS, which bounds the change:
+    # a pick is repriced only near 84 and 68, not across the whole board.
+    for skill in (95.0, 90.0, 78.0, 60.0):
+        assert abs(trading.expectedRookieTerm(skill)
+                   - trading.rookieTermForSkill(skill)) < 0.01, skill
     print("PASS a pick is worth exactly the prospect it becomes")
 
 

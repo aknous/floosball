@@ -40,6 +40,7 @@ from constants import (GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
                        TRADE_HUMP_APPETITE, TRADE_INQUIRY_APPETITE, TRADE_BUYER_NEEDS,
                        TRADE_PICK_SWAP_ENABLED, TRADE_PICK_SWAP_MIN_GAIN,
+                       TRADE_PICK_SWAP_MIN_ABS,
                        TRADE_WINDOW_DECLINE_HIGH,
                        TRADE_WINDOW_ASCENT_HIGH, TRADE_WINDOW_NOW_CLOSING,
                        TRADE_WINDOW_NOW_OPENING,
@@ -655,8 +656,15 @@ class TradeMarket:
             for pick in self.picksOwnedBy(holder):
                 if pick['season'] != swapFor['season']:
                     continue        # you move up WITHIN a draft, not across two
-                if self._pickValueTo(buyer, pick) < mineValue * TRADE_PICK_SWAP_MIN_GAIN:
+                theirValue = self._pickValueTo(buyer, pick)
+                # ⚠️ BOTH BARS. The ratio asks whether the slots are meaningfully different
+                # to THIS club; the absolute floor asks whether the jump is worth anything
+                # at all. A ratio alone cannot express the second, and mid-board 1.6x is
+                # about six places and four ceiling points — the churn the owner reported.
+                if theirValue < mineValue * TRADE_PICK_SWAP_MIN_GAIN:
                     continue        # the two slots are interchangeable; moving is churn
+                if theirValue - mineValue < TRADE_PICK_SWAP_MIN_ABS:
+                    continue        # a real jump, not a shuffle
                 ask, floor = self._pricePick(holder, pick, swapFor=swapFor)
                 if ask > 0:
                     listing = PickListing(

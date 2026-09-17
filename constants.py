@@ -2983,7 +2983,18 @@ TRADE_PICK_SWAP_ENABLED = True
 
 # How much better the target pick must be, as a share of the buyer's own best, before it is
 # worth a phone call. Below this the two slots are interchangeable and the move is churn.
+# Half-width, in rating points, of the blend either side of each rookie-term threshold.
+# ⚠️ For PICKS only — see `trading.expectedRookieTerm`. A real player's contract is a whole
+# number of years and keeps the step.
+ROOKIE_TERM_BLEND = 5.0
 TRADE_PICK_SWAP_MIN_GAIN = 1.6
+# ⚠️ AND AN ABSOLUTE FLOOR, BECAUSE A RATIO CANNOT SAY "MEANINGFUL" (owner: a team going
+# "from 14 to 20 or something like that" is churn). A relative bar asks whether the new slot
+# is 1.6x the old one, which mid-board is a handful of places and about four ceiling points
+# on a prospect who may never be promoted at all — measured, moving 20 -> 14 clears 1.6x
+# exactly. The floor says the jump has to be worth something in its own right, which is what
+# separates a trade-up from shuffling.
+TRADE_PICK_SWAP_MIN_ABS = 8.0
 
 # ⚠️ A TOP PICK IS A CENTERPIECE AND IS PRICED LIKE ONE. Slots 1-3 carry an extra premium on
 # top of the unsolicited one — a club does not give up the first selection in the draft at

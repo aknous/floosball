@@ -321,6 +321,42 @@ def futurePickDiscount(slot: int, classSize: int = 32) -> float:
             - (TRADE_FUTURE_PICK_DISCOUNT_TOP - TRADE_FUTURE_PICK_DISCOUNT_LATE) * position)
 
 
+def expectedRookieTerm(skill: float) -> float:
+    """The term a pick is EXPECTED to yield, as a fraction, for an unknown player.
+
+    ⚠️ THE AVERAGE OF A FUNCTION, NOT THE FUNCTION OF AN AVERAGE. `rookieTermForSkill` is a
+    STEP — 3 years at 84, 2 at 68 — which is exactly right for a player you can see, since
+    he signs a whole number of years. A PICK is a distribution, and applying the step to the
+    expected skill prices the whole distribution at whichever side of the threshold its mean
+    happens to fall.
+
+    Measured over 1,200 generated classes, that put a cliff in the middle of the board:
+    **68% of the players who actually land at slot 10 sign a three-year deal**, yet the slot
+    was priced at 2 because its mean skill (83.3) sits just under 84 — while slot 9 was
+    priced at 3 on 81%. A **37% price gap between adjacent slots where the real difference
+    is 4%**, and every trade across that line was mispriced. The back of the board had the
+    same fault worse: slot 28 priced at 1 against a real expected term of 1.99.
+
+    ⚠️ USED ONLY BY `pickValue`. The two callers in `playerManager` price a prospect who is
+    ON the board and known, where the step is the correct answer and a fraction would be
+    wrong.
+
+    Blended across each threshold rather than modelled from the class distribution: a normal
+    model fitted no better (rms 0.290 against 0.268) because the residual is dominated by
+    `pickSlotSkill` understating the back of the board, which is a different curve and one
+    the owner has already signed off. Against the measured expectation this blend halves the
+    worst single-slot error, 0.99 -> 0.71, and removes the discontinuity, which is the part
+    that was actually distorting trades.
+    """
+    from constants import ROOKIE_TERM_BLEND
+    skill = float(skill or 0)
+    w = ROOKIE_TERM_BLEND
+    p3 = max(0.0, min(1.0, (skill - (84 - w)) / (2 * w)))
+    p1 = max(0.0, min(1.0, ((68 + w) - skill) / (2 * w)))
+    p2 = max(0.0, 1.0 - p3 - p1)
+    return 3 * p3 + 2 * p2 + 1 * p1
+
+
 def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
               rookieTerm: int = None, weight: float = 1.0,
               positionWeight: float = None) -> float:
@@ -354,8 +390,10 @@ def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
     # formulas in step — the same reason `fgMakeProbability` is one function and not four.
     skill = pickSlotSkill(expected, classSize)
     if rookieTerm is None:
-        # ⚠️ The deal he will ACTUALLY sign. A flat 3 overstates a late pick by 50%.
-        rookieTerm = rookieTermForSkill(skill)
+        # ⚠️ THE EXPECTED deal, not the deal of the expected player — see
+        # `expectedRookieTerm`. The step version put a 37% price cliff between slots 9 and
+        # 10 where the real gap is 4%.
+        rookieTerm = expectedRookieTerm(skill)
     value = prospectValue(skill, 0, rookieTerm=rookieTerm, weight=weight,
                           positionWeight=positionWeight)
     if value <= 0:
@@ -379,7 +417,7 @@ def prospectPromotionOdds(prospectSeasons: int) -> float:
 
 
 def prospectValue(believedCeiling: float, prospectSeasons: int,
-                  rookieTerm: int = 3, weight: float = 1.0,
+                  rookieTerm: float = 3, weight: float = 1.0,
                   positionWeight: float = 1.0) -> float:
     """Projected mature surplus x post-promotion term x p(he ever gets promoted).
 
@@ -401,7 +439,13 @@ def prospectValue(believedCeiling: float, prospectSeasons: int,
     surplus = float(believedCeiling or 0.0) - REPLACEMENT_RATING
     if surplus <= 0:
         return 0.0
-    return (surplus * max(0.0, float(positionWeight)) * max(0, int(rookieTerm))
+    # ⚠️ FLOAT, NOT `int()`. A known prospect signs a whole number of years, but a PICK is
+    # priced on an EXPECTED term (`expectedRookieTerm`) that is deliberately fractional.
+    # `int()` truncates toward zero, so 2.97 became 2 and the smooth term curve grew a
+    # fresh 33% cliff one slot further up the board than the one it had just removed —
+    # value fell 40.2 to 25.1 between slots 4 and 5. Value scales linearly in term, so a
+    # fraction is meaningful; the int was only ever an artefact of every caller passing one.
+    return (surplus * max(0.0, float(positionWeight)) * max(0.0, float(rookieTerm))
             * prospectPromotionOdds(prospectSeasons) * max(0.0, float(weight)))
 
 
