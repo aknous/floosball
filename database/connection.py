@@ -1360,6 +1360,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # The reasoning behind a settled trade. The manifest always built these; the row
+        # did not carry them, so the durable record was a list of names with no account of
+        # why anybody did it. Nullable — trades settled before this keep no reasoning, and
+        # there is nothing to reconstruct it from.
+        for col, ddl in (('trigger', 'VARCHAR(32)'),
+                         ('seller_why', 'TEXT'),
+                         ('buyer_why', 'TEXT')):
+            try:
+                conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col} {ddl}"))
+                conn.commit()
+                logger.info(f"  Migration: trades.{col}")
+            except Exception:
+                conn.rollback()
+
         # Clear stale will_retire on already-retired players. The flag is set at
         # week 22 and (historically) never reset, so retirees kept carrying it.
         # Idempotent.

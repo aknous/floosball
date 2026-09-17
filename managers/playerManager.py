@@ -2204,6 +2204,40 @@ class PlayerManager:
         except Exception as e:
             logger.error(f"Failed to save unused names: {e}")
 
+    # The generational ladder. Base -> Jr. -> III -> IV -> V -> ... -> XI.
+    def recycleRetiredName(self, name: str, currentSeason: int) -> str:
+        """Advance a retiree's name one rung and hold it for reuse.
+
+        ⚠️ THE SINGLE DEFINITION OF THE LADDER. It lived in `seasonManager` and was
+        called from the two ROSTERED retirement paths only, so a free agent who retired
+        took his name out of the league permanently — `retirePlayer` never recycled.
+        Measured over 49 simulated seasons: **1,014 free-agent retirements burned a name
+        against 676 released back** from rostered ones, a net loss of ~7 names a season
+        that drains the pool on a long-running league and then fails SILENTLY —
+        `createPlayer` returns None, `ensurePositionSupply` swallows it, and teams end up
+        without a tight end. Observed exactly that on a 49-season database: 26 TEs
+        rostered against 32 needed and an empty pool.
+
+        Returns the recycled variant so a caller can log it.
+        """
+        if name.endswith('Jr.'):
+            name = name.replace('Jr.', 'III')
+        elif name.endswith('IV'):
+            name = name.replace('IV', 'V')
+        elif name.endswith('VIII'):
+            name = name.replace('VIII', 'IX')
+        elif name.endswith('IX'):
+            name = name.replace('IX', 'X')
+        elif name.endswith('III'):
+            name = name.replace('III', 'IV')
+        elif name.endswith('V') or name.endswith('X'):
+            name += 'I'
+        else:
+            name += ' Jr.'
+        from constants import NAME_REUSE_DELAY_SEASONS
+        self.addPendingName(name, int(currentSeason or 0) + NAME_REUSE_DELAY_SEASONS)
+        return name
+
     def addPendingName(self, name: str, availableSeason: int) -> None:
         """Hold a recycled retiree name out of the usable pool until availableSeason.
         Appends to the in-memory pendingNames list (persisted alongside unusedNames
@@ -3692,6 +3726,45 @@ class PlayerManager:
                         'event': {'text': f'{player.name} has retired from football'}
                     })
         
+        # ⚠️ THE NAME COMES BACK, AND *HOW* DEPENDS ON WHETHER HE EVER PLAYED. This path
+        # is the one retirement route that never recycled at all — free agents are the bulk
+        # of retirements on a mature league, and measured over 49 simulated seasons **1,014
+        # free-agent retirements burned a name against 676 released back** from rostered
+        # ones, ~7 lost a season until the pool hits zero and roster slots start going
+        # unfilled.
+        #
+        # ⚠️ BUT A MAN WHO NEVER PLAYED MUST NOT MINT A JUNIOR. The ladder says a footballer
+        # came before; a free agent who sat in the pool until he retired had no career for a
+        # son to follow, so inventing "X Jr." invents a father nobody saw. His BASE name
+        # goes straight back, immediately available — the same rule, and the same reasoning,
+        # as `_removeFromPool` uses for a culled player.
+        #
+        # ⚠️ `seasonsPlayed` CANNOT ANSWER THIS. `_handlePlayerSeasonProgression` increments
+        # it for every active non-prospect INCLUDING an unsigned free agent, so a washout
+        # accrues a "season" for every year he sits there — the exact trap that made the
+        # cull's first predicate remove nobody. `_playersWithARecord` asks for a real mark
+        # (a game line, a season with games played, or a card somebody owns) and is the ONE
+        # definition of that question; it is batched here rather than queried per player,
+        # and it fails CLOSED, which errs toward the ladder.
+        if retirements:
+            played = self._playersWithARecord([p.id for p in retirements
+                                               if getattr(p, 'id', None) is not None])
+            laddered = based = 0
+            for player in retirements:
+                name = getattr(player, 'name', None)
+                if not name:
+                    continue
+                if getattr(player, 'id', None) in played:
+                    self.recycleRetiredName(name, currentSeason)
+                    laddered += 1
+                else:
+                    if name not in self.unusedNames:
+                        self.unusedNames.append(name)
+                    based += 1
+            logger.info(f"Free-agent names returned: {laddered} advanced the ladder "
+                        f"(they played), {based} went straight back as the base name "
+                        f"(never rostered)")
+
         logger.info(f"Free agent retirements: {len(retirements)} players retired")
     
     def _generateReplacementPlayers(self, currentSeason: int) -> None:
@@ -3932,6 +4005,7 @@ class PlayerManager:
         nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
 
         generated = {}
+        failed = {}
         newPlayers = []
         for pos, count in deficits.items():
             for _ in range(count):
@@ -3939,6 +4013,15 @@ class PlayerManager:
                 mentalSeed = int(mentalSeeds.pop()) if mentalSeeds else meanPlayerSkill
                 newPlayer = self.createPlayer(pos, physicalSeed, mentalSeed)
                 if not newPlayer:
+                    # ⚠️ DO NOT SWALLOW THIS. `createPlayer` returns None when the name
+                    # pool is dry, and a bare `continue` meant the floor reported what it
+                    # MANAGED to make and never what it FAILED to — measured on a
+                    # 49-season database, `generated {'TE': 1}` against a deficit of 11 TE
+                    # and 5 K, logged as a success. The FA draft then had nobody to sign,
+                    # six teams finished without a tight end, and their games could not be
+                    # played at all. A supply floor that cannot meet its floor is the one
+                    # thing this method must never be quiet about.
+                    failed[pos.name] = failed.get(pos.name, 0) + 1
                     continue
                 newPlayer.id = nextPlayerId
                 nextPlayerId += 1
@@ -3970,6 +4053,16 @@ class PlayerManager:
                 f"Roster supply top-up: generated {generated} "
                 f"(supply was {{ {', '.join(f'{k.name}:{v}' for k, v in supply.items())} }}, "
                 f"{numTeams} teams, buffer {buffer})"
+            )
+        if failed:
+            # ⚠️ ERROR, not warning. Every roster slot the league cannot fill becomes a
+            # team that cannot field a side, and every game it is scheduled for is lost.
+            logger.error(
+                f"ROSTER SUPPLY FLOOR COULD NOT BE MET: short by {failed} "
+                f"(deficit was {{ {', '.join(f'{k.name}:{v}' for k, v in deficits.items())} }}). "
+                f"createPlayer returned nothing — the name pool is almost certainly "
+                f"exhausted. Teams at these positions will have empty roster slots and "
+                f"their games will fail to simulate."
             )
         return generated
 

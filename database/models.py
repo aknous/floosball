@@ -2935,6 +2935,14 @@ class Trade(Base):
     # What the winning bid was worth on the seller's own scale, for the market harness.
     price: Mapped[float] = mapped_column(Float, default=0.0)
     reserve: Mapped[float] = mapped_column(Float, default=0.0)
+    # ⚠️ BOTH SIDES OF THE CONVERSATION, AND THE MANIFEST ALREADY BUILT THEM. `runWeeklyPass`
+    # computes `sellerWhy` and `buyerWhy` for every settled trade and `_persistTrade` threw
+    # them away, so the durable record was a list of names with no account of why anybody
+    # did it — the one thing a reader opening a trade actually wants. The trigger is the
+    # seller's CATEGORY; the two `why` strings are the decisions.
+    trigger: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    seller_why: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    buyer_why: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (

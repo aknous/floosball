@@ -6748,10 +6748,16 @@ class SeasonManager:
             # STEP 1: Increment free agent years for existing free agents
             logger.info("Step 1: Increment free agent years")
             for player in self.playerManager.freeAgents:
-                if hasattr(player, 'freeAgentYears'):
-                    player.freeAgentYears += 1
-                else:
-                    player.freeAgentYears = 1
+                # ⚠️ `hasattr` IS NOT THE QUESTION — THE ATTRIBUTE CAN EXIST AND BE None.
+                # The column is nullable, so a player loaded from a row that never had a
+                # free-agent spell carries None, and `None += 1` raised TypeError out of
+                # the FIRST step of the offseason. That aborts `_handleOffseason` before
+                # the `frontoffice_decisions` marker is written, so the whole offseason —
+                # retirements, the rookie draft, free agency — silently never runs, and
+                # the league rolls into the next season with the previous one's rosters.
+                # Observed on the owner's development database as an offseason that would
+                # not advance.
+                player.freeAgentYears = int(getattr(player, 'freeAgentYears', 0) or 0) + 1
 
             # STEP 2: (was: resolve GM fire/re-sign votes). The binding votes
             # are gone — coach turnover is decided in STEP 2.5 by gmTurnover,
@@ -9105,29 +9111,15 @@ class SeasonManager:
         self._recyclePlayerName(player.name)
     
     def _recyclePlayerName(self, name: str) -> None:
-        """Convert retired player name to legacy variant and add to unused names"""
-        # Name progression: Base -> Jr. -> III -> IV -> V -> VI -> VII -> VIII -> IX -> X -> XI
-        if name.endswith('Jr.'):
-            name = name.replace('Jr.', 'III')
-        elif name.endswith('IV'):
-            name = name.replace('IV', 'V')
-        elif name.endswith('VIII'):
-            name = name.replace('VIII', 'IX')
-        elif name.endswith('IX'):
-            name = name.replace('IX', 'X')
-        elif name.endswith('III'):
-            name = name.replace('III', 'IV')
-        elif name.endswith('V') or name.endswith('X'):
-            name += 'I'
-        else:
-            name += ' Jr.'
+        """Advance a retiree's name one rung and hold it for reuse.
 
-        # Hold the recycled variant out of the usable pool for a few seasons so a
-        # familiar name doesn't reappear the very next season.
-        from constants import NAME_REUSE_DELAY_SEASONS
+        ⚠️ DELEGATES — the ladder has ONE definition, in `playerManager`, because the
+        free-agent retirement path lives there and could not reach this one. Two copies
+        is how a rung gets added to one and not the other.
+        """
         currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 0) or 0
-        self.playerManager.addPendingName(name, currentSeasonNum + NAME_REUSE_DELAY_SEASONS)
-    
+        self.playerManager.recycleRetiredName(name, currentSeasonNum)
+
     # app_setting key holding the last season whose Front Office open block ran.
     FRONT_OFFICE_MARKER_KEY = 'front_office_open_season'
 

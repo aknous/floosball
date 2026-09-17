@@ -8318,6 +8318,37 @@ def get_league_markets():
         session.close()
 
 
+@app.get("/api/transactions/recent")
+def get_recent_transactions(response: Response):
+    """How many trades have settled in the CURRENT week, for the nav badge.
+
+    ⚠️ A SEPARATE, TINY ENDPOINT. The nav renders on every page, and `/api/transactions`
+    builds the draft order, the walk-year list and the whole trading block — including
+    constructing a `TradeMarket` and pricing every listing in the league. Reusing it for a
+    number in the sidebar would run that work on every navigation.
+
+    ⚠️ THE CURRENT WEEK, NOT THE SEASON. A season total only grows, so by week 20 the badge
+    reads "31" and means nothing anybody can act on; it has to answer "did something just
+    happen". It empties itself at the rollover with no state to track and nothing to mark
+    as read.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import Trade
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
+    session = get_session()
+    try:
+        count = (session.query(Trade)
+                 .filter(Trade.season == season, Trade.week == week).count())
+    finally:
+        session.close()
+    response.headers["Cache-Control"] = "public, max-age=30"
+    return build_success_response({"season": season, "week": week, "trades": count})
+
+
 @app.get("/api/transactions")
 def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le=200),
                      user: Optional[_User] = Depends(_getOptionalUser)):
@@ -8329,8 +8360,14 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     the draft order and the walk-year list are both derivable today. Only **trades** and
     **the block** are new.
 
-      upcoming draft order   live, from the standings. ⚠️ MUST RE-RENDER WHEN A PICK IS
+      rookie draft order     live, from the standings. ⚠️ MUST RE-RENDER WHEN A PICK IS
                              TRADED — the order is WHO PICKS, not whose pick it is.
+                             ⚠️ THE ROOKIE DRAFT SPECIFICALLY. This league runs TWO
+                             worst-first drafts and the free-agency draft has its own
+                             order, which this does not serve. The ownership overlay comes
+                             from `draft_picks`, and those are rookie picks — labelling
+                             this "draft order" anywhere a reader can see it invites them
+                             to read the traded-pick markers as applying to free agency.
       upcoming draft class   through the viewing club's own scouted band, so two fans see
                              different ranges (see /api/draft/class)
       potential free agents  walk-year players. ⚠️ FLAG WHO THE CLUB CANNOT KEEP — 18 of
@@ -8396,11 +8433,42 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
         trades = (session.query(Trade)
                   .filter(Trade.season == season)
                   .order_by(Trade.id.desc()).limit(limit).all())
+        # ⚠️ RATINGS ARE RESOLVED AT READ TIME, NOT STORED IN THE MANIFEST. The manifest
+        # records WHAT changed hands — kind, id, name, detail — and adding a rating to it
+        # would only ever help trades settled after the change, while every trade already
+        # in the table stayed blank. Looking the player up now also means the figure is the
+        # one the rest of the app shows for them.
+        #
+        # ⚠️ IT IS THEIR RATING NOW, NOT AT THE TIME OF THE TRADE. Nothing snapshots a
+        # rating per trade, so this cannot be the latter; for a trade from the current week
+        # they are the same number, and further back it reads as how the deal has aged. Do
+        # not relabel it "rating at trade" without actually storing one.
+        ratingById = {}
+        for p in (getattr(floosball_app.playerManager, 'activePlayers', None) or []):
+            pid = getattr(p, 'id', None)
+            if pid is not None:
+                ratingById[pid] = round(getattr(p, 'playerRating', 0) or 0, 1)
+
+        def withRatings(assets):
+            out = []
+            for a in (assets or []):
+                a = dict(a)
+                if a.get('kind') in ('player', 'prospect'):
+                    rating = ratingById.get(a.get('id'))
+                    if rating:
+                        a['rating'] = rating
+                out.append(a)
+            return out
+
         tradeRows = [{
             "id": t.id, "week": t.week, "phase": t.phase,
             "teamA": teamBlob(t.team_a_id), "teamB": teamBlob(t.team_b_id),
-            "aGave": (t.assets_json or {}).get('aGave', []),
-            "bGave": (t.assets_json or {}).get('bGave', []),
+            "aGave": withRatings((t.assets_json or {}).get('aGave', [])),
+            "bGave": withRatings((t.assets_json or {}).get('bGave', [])),
+            # Why each side did it. Null on trades settled before the columns existed.
+            "trigger": getattr(t, 'trigger', None),
+            "sellerWhy": getattr(t, 'seller_why', None),
+            "buyerWhy": getattr(t, 'buyer_why', None),
         } for t in trades]
 
         moves = (session.query(SeasonRecapEvent)

@@ -663,7 +663,7 @@ class TradeMarket:
                         holder, pick, ask, floor,
                         why=(f"Paid to drop from {self._pickLabel(pick)} to "
                              f"{self._pickLabel(swapFor)}. "
-                             f"The club does not need the very best player in this draft "
+                             f"The team does not need the very best player in this draft "
                              f"to fill the hole it has, so the distance is worth more to "
                              f"somebody else than to it."
                              + (" The window is shut, so what it needs is assets, not one "
@@ -776,7 +776,7 @@ class TradeMarket:
         }
         pieces = [swapPiece] + extras
         why = (f"Moving up to {self._pickLabel(listing.pick)} from "
-               f"{self._pickLabel(swapFor)} \u2014 the jump is worth more to this club "
+               f"{self._pickLabel(swapFor)}. The jump is worth more to this team "
                f"than the distance it gives up, and it keeps a pick either way.")
         window = self.teamWindow(buyer)
         if window == 'opening':
@@ -1064,7 +1064,11 @@ class TradeMarket:
         return False                # a rebuilder's long deals are exactly what it wants
 
     def sellerWhy(self, team, player, trigger) -> str:
-        """Why this club is willing to move him, in its own terms.
+        """Why this team is willing to move a player, in its own terms.
+
+        ⚠️ USER-FACING PROSE. These strings are persisted and rendered on the transactions
+        page, so two house rules bind them: the word is TEAM, never "club", and nobody gets
+        a gendered pronoun — the league is not all men.
 
         ⚠️ WRITTEN AT THE MOMENT THE DECISION IS MADE, not reconstructed afterwards. Every
         fact here is already computed to REACH the decision — the trigger, the re-sign cap,
@@ -1072,46 +1076,46 @@ class TradeMarket:
         and reconstructing it later would mean recomputing state that has since moved on.
         """
         window = self.teamWindow(team)
-        name = getattr(player, 'name', 'him')
+        name = getattr(player, 'name', 'the player')
         pos = getattr(getattr(player, 'position', None), 'name', '')
 
         if trigger == 'expiring_surplus':
-            # ⚠️ SAY WHAT THE CLUB DECIDED, NOT WHICH RULE IT HIT. "Past the 2-player
+            # ⚠️ SAY WHAT THE TEAM DECIDED, NOT WHICH RULE IT HIT. "Past the 2-player
             # re-sign limit" describes a mechanism and reads as jargon; what actually
-            # happened is that the club ranked its expiring players, can keep only two, and
-            # chose other men. Naming them answers the question the sentence raises.
+            # happened is that the team ranked its expiring players, can keep only two, and
+            # chose others. Naming them answers the question the sentence raises.
             ahead = self._resignPriority(team)[:int(RESIGN_LIMIT_PER_OFFSEASON)]
             names = [getattr(p, 'name', '?') for p in ahead
                      if getattr(p, 'id', None) != getattr(player, 'id', None)]
             keptBy = (' and '.join(names) if len(names) < 3
                       else ', '.join(names[:-1]) + ' and ' + names[-1])
-            why = (f"{name}'s contract is up and the club is not renewing it. It can keep "
+            why = (f"{name}'s contract is up and the team is not renewing it. It can keep "
                    f"only {int(RESIGN_LIMIT_PER_OFFSEASON)} of its expiring players this "
                    + (f"offseason and has chosen {keptBy} instead, so {name} leaves for "
                       f"nothing at season end." if names else
-                      f"offseason and he did not make the cut, so he leaves for nothing at "
+                      f"offseason and {name} did not make the cut, leaving for nothing at "
                       f"season end.")
                    + " Anything beats that.")
         elif trigger == 'expiring_keeper':
-            why = (f"Could keep {name}, so he is priced on the contract that would follow "
+            why = (f"Could keep {name}, so the price is the contract that would follow "
                    f"rather than the weeks left. Available only to a return that beats "
-                   f"re-signing him.")
+                   f"re-signing them.")
         elif trigger == 'blocked_prospect':
             prospect = next((p for p in (getattr(team, 'prospects', None) or [])
                              if getattr(getattr(p, 'position', None), 'name', '') == pos),
                             None)
             who = getattr(prospect, 'name', 'a prospect')
-            why = (f"{who} is ready at {pos} and stuck behind {name}. Moving him opens the "
-                   f"slot rather than letting the pipeline rot.")
+            why = (f"{who} is ready at {pos} and stuck behind {name}. Moving them opens "
+                   f"the slot rather than letting the pipeline rot.")
         elif trigger == 'locker_room':
             att = self._attitudeOf(player)
-            why = (f"{name}'s attitude ({int(att)}) is dragging the room down every week he "
-                   f"stays." if att else f"{name} is a locker-room problem.")
+            why = (f"{name}'s attitude ({int(att)}) drags the room down every week they "
+                   f"stay." if att else f"{name} is a locker-room problem.")
         elif trigger == 'horizon_mismatch':
-            why = ("Holding term this club cannot use." if not self.isContending(team)
-                   else "Holding a rental this club cannot keep.")
+            why = ("Holding term this team cannot use." if not self.isContending(team)
+                   else "Holding a rental this team cannot keep.")
         elif trigger == 'inquiry':
-            why = f"Nobody put {name} on the block \u2014 another club called and asked."
+            why = f"Nobody put {name} on the block. Another team called and asked."
         else:
             why = f"{name} is available."
 
@@ -1119,17 +1123,17 @@ class TradeMarket:
             why += (" The window is shut and the core is fading, so there is nothing here "
                     "to build around.")
         elif window == 'opening':
-            why += " The club is still building, so the return matters more than the man."
+            why += " The team is still building, so the return matters more than the player."
         elif window == 'closing':
             why += " Selling from a side that is still winning, which is the hard call."
         return why
 
     def buyerWhy(self, buyer, listing) -> str:
-        """Why this club wants him, in its own terms.
+        """Why this team wants a player, in its own terms.
 
         ⚠️ THE BUYER'S SIDE WAS NEVER RECORDED AT ALL. The trigger is the SELLER's reason,
-        and a ledger showing only that reads as half a conversation — a club is moved for a
-        locker-room problem and nothing says why anyone wanted him.
+        and a ledger showing only that reads as half a conversation — a player is moved for
+        a locker-room problem and nothing says why anyone wanted them.
         """
         player = listing.player
         pos = getattr(getattr(player, 'position', None), 'name', '')
@@ -1141,19 +1145,19 @@ class TradeMarket:
             gaps = [getattr(getattr(p, 'position', None), 'name', '')
                     for _s, p in self._positionalGaps(buyer)]
             rank = (gaps.index(pos) + 1) if pos in gaps else None
-            bits.append(f"{pos} is this club's "
+            bits.append(f"{pos} is this team's "
                         f"{'biggest' if rank == 1 else 'number ' + str(rank)} hole against "
                         f"the rest of the league" if rank else
-                        f"{pos} is one of this club's holes")
+                        f"{pos} is one of this team's holes")
 
         tilt = self.needTilt(buyer)
         if abs(tilt) > 0.25:
             side = 'defense' if tilt > 0 else 'offense'
-            bits.append(f"it is short on {side} relative to the league, and he helps there")
+            bits.append(f"it is short on {side} relative to the league, and they help there")
 
         window = self.teamWindow(buyer)
         if window == 'closing':
-            bits.append("the window is closing \u2014 its alternative to winning now is not "
+            bits.append("the window is closing, and its alternative to winning now is not "
                         "winning later, it is not winning")
         elif window == 'open':
             bits.append("the window is open and the core is intact")
@@ -1166,7 +1170,7 @@ class TradeMarket:
         # aftermath strip, which records what actually happened. Two sources for one fact is
         # the failure this codebase keeps repeating.
         if not bits:
-            return "An upgrade the club could afford."
+            return "An upgrade the team could afford."
         return bits[0][0].upper() + bits[0][1:] + (
             ('; ' + '; '.join(bits[1:]) + '.') if len(bits) > 1 else '.')
 
@@ -2586,7 +2590,11 @@ def _persistTrade(manifest) -> int:
                     phase=manifest['phase'],
                     team_a_id=manifest['teamAId'], team_b_id=manifest['teamBId'],
                     assets_json={'aGave': manifest['aGave'], 'bGave': manifest['bGave']},
-                    price=float(manifest['price']), reserve=float(manifest['reserve']))
+                    price=float(manifest['price']), reserve=float(manifest['reserve']),
+                    # ⚠️ The manifest has carried these all along and this row dropped them.
+                    trigger=manifest.get('trigger'),
+                    seller_why=manifest.get('sellerWhy'),
+                    buyer_why=manifest.get('buyerWhy'))
         session.add(row)
         session.commit()
         return row.id
