@@ -188,9 +188,19 @@ async def main(seasons, treasury):
                          'toBuyer': round(piece.get('value', 0), 1)}
                 if piece['kind'] == 'pick':
                     d = piece.get('detail') or {}
+                    # ⚠️ THE EXPECTED SLOT, NOT THE RAW ONE. `slot` is the ORIGINAL club's
+                    # standing TODAY, so a pick two drafts out reads as slot 1 for a club
+                    # that is bad right now — and the ledger then reports a club "trading
+                    # away the number one pick" when the pick regresses to about 13 by the
+                    # time it is used. The player-trade path already regresses it; this one
+                    # did not, and the difference showed up as 8 top-3 picks traded where
+                    # the true figure is 4.
+                    import trading as _t2
+                    _out = (d.get('season') or season) - season
                     entry.update({'pickSeason': d.get('season'), 'slot': d.get('slot'),
-                                  'expectedSlot': d.get('slot'), 'seasonsOut':
-                                  (d.get('season') or season) - season,
+                                  'expectedSlot': round(_t2.expectedPickSlot(
+                                      d.get('slot') or 16, _out), 1),
+                                  'seasonsOut': _out,
                                   'originalTeam': next(
                                       (t.name for t in tm.teams
                                        if getattr(t, 'id', None) == d.get('originalTeamId')),
@@ -215,7 +225,9 @@ async def main(seasons, treasury):
                          f"S{listing.pick['season']} R{listing.pick['round']} pick",
                          'position': 'PICK', 'rating': None, 'term': None,
                          'slot': listing.pick['slot'],
-                         'expectedSlot': listing.pick['slot'],
+                         'seasonsOut': listing.pick['season'] - season,
+                         'expectedSlot': round(__import__('trading').expectedPickSlot(
+                             listing.pick['slot'], listing.pick['season'] - season), 1),
                          'originalTeam': next(
                              (t.name for t in tm.teams
                               if getattr(t, 'id', None) == listing.pick.get('originalTeamId')),
