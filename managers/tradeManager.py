@@ -32,7 +32,7 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_LISTINGS_PER_TEAM, TRADE_BIDS_PER_TEAM_PER_WEEK,
                        TRADE_CANDIDATES_PER_LISTING, TRADE_MAX_PIECES,
                        TRADE_PICK_HORIZON_SEASONS, FO_CUT_UPGRADE_MARGIN,
-                       TRADE_MIN_CERTAINTY, TRADE_INQUIRY_ENABLED,
+                       TRADE_MIN_CERTAINTY, TRADE_INQUIRY_ENABLED, CUT_FEE_RATE,
                        RESIGN_LIMIT_PER_OFFSEASON,
                        TRADE_INQUIRIES_PER_TEAM, TRADE_HUMP_BAND,
                        TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
@@ -468,7 +468,7 @@ class TradeMarket:
         # 7% while leaving kickers untouched at 16%, which is neither the old distribution
         # nor the intended one.
         needs, ordered = set(), []
-        for _slot, player in self._positionalGaps(team):
+        for _slot, player in self._positionalGaps(team, deficitOnly=True):
             posValue = getattr(getattr(player, 'position', None), 'value', None)
             if posValue in needs:
                 continue        # the club's worse WR slot already put WR on the list
@@ -479,7 +479,7 @@ class TradeMarket:
         self._needsCache[id(team)] = needs
         return needs
 
-    def _positionalGaps(self, team) -> list:
+    def _positionalGaps(self, team, deficitOnly: bool = False) -> list:
         """Where this club falls furthest behind the LEAGUE, worst first, as (slot, player).
 
         ⚠️ NOT "the lowest-valued starter", which is what a `rating x positionWeight` sort
@@ -500,6 +500,14 @@ class TradeMarket:
                 continue
             posValue = getattr(getattr(player, 'position', None), 'value', None)
             deficit = self._leagueMeanAt(posValue) - self.ratingFor(team, player)
+            # ⚠️ A POSITION THE CLUB IS GOOD AT IS NOT A HOLE, AND WITHOUT THIS EVERY CLUB
+            # HAS THREE. The sort ranks by deficit but nothing required the deficit to be
+            # POSITIVE, so a club above the league mean everywhere still had a "weakest"
+            # position and went shopping there. Reported from the ledger: Broads held an
+            # **85** tight end, were told TE was their "number 3 hole", and traded a pick
+            # for a **76** — the reasoning and the purchase were both wrong, from this.
+            if deficitOnly and deficit <= 0:
+                continue
             out.append((deficit * self._positionWeight(player), slot, player))
         out.sort(key=lambda x: -x[0])
         return [(slot, player) for _, slot, player in out]
@@ -652,10 +660,11 @@ class TradeMarket:
                 if ask > 0:
                     listing = PickListing(
                         holder, pick, ask, floor,
-                        why=(f"Paid to drop from slot {pick['slot']} to "
-                             f"{swapFor['slot']}. The club does not need the very best "
-                             f"player in this draft to fill the hole it has, so the "
-                             f"distance is worth more to somebody else than to it."
+                        why=(f"Paid to drop from {self._pickLabel(pick)} to "
+                             f"{self._pickLabel(swapFor)}. "
+                             f"The club does not need the very best player in this draft "
+                             f"to fill the hole it has, so the distance is worth more to "
+                             f"somebody else than to it."
                              + (" The window is shut, so what it needs is assets, not one "
                                 "more good player."
                                 if self.teamWindow(holder) == 'closed' else '')))
@@ -677,6 +686,21 @@ class TradeMarket:
         else:
             self.pickFail['listed'] = self.pickFail.get('listed', 0) + 1
         return out[:TRADE_INQUIRIES_PER_TEAM]
+
+    def _pickLabel(self, pick) -> str:
+        """How a pick is described in prose, matching exactly what the ledger prints.
+
+        ⚠️ `slot` IS THE ORIGINAL CLUB'S STANDING TODAY, so a pick two drafts out is "slot
+        2" for a club that is bad right now while its EXPECTED slot is nearer 10. The
+        reasoning quoted the raw number and the pick line quoted the expectation, so a
+        trade-up read "Moving up to slot 2" above a row saying "~10" — one fact, two
+        sources, disagreeing in public.
+        """
+        out = int(pick['season']) - int(self.season)
+        exp = trading.expectedPickSlot(pick['slot'], out)
+        if out <= 0:
+            return f"slot {int(pick['slot'])}"
+        return f"a pick expected around {exp:.0f} ({out} draft{'s' if out > 1 else ''} out)"
 
     def _pickValueTo(self, team, pick) -> float:
         return trading.pickValue(pick['slot'], pick['season'] - self.season,
@@ -750,9 +774,9 @@ class TradeMarket:
             'value': self._pickValueTo(listing.team, swapFor),
         }
         pieces = [swapPiece] + extras
-        why = (f"Moving up to slot {listing.pick['slot']} from "
-               f"{swapFor['slot']} \u2014 the jump is worth more to this club than the "
-               f"distance it gives up, and it keeps a pick either way.")
+        why = (f"Moving up to {self._pickLabel(listing.pick)} from "
+               f"{self._pickLabel(swapFor)} \u2014 the jump is worth more to this club "
+               f"than the distance it gives up, and it keeps a pick either way.")
         window = self.teamWindow(buyer)
         if window == 'opening':
             why += " It is building, and this is the kind of asset it is building with."
@@ -1309,11 +1333,30 @@ class TradeMarket:
             appetite = TRADE_HUMP_APPETITE if self.week is None else TRADE_INQUIRY_APPETITE
 
         displaced, fee = self._displacedBy(buyer, player)
+        # ⚠️ THE CUT FEE IS PART OF THE PRICE, AND FOR A LONG TIME THIS COMMENT SAID SO
+        # WHILE THE CODE IGNORED IT — `fee` was computed, described, and never subtracted.
+        # A club that must pay to open the slot is buying something more expensive than the
+        # same player into an empty one. Reported from the ledger: Broads gave up a pick,
+        # paid **1,800F**, and downgraded from an 85 tight end to a 76.
+        #
+        # ⚠️ CONVERTED THROUGH `CUT_FEE_RATE`, WHICH IS THE RATE THAT PRODUCED IT. The fee
+        # is `seasons x surplus x CUT_FEE_RATE` Floobits and the trade scale is
+        # `surplus x seasons x weights`, so dividing by the rate and re-applying the weights
+        # lands in the same units without inventing an exchange rate.
+        if fee > 0:
+            feeCost = (float(fee) / CUT_FEE_RATE) * self._positionWeight(player) * buyerWeight
+            gross -= feeCost
         net = gross - displaced
         if net <= 0:
-            return None             # he does not improve this roster
-        # ⚠️ The cut fee is part of the price. A club that must pay 4,350F to open the slot
-        # is buying something more expensive than the same player into an empty one.
+            return None             # he does not improve this roster, once the cut is paid
+
+        # ⚠️ AND THE BLUNT QUESTION, INDEPENDENT OF ALL THAT ARITHMETIC. See
+        # `rosterWouldImprove` — the valuation above runs through believed ratings, position
+        # weights, retention and a fee, and a yes can still come out of a roster that
+        # plainly gets worse.
+        if not self.rosterWouldImprove(buyer, player, self._weakestAt(buyer, player),
+                                       buyerTerm):
+            return None
         # ⚠️ HOW WILLING THIS CLUB IS TO SPEND ASSETS AT THIS POSITION AT ALL — see
         # `TRADE_POSITION_APPETITE`. It is the only place position value decides WHETHER a
         # trade happens rather than only what it costs, because the weight multiplies the
@@ -1356,8 +1399,72 @@ class TradeMarket:
                                 maxPieces=self._maxPiecesFor(listing, player))
         if not pieces:
             return None
+
+        # ⚠️ THE MAN ACTUALLY LEAVING IS NOT ALWAYS THE WEAKEST ONE, AND THE PRICE ASSUMED
+        # HE WAS. `_displacedBy` is computed BEFORE the bundle exists and takes the club's
+        # weakest at the position — correct when the slot is opened by a CUT. But a bundle
+        # may pay with a same-position starter, and `_assemble` picks whatever is cheapest
+        # on the BUYER's scale, which for a high-rated walk-year player is not much. So the
+        # club could send a better man than the one it was buying and the arithmetic never
+        # noticed: measured, 15 trades in 206 where the buyer shipped out a same-position
+        # player RATED HIGHER than the one arriving — "got 74 QB term 1 / sent 79 QB term 1".
+        #
+        # ⚠️ IT HAS TO BE RE-CHECKED AFTER ASSEMBLY, not before: which man goes is a
+        # property of the bundle, and the bundle is sized using `displaced`. Checking early
+        # is what produced the wrong answer in the first place.
+        swap = _swapPieceOf(pieces, buyer, player)
+        if swap is not None and not self.rosterWouldImprove(
+                buyer, player, swap, buyerTerm):
+            return None
+
         return Bid(buyer, pieces, sum(p['value'] for p in pieces),
                    why=self.buyerWhy(buyer, listing))
+
+    def rosterWouldImprove(self, buyer, incoming, displaced, incomingTerm) -> bool:
+        """Does the club actually look better with him in it? (owner, 2026-09-16: "the team
+        has to look at what their team looks like with the player they might get back and
+        see if that new player actually makes their team better")
+
+        ⚠️ A BACKSTOP, NOT THE VALUATION. `bidFor` already prices the upgrade, but that
+        comparison runs through believed ratings, position weights, retention terms and a
+        cut fee — five places for a yes to come out of a roster that plainly gets worse. It
+        did: Broads gave up a pick, paid 1,800F, and went from an **85** tight end to a
+        **76**, losing a year of control as well. This asks the blunt question the value
+        model cannot get wrong.
+
+        ⚠️ IT MUST NOT BLOCK A TIME TRADE. Taking a slightly worse player for three more
+        seasons is the plan's horizon trade and a good deal — measured on ratings alone it
+        reads as churn. So a downgrade is refused only when the club gains NO control by it:
+        worse on the field AND no longer under contract is a loss on every axis, which is
+        the only shape this needs to catch.
+        """
+        if displaced is None:
+            return True                     # an empty slot: anything is an improvement
+        inRating = self.ratingFor(buyer, incoming)
+        outRating = self.ratingFor(buyer, displaced)
+        if inRating >= outRating:
+            return True
+        outTerm = int(getattr(displaced, 'termRemaining', 0) or 0)
+        return int(incomingTerm) > outTerm
+
+    def _weakestAt(self, buyer, incoming):
+        """The man who would have to go, or None if the slot is already open.
+
+        ⚠️ ONE FINDER, SHARED WITH `_displacedBy`. Two searches for "who gets displaced"
+        would let the price and the sanity check disagree about who is leaving.
+        """
+        posValue = getattr(getattr(incoming, 'position', None), 'value', None)
+        roster = getattr(buyer, 'rosterDict', None) or {}
+        worst = None
+        for slot in POSITION_SLOTS.get(posValue, []):
+            held = roster.get(slot)
+            if held is None:
+                return None
+            # ⚠️ ON THE CLUB'S OWN READ (`ratingFor`), not the raw rating — that is how
+            # `_displacedBy` chose, and the two must agree on who goes.
+            if worst is None or self.ratingFor(buyer, held) < self.ratingFor(buyer, worst):
+                worst = held
+        return worst
 
     def _displacedBy(self, buyer, incoming):
         """(value of the man this club must cut, the fee to cut him).
@@ -1366,18 +1473,13 @@ class TradeMarket:
         really is nothing.
         """
         from managers.frontOfficeBrain import cutFeeFor
-        posValue = getattr(getattr(incoming, 'position', None), 'value', None)
-        roster = getattr(buyer, 'rosterDict', None) or {}
-        weakest, weakestRating = None, None
-        for slot in POSITION_SLOTS.get(posValue, []):
-            held = roster.get(slot)
-            if held is None:
-                return 0.0, 0
-            rating = self.ratingFor(buyer, held)
-            if weakestRating is None or rating < weakestRating:
-                weakest, weakestRating = held, rating
+        # ⚠️ ONE FINDER. Two searches for "who gets displaced" would let the PRICE and the
+        # roster sanity check disagree about who is leaving — and they would drift silently,
+        # since nothing compares them.
+        weakest = self._weakestAt(buyer, incoming)
         if weakest is None:
             return 0.0, 0
+        weakestRating = self.ratingFor(buyer, weakest)
         value = trading.playerValue(weakestRating,
                                     getattr(weakest, 'termRemaining', 0),
                                     self.week, self.nowWeight(buyer),

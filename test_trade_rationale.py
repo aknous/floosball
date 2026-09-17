@@ -161,7 +161,137 @@ def test_a_TRADE_UP_explains_both_sides_of_the_slot():
     that is perfectly correct — the first version of this test did exactly that."""
     src = inspect.getsource(TradeMarket.pickInquiriesFor)
     assert 'does not need the very best' in src, "the seller does not say why it drops"
-    assert 'Paid to drop from slot' in src
+    assert 'Paid to drop from' in src
     src2 = inspect.getsource(TradeMarket.bidForPick)
-    assert 'Moving up to slot' in src2, "the buyer does not say it is moving up"
+    assert 'Moving up to' in src2, "the buyer does not say it is moving up"
+
+    # ⚠️ AND BOTH DESCRIBE THE PICK THE SAME WAY THE LEDGER DOES. `slot` is the original
+    # club's standing TODAY, so a pick two drafts out is "slot 2" for a club that is bad
+    # right now while its expected slot is nearer 10 — the reasoning quoted the raw number
+    # and the pick line quoted the expectation, so a trade-up read "Moving up to slot 2"
+    # above a row saying "~10". One fact, two sources, disagreeing in public.
+    # ⚠️ ASSERTED AS THE ABSENCE OF THE RAW SLOT, NOT THE PRESENCE OF THE HELPER. A first
+    # version checked `_pickLabel` appeared somewhere in each function — but each mentions a
+    # pick twice, so reverting ONE of them back to the raw slot left the assertion happy and
+    # the sentence wrong again.
+    for fn, body in (('bidForPick', src2), ('pickInquiriesFor', src)):
+        prose = [ln for ln in body.splitlines() if 'f"' in ln and 'slot' in ln
+                 and '_pickLabel' not in ln and '#' not in ln.split('f"')[0]]
+        assert not prose, f"{fn} still quotes a raw slot in prose: {prose}"
     print("PASS a trade-up explains the drop and the jump")
+
+
+def test_a_position_the_club_is_GOOD_AT_is_not_a_hole():
+    """⚠️ WITHOUT THIS EVERY CLUB HAS THREE HOLES. `_positionalGaps` ranks by deficit but
+    nothing required the deficit to be POSITIVE, so a club above the league mean everywhere
+    still had a "weakest" position and went shopping there.
+
+    Reported from the ledger: Broads held an **85** tight end, were told TE was their
+    "number 3 hole", and traded a pick for a **76**. The reasoning and the purchase were
+    both wrong, from this one missing check."""
+    teams = _teams()
+    strong = teams[0]
+    # above the league mean at every position, by a lot
+    for slot, pos in (('qb', Position.QB), ('rb', Position.RB), ('wr1', Position.WR),
+                      ('wr2', Position.WR), ('te', Position.TE), ('k', Position.K)):
+        strong.rosterDict[slot] = FakePlayer(800 + hash(slot) % 23, 92, pos, termRemaining=3)
+    m = _market(teams)
+    assert m.topNeeds(strong) == set(), \
+        f"a club strong everywhere still has holes: {m.topNeeds(strong)}"
+
+    # ...and one genuine weakness is still found
+    strong.rosterDict['te'] = FakePlayer(801, 55, Position.TE, termRemaining=3)
+    m._needsCache.clear(); m._posMeanCache.clear()
+    assert Position.TE.value in m.topNeeds(strong), "a real hole went unnoticed"
+    print("PASS a club only shops where it is actually behind the league")
+
+
+def test_the_CUT_FEE_is_charged_against_the_buyer():
+    """⚠️ `fee` WAS COMPUTED, DESCRIBED IN A COMMENT AS "part of the price", AND NEVER
+    SUBTRACTED. Reported from the ledger: Broads gave up a pick, paid **1,800F**, and
+    downgraded from an 85 tight end to a 76 — a loss on every axis at once."""
+    import inspect as _i
+    src = _i.getsource(TradeMarket.bidFor)
+    assert 'gross -= feeCost' in src, "the cut fee still does not reach the decision"
+    assert src.index('feeCost') < src.index('net = gross - displaced'), \
+        "the fee is subtracted after the comparison that should feel it"
+    print("PASS the fee is paid before the club decides it is worth it")
+
+
+def test_the_club_checks_whether_the_ROSTER_actually_improves():
+    """Owner, 2026-09-16: "the team has to look at what their team looks like with the
+    player they might get back and see if that new player actually makes their team better."
+
+    ⚠️ A BACKSTOP, NOT THE VALUATION. `bidFor` already prices the upgrade, but that runs
+    through believed ratings, position weights, retention terms and a cut fee — five places
+    for a yes to come out of a roster that plainly gets worse. It did: Broads gave up a
+    pick, paid 1,800F, and went from an 85 tight end to a 76."""
+    teams = _teams()
+    buyer = teams[0]
+    good = FakePlayer(810, 85, Position.TE, termRemaining=2)
+    buyer.rosterDict['te'] = good
+    m = _market(teams)
+
+    worse = FakePlayer(811, 76, Position.TE, termRemaining=1)
+    assert not m.rosterWouldImprove(buyer, worse, good, 1), \
+        "a 76 on one year replaced an 85 on two"
+
+    better = FakePlayer(812, 90, Position.TE, termRemaining=1)
+    assert m.rosterWouldImprove(buyer, better, good, 1)
+    print("PASS a club will not make itself worse on every axis at once")
+
+
+def test_the_backstop_does_NOT_block_a_TIME_trade():
+    """⚠️ TAKING A SLIGHTLY WORSE PLAYER FOR MORE SEASONS IS THE PLAN'S HORIZON TRADE and a
+    good deal — measured on ratings alone it reads as churn. A blunt "rating must not fall"
+    would delete it, so a downgrade is refused only when the club gains NO control by it."""
+    teams = _teams()
+    buyer = teams[0]
+    incumbent = FakePlayer(813, 82, Position.TE, termRemaining=1)
+    buyer.rosterDict['te'] = incumbent
+    m = _market(teams)
+    younger = FakePlayer(814, 78, Position.TE, termRemaining=4)
+    assert m.rosterWouldImprove(buyer, younger, incumbent, 4), \
+        "a four-year 78 for a walk-year 82 was refused — that is the horizon trade"
+    print("PASS a worse player with real term is still a trade worth making")
+
+
+def test_ONE_finder_decides_who_is_displaced():
+    """⚠️ Two searches for "who gets displaced" would let the price and the sanity check
+    disagree about who is leaving."""
+    import inspect as _i
+    src = _i.getsource(TradeMarket._displacedBy)
+    assert 'self._weakestAt(' in src or '_weakestAt' in src, \
+        "_displacedBy finds the displaced player a second way"
+    print("PASS the price and the check agree on who goes")
+
+
+def test_the_buyer_does_not_SEND_a_better_player_at_the_position_it_is_fixing():
+    """⚠️ THE MAN ACTUALLY LEAVING IS NOT ALWAYS THE WEAKEST ONE, AND THE PRICE ASSUMED HE
+    WAS. `_displacedBy` runs BEFORE the bundle exists and takes the club's weakest at the
+    position — right when the slot is opened by a cut, wrong when the bundle pays with a
+    same-position starter, because `_assemble` picks whatever is cheapest on the BUYER's
+    scale and a high-rated walk-year player is cheap.
+
+    Measured: **15 trades in 206** where the buyer shipped out a same-position player rated
+    HIGHER than the one arriving — "got 74 QB term 1 / sent 79 QB term 1".
+
+    ⚠️ It has to be re-checked AFTER assembly: which man goes is a property of the bundle,
+    and the bundle is sized using `displaced`. Checking early is what produced the wrong
+    answer to begin with."""
+    import inspect as _i
+    src = _i.getsource(TradeMarket.bidFor)
+    assert 'swap = _swapPieceOf(pieces, buyer, player)' in src, \
+        "nothing re-checks who the bundle actually sends"
+    assert src.index('_assemble') < src.index('_swapPieceOf(pieces'), \
+        "the check runs before the bundle exists, which is the bug it exists to fix"
+
+    teams = _teams()
+    buyer = teams[0]
+    strong = FakePlayer(820, 79, Position.QB, termRemaining=1)
+    buyer.rosterDict['qb'] = strong
+    m = _market(teams)
+    weaker = FakePlayer(821, 74, Position.QB, termRemaining=1)
+    assert not m.rosterWouldImprove(buyer, weaker, strong, 1), \
+        "sending a 79 to receive a 74 counted as an improvement"
+    print("PASS a club will not pay for an upgrade with a better player at that position")
