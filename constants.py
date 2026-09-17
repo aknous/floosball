@@ -43,6 +43,54 @@ GEN_TRUESKILL_STD = 10
 # potential = trueSkill + randint(0, POTENTIAL_HEADROOM). Narrowed from the old
 # 30: true skill is the reliable target; potential is the occasional overshoot.
 POTENTIAL_HEADROOM = 15
+
+# ---- The late bloomer ----
+# ⚠️ WITHOUT THIS THE STORY IS IMPOSSIBLE, NOT MERELY RARE. Measured over 4,000 generated
+# prospects: `corr(draft rating, ceiling) = 0.918`, and ceiling minus draft rating is a
+# band of median +9 with a standard deviation of **3.0**. Of 1,275 prospects drafted at 66
+# or below, **not one** could ever reach 90; of 2,199 at 70 or below, none. The cause is
+# structural rather than a tuning miss: `potential = trueSkill + randint(0, HEADROOM)` is
+# drawn PER ATTRIBUTE, and the composite rating averages three or four of those independent
+# draws, so the central limit crushes the spread. A low pick is capped by arithmetic.
+#
+# ⚠️ THE BLOOM IS ONE DRAW SHARED BY EVERY ATTRIBUTE, which is the whole fix. Another
+# per-attribute roll would be averaged away exactly like the first one.
+#
+# ⚠️ AND IT IS LATENT: it does NOT touch `potentialX` at generation. `prospect_scouting`
+# derives its band from `computeCeilingRating()`, which reads `potentialX` — so a bloom
+# applied up front would show up in every team's scouted range and the player would go
+# first overall, which is the opposite of the story. It is held as a hidden number and
+# applied during a development season, after the draft, after teams have committed.
+LATE_BLOOM_ENABLED = True
+# Per prospect, at class generation. At a 32-player class this is ~0.6 a season.
+LATE_BLOOM_CHANCE = 0.02
+# Points added to trueSkill AND potential on every trained attribute when it fires.
+# ⚠️ TRUE SKILL AS WELL AS POTENTIAL. Raising potential alone would leave the player
+# reaching it only through the gated overshoot roll, which mostly does not happen — he
+# would carry a ceiling nobody ever sees.
+# ⚠️ SIZED AGAINST THE COMPOSITE, NOT THE ATTRIBUTES. A bloom of +14 on every trained
+# attribute moves the displayed rating only +8, because `playerRating` is
+# `(skillRating*3 + playMaking + xFactor)/5` and playMaking/xFactor are NOT trained — so
+# the bloom reaches three fifths of the number. At +14 the gain was indistinguishable from
+# the ordinary development band (median +9), which is to say invisible. Measured per
+# attribute -> composite: +20 -> ~12, +32 -> ~19.
+LATE_BLOOM_MIN, LATE_BLOOM_MAX = 20, 32
+# Chance per development season that a pending bloom fires, so it lands at an unpredictable
+# point in the window rather than always in year one.
+#
+# ⚠️ IT SCALES WITH THE DEVELOPMENT ENVIRONMENT (owner): a good coach and good facilities
+# make the bloom far likelier, a poor pair make it a long shot. `devBias` already carries
+# exactly that quantity — coach `playerDevelopment` (60 -> 0, 80 -> +2, 100 -> +4) plus the
+# Training Facility bonus — so the chance rides it rather than inventing a second reading of
+# the same thing.
+#
+# ⚠️ LESS PROBABLE, NEVER IMPOSSIBLE. A floor keeps a badly-run team from being a hard wall,
+# so the talent is squandered by the odds rather than by a rule. And because the bloom must
+# fire inside the development window or the prospect walks, a poorly-run team genuinely does
+# lose players it never knew it had: at devBias 0 the chance across a 3-season window is
+# about 27%, against about 87% at devBias 4.
+LATE_BLOOM_FIRE_BASE = 0.10
+LATE_BLOOM_FIRE_PER_BIAS = 0.10
 # Rookies/prospects DEBUT this many attribute points below their true skill and
 # develop up into it over their early seasons (~6-9 rating pts; calibrate). A
 # future 5-star looks like a solid 3-4-star as a rookie. Founding/FA-generated

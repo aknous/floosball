@@ -193,6 +193,11 @@ class Player(Base):
     service_time: Mapped[Optional[str]] = mapped_column(String(20))
     # Prospect pipeline (see constants.PROSPECT_*)
     is_prospect: Mapped[bool] = mapped_column(Boolean, default=False)
+    # ⚠️ MUST PERSIST OR IT SILENTLY NEVER FIRES. A pending bloom is rolled once at class
+    # generation and fires on a later development season; held only in memory it would be
+    # lost on the first restart, and since nothing else records it there would be no error
+    # — just a prospect who quietly never blooms. Nullable: 0/NULL means none pending.
+    late_bloom_pending: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
     prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
     drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)

@@ -412,6 +412,7 @@ class PlayerManager:
             player.freeAgentYears = db_player.free_agent_years
             # Prospect pipeline state
             player.is_prospect = bool(getattr(db_player, 'is_prospect', False))
+            player.lateBloomPending = int(getattr(db_player, 'late_bloom_pending', 0) or 0)
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
@@ -1741,6 +1742,7 @@ class PlayerManager:
                     db_player.free_agent_years = player.freeAgentYears
                     db_player.service_time = player.serviceTime.name if hasattr(player, 'serviceTime') else None
                     db_player.is_prospect = bool(getattr(player, 'is_prospect', False))
+                    db_player.late_bloom_pending = int(getattr(player, 'lateBloomPending', 0) or 0)
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
@@ -4268,8 +4270,10 @@ class PlayerManager:
         """
         import numpy as np
         from random import randint
+        import random
         from constants import (GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
-                               PROSPECT_ENTRY_DISCOUNT)
+                               PROSPECT_ENTRY_DISCOUNT, LATE_BLOOM_ENABLED,
+                               LATE_BLOOM_CHANCE, LATE_BLOOM_MIN, LATE_BLOOM_MAX)
 
         numRookies = self.rookieClassSize()
         physicalSeeds = np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
@@ -4297,6 +4301,12 @@ class PlayerManager:
             player.seasonsPlayed = 0
             player.team = 'Upcoming Rookie'
             player.applyEntryDiscount(PROSPECT_ENTRY_DISCOUNT)
+            # ⚠️ ROLLED HERE, APPLIED LATER. The amount is stored on the player and does
+            # NOT touch `potentialX`, so `computeCeilingRating` — and therefore every
+            # team's scouted band — sees an ordinary prospect. It is applied during a
+            # development season, after the draft. See `constants.LATE_BLOOM_*`.
+            if LATE_BLOOM_ENABLED and random.random() < LATE_BLOOM_CHANCE:
+                player.lateBloomPending = randint(LATE_BLOOM_MIN, LATE_BLOOM_MAX)
             rookies.append(player)
         logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
         return rookies

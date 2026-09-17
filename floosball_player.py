@@ -278,6 +278,17 @@ class Player:
         self.gameAttributes: PlayerAttributes = None
         self.playerTier = PlayerTier.TierC  # Default tier, updated by sortPlayersByPosition
         self.seasonsPlayed = 0
+        # ⚠️ ON THE PLAYER, NOT ON `attributes`. It first went next to the trueSkill fields,
+        # which live on the Attributes object — so `player.lateBloomPending` read 0 forever
+        # and the bloom could never fire, with nothing to report it. `applyLateBloom` and
+        # the development hook both read it off the player.
+        #
+        # ⚠️ LATENT AND DELIBERATELY NOT IN `potentialX`. Points this player gains on every
+        # trained attribute when the bloom fires. Held apart from `potentialX` because
+        # `computeCeilingRating` reads that and scouting reads `computeCeilingRating` —
+        # folding it in at generation would put the bloom in every team's scouted band and
+        # make the player a top pick. 0 means none pending.
+        self.lateBloomPending = 0
         self.gamesPlayed = 0
         self.term = 0
         self.termRemaining = 0
@@ -464,6 +475,36 @@ class Player:
                 continue
             setattr(self.attributes, attr, int(np.clip(trueVal - discount, 60, 100)))
         self.updateRating()
+
+    def applyLateBloom(self) -> int:
+        """Raise trueSkill AND potential on every trained attribute by the pending amount.
+
+        ⚠️ ONE SHARED AMOUNT, NOT A ROLL PER ATTRIBUTE. The reason a low pick cannot become
+        a star today is that `potential` is drawn per attribute and the composite averages
+        those draws, so the spread collapses (measured sd 3.0). Re-rolling per attribute
+        here would reproduce exactly that. One number, applied across the board, moves the
+        composite by that number.
+
+        ⚠️ BOTH TIERS. Growth is capped at trueSkill and only a gated overshoot roll lets a
+        player reach `potential`, so raising potential alone would hand him a ceiling he
+        almost never touches.
+
+        Returns the amount applied, or 0 if nothing was pending.
+        """
+        bloom = int(getattr(self, 'lateBloomPending', 0) or 0)
+        if bloom <= 0:
+            return 0
+        for attr, trueName, potName in _TRUESKILL_ATTR_TRIPLES:
+            if not hasattr(self.attributes, trueName):
+                continue
+            trueVal = getattr(self.attributes, trueName, 0) or 0
+            potVal = getattr(self.attributes, potName, 0) or 0
+            if trueVal > 0:
+                setattr(self.attributes, trueName, int(min(100, trueVal + bloom)))
+            if potVal > 0:
+                setattr(self.attributes, potName, int(min(100, potVal + bloom)))
+        self.lateBloomPending = 0
+        return bloom
 
     def computeCeilingRating(self):
         """Projected ceiling rating: what this player's rating would be with every

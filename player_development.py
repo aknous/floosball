@@ -274,6 +274,30 @@ class PlayerDevelopment:
 
             PlayerDevelopment.update_intangible_attributes(player.attributes)
 
+            # ⚠️ THE LATE BLOOM FIRES BEFORE THE SEASON'S GROWTH, so the new trueSkill is
+            # the target this very offseason rather than one wasted year later.
+            #
+            # ⚠️ IT FIRES ON A ROLL, NOT ON THE FIRST DEVELOPMENT SEASON. Always-year-one
+            # would make every bloomer identical and, worse, make the scouted band jump at
+            # a predictable moment — a reader would learn that the season-one jump IS the
+            # tell. A roll spreads it across the window.
+            bloomed = 0
+            if int(getattr(player, 'lateBloomPending', 0) or 0) > 0:
+                from constants import LATE_BLOOM_FIRE_BASE, LATE_BLOOM_FIRE_PER_BIAS
+                # ⚠️ THE ENVIRONMENT DECIDES THE ODDS (owner). `devBias` is the coach's
+                # playerDevelopment plus the Training Facility bonus, already computed
+                # above — so a well-run team develops the talent it drafted and a poorly-run
+                # one can lose a player it never knew it had, since the bloom has to fire
+                # inside the window or he walks.
+                fire = LATE_BLOOM_FIRE_BASE + max(0, devBias) * LATE_BLOOM_FIRE_PER_BIAS
+                if random.random() < fire:
+                    bloomed = player.applyLateBloom()
+                    if bloomed:
+                        logger.info(
+                            f"LATE BLOOM: {getattr(player, 'name', '?')} gains +{bloomed} "
+                            f"on every trained attribute (dev bias {devBias}); "
+                            f"nobody scouted this")
+
             ctx = PlayerDevelopment.careerContext(player, devBias)
 
             # Snapshot the trained attributes for change-logging.
@@ -306,6 +330,7 @@ class PlayerDevelopment:
             )
 
             return {
+                'lateBloom': bloomed,
                 'player_name': getattr(player, 'name', 'Unknown'),
                 'position': position_type,
                 'phase': ctx.phase.value,

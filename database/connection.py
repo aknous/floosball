@@ -1360,6 +1360,16 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # A prospect's latent late-bloom, rolled at class generation and applied during a
+        # later development season. Held in memory only, it would vanish on the first
+        # restart with nothing to report the loss.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN late_bloom_pending INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: players.late_bloom_pending")
+        except Exception:
+            conn.rollback()
+
         # The reasoning behind a settled trade. The manifest always built these; the row
         # did not carry them, so the durable record was a list of names with no account of
         # why anybody did it. Nullable — trades settled before this keep no reasoning, and
