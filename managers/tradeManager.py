@@ -1872,11 +1872,11 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> 
     """
     # ⚠️ THE FUNCTION, NOT THE CONSTANT — an imported name is a copy and the admin kill
     # switch could never reach it. See `constants.tradingEnabled`.
-    from constants import tradingEnabled
-    if not tradingEnabled():
+    # ⚠️ ONE WINDOW DEFINITION, shared with the fan-facing `/api/transactions`. The
+    # deadline used to live only here while `listingsFor` held only the opening, so a
+    # caller reaching for listings directly got a market that never closed.
+    if not tradeWindowOpen(week):
         return []
-    if week is not None and int(week) > int(GM_ACTIVE_WEEK):
-        return []               # rosters are frozen from the deadline to the offseason
 
     market = TradeMarket(playerManager, teamManager, brain, season, week)
     settled = []
@@ -2656,3 +2656,50 @@ def _publishTrade(seasonManager, manifest) -> None:
         )
     except Exception as e:
         logger.warning(f"Could not publish trade news: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE TRADE WINDOW
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The states a fan-facing surface has to tell apart. `open` is the only one that
+# serves listings; the rest each close the market for a different reason and read
+# differently to somebody looking at an empty table.
+TRADE_WINDOW_OPEN = 'open'
+TRADE_WINDOW_DISABLED = 'disabled'          # the admin kill switch
+TRADE_WINDOW_EARLY = 'early'                # before clubs know their season
+TRADE_WINDOW_DEADLINE_PASSED = 'deadline'   # rosters frozen until the offseason
+
+
+def tradeWindowState(week=None) -> str:
+    """Is the market open right now, and if not, why not.
+
+    ⚠️ THE ONE DEFINITION OF THE WINDOW. `runWeeklyPass` had the deadline half of this
+    rule inline and `listingsFor` had the opening half, so nothing held both ends and
+    any caller reaching for `listingsFor` directly got a market with no deadline. The
+    fan-facing `/api/transactions` did exactly that: measured on production at week 28,
+    six weeks past the deadline, it served **29 live listings** for trades that could
+    not happen. A reader cannot tell a stale listing from a real one, so a closed market
+    showing rows is worse than one showing nothing.
+
+    ⚠️ `week=None` IS THE OFFSEASON AND IS OPEN. That is the calling convention the
+    market already uses (`TradeMarket.week` is None for an offseason pass), and both
+    offseason passes run before free agency, so a deadline test written on the week
+    number alone would shut the very market the offseason exists for.
+    """
+    from constants import tradingEnabled
+    if not tradingEnabled():
+        return TRADE_WINDOW_DISABLED
+    if week is None:
+        return TRADE_WINDOW_OPEN                    # an offseason pass
+    week = int(week)
+    if week > int(GM_ACTIVE_WEEK):
+        return TRADE_WINDOW_DEADLINE_PASSED
+    if trading.contentionRamp(week) < TRADE_MIN_CERTAINTY:
+        return TRADE_WINDOW_EARLY
+    return TRADE_WINDOW_OPEN
+
+
+def tradeWindowOpen(week=None) -> bool:
+    """Convenience over `tradeWindowState`, for callers that only need the verdict."""
+    return tradeWindowState(week) == TRADE_WINDOW_OPEN
