@@ -64,14 +64,43 @@ def test_the_seller_names_the_ATTITUDE_dragging_the_room():
     print(f"PASS  {why}")
 
 
-def test_the_seller_explains_the_RE_SIGN_CAP_not_just_the_word_surplus():
+def test_the_seller_says_it_CHOSE_OTHERS_not_that_a_limit_was_hit():
+    """⚠️ "He is past the club's 2-player re-sign limit" DESCRIBES A MECHANISM AND READS AS
+    JARGON (owner, 2026-09-16: "what does it mean 'past the 2 player re-sign limit'? is the
+    team deciding that they wont resign this player?"). Yes, it is — the club ranked its
+    expiring players, can keep two, and chose other men. The sentence has to say that, and
+    naming them answers the question it raises."""
     teams = _teams()
-    club = _congest(teams[-1])
-    player = club.rosterDict['wr1']
-    why = _market(teams).sellerWhy(club, player, 'expiring_surplus')
-    assert 'walks for nothing' in why, why
-    assert getattr(player, 'name', '') in why
+    club = _congest(teams[-1], ratings=(88, 84, 80))
+    m = _market(teams)
+    order = m._resignPriority(club)
+    surplus = order[-1]                      # last in line, so genuinely leaving
+    why = m.sellerWhy(club, surplus, 'expiring_surplus')
+
+    assert 'not renewing' in why, why
+    assert 'leaves for nothing' in why
+    assert 'limit' not in why, "the sentence still explains itself by naming the rule"
+    for kept in order[:2]:
+        assert getattr(kept, 'name', '') in why, f"{kept.name} was kept but not named"
     print(f"PASS  {why}")
+
+
+def test_the_re_sign_ORDER_has_exactly_one_implementation():
+    """⚠️ `_cannotKeep` DECIDES WHO IS LEAVING AND `sellerWhy` NAMES WHO WAS CHOSEN INSTEAD.
+    A second sort would let the ledger explain a decision the market did not make — and the
+    two would drift silently, since nothing compares them."""
+    teams = _teams()
+    club = _congest(teams[-1], ratings=(88, 84, 80, 76))
+    m = _market(teams)
+    order = m._resignPriority(club)
+    leaving = m._cannotKeep(club)
+    keptIds = {id(p) for p in order[:2]}
+    assert not (keptIds & leaving), "a man the club chose to keep is listed as leaving"
+    for p in order[2:]:
+        assert id(p) in leaving, f"{p.name} is past the cap but not marked as leaving"
+    src = inspect.getsource(TradeMarket._cannotKeep)
+    assert 'self._resignPriority(team)' in src, "_cannotKeep sorts the list a second time"
+    print("PASS one ranking decides it and explains it")
 
 
 def test_the_BUYER_says_which_hole_it_is_filling():

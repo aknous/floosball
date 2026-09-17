@@ -936,6 +936,23 @@ class TradeMarket:
             better = sum(1 for p in rivals if (getattr(p, 'playerRating', 0) or 0) > mine)
         return better < int(RESIGN_LIMIT_PER_OFFSEASON)
 
+    def _resignPriority(self, team) -> list:
+        """This club's expiring players, in the order it would re-sign them.
+
+        ⚠️ ONE RANKING, SHARED. `_cannotKeep` decides who is leaving off this order and
+        `sellerWhy` names who was chosen instead — a second implementation would let the
+        ledger explain a decision the market did not make.
+        """
+        coach = getattr(team, 'coach', None)
+        expiring = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                    if p is not None and not getattr(p, 'willRetire', False)
+                    and (getattr(p, 'termRemaining', 99) or 99) <= 1]
+        try:
+            expiring.sort(key=lambda p: -self.brain.decisionValue(p, coach=coach, team=team))
+        except Exception:
+            expiring.sort(key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+        return expiring
+
     def _cannotKeep(self, team) -> set:
         """Which of this club's walk-year players are genuinely leaving.
 
@@ -968,9 +985,7 @@ class TradeMarket:
         if cached is not None:
             return cached
         coach = getattr(team, 'coach', None)
-        expiring = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
-                    if p is not None and not getattr(p, 'willRetire', False)
-                    and (getattr(p, 'termRemaining', 99) or 99) <= 1]
+        expiring = self._resignPriority(team)
         forced, keepable = set(), []
         pm = self.playerManager
         for p in expiring:
@@ -981,10 +996,7 @@ class TradeMarket:
             except Exception:
                 pass
             keepable.append(p)
-        try:
-            keepable.sort(key=lambda p: -self.brain.decisionValue(p, coach=coach, team=team))
-        except Exception:
-            keepable.sort(key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+        # already in re-sign order — `_resignPriority` is the one ranking
         result = forced | {id(p) for p in keepable[int(RESIGN_LIMIT_PER_OFFSEASON):]}
         self._cannotKeepCache[id(team)] = result
         return result
@@ -1039,9 +1051,22 @@ class TradeMarket:
         pos = getattr(getattr(player, 'position', None), 'name', '')
 
         if trigger == 'expiring_surplus':
-            why = (f"Cannot re-sign {name} \u2014 he is past the club's "
-                   f"{int(RESIGN_LIMIT_PER_OFFSEASON)}-player re-sign limit and walks for "
-                   f"nothing at season end. Anything beats that.")
+            # ⚠️ SAY WHAT THE CLUB DECIDED, NOT WHICH RULE IT HIT. "Past the 2-player
+            # re-sign limit" describes a mechanism and reads as jargon; what actually
+            # happened is that the club ranked its expiring players, can keep only two, and
+            # chose other men. Naming them answers the question the sentence raises.
+            ahead = self._resignPriority(team)[:int(RESIGN_LIMIT_PER_OFFSEASON)]
+            names = [getattr(p, 'name', '?') for p in ahead
+                     if getattr(p, 'id', None) != getattr(player, 'id', None)]
+            keptBy = (' and '.join(names) if len(names) < 3
+                      else ', '.join(names[:-1]) + ' and ' + names[-1])
+            why = (f"{name}'s contract is up and the club is not renewing it. It can keep "
+                   f"only {int(RESIGN_LIMIT_PER_OFFSEASON)} of its expiring players this "
+                   + (f"offseason and has chosen {keptBy} instead, so {name} leaves for "
+                      f"nothing at season end." if names else
+                      f"offseason and he did not make the cut, so he leaves for nothing at "
+                      f"season end.")
+                   + " Anything beats that.")
         elif trigger == 'expiring_keeper':
             why = (f"Could keep {name}, so he is priced on the contract that would follow "
                    f"rather than the weeks left. Available only to a return that beats "
