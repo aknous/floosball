@@ -1318,6 +1318,72 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # ---- Trading: picks, trades, and a trade id on the recap log ----
+        # ⚠️ INLINE, BECAUSE ALEMBIC DOES NOT RUN ON DEPLOY. These are what runs in prod.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS draft_picks ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "season INTEGER NOT NULL, "
+                "round_number INTEGER NOT NULL DEFAULT 1, "
+                "original_team_id INTEGER NOT NULL, "
+                "current_owner_id INTEGER NOT NULL, "
+                "used INTEGER NOT NULL DEFAULT 0, "
+                "created_at DATETIME, "
+                "UNIQUE(season, round_number, original_team_id))"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_draft_picks_owner "
+                              "ON draft_picks(season, current_owner_id)"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS trades ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL DEFAULT 0, "
+                "phase VARCHAR(24) NOT NULL DEFAULT 'in_season', "
+                "team_a_id INTEGER NOT NULL, "
+                "team_b_id INTEGER NOT NULL, "
+                "assets_json JSON NOT NULL, "
+                "price FLOAT DEFAULT 0.0, "
+                "reserve FLOAT DEFAULT 0.0, "
+                "created_at DATETIME)"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trades_season_week "
+                              "ON trades(season, week)"))
+            cols = [r[1] for r in conn.execute(
+                text("PRAGMA table_info(season_recap_events)")).fetchall()]
+            if cols and 'trade_id' not in cols:
+                conn.execute(text("ALTER TABLE season_recap_events ADD COLUMN trade_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recap_trade "
+                                  "ON season_recap_events(trade_id)"))
+            conn.commit()
+            logger.info("  Migration: ensured draft_picks + trades + recap trade_id")
+        except Exception:
+            conn.rollback()
+
+        # A prospect's latent late-bloom, rolled at class generation and applied during a
+        # later development season. Held in memory only, it would vanish on the first
+        # restart with nothing to report the loss.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN late_bloom_pending INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: players.late_bloom_pending")
+        except Exception:
+            conn.rollback()
+
+        # The reasoning behind a settled trade. The manifest always built these; the row
+        # did not carry them, so the durable record was a list of names with no account of
+        # why anybody did it. Nullable — trades settled before this keep no reasoning, and
+        # there is nothing to reconstruct it from.
+        for col, ddl in (('trigger', 'VARCHAR(32)'),
+                         ('seller_why', 'TEXT'),
+                         ('buyer_why', 'TEXT')):
+            try:
+                conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col} {ddl}"))
+                conn.commit()
+                logger.info(f"  Migration: trades.{col}")
+            except Exception:
+                conn.rollback()
+
         # Clear stale will_retire on already-retired players. The flag is set at
         # week 22 and (historically) never reset, so retirees kept carrying it.
         # Idempotent.

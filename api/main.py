@@ -1200,6 +1200,63 @@ async def get_players(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _viewingClubFor(user):
+    """Which club's SCOUTING READ a request is served through.
+
+    ⚠️ A SCOUTED VIEW IS PER (CLUB, PROSPECT), SO THERE IS NO SINGLE "THE CLASS" VIEW.
+    Two fans of different clubs looking at the same prospect must see different ranges —
+    that is the feature working, not an inconsistency. A team page shows that club's
+    read; everywhere else shows the viewing user's favourite club's.
+
+    Returns None for a signed-out or club-less user, which reads as a neutral median
+    band rather than as perfect vision.
+    """
+    if user is None:
+        return None
+    favId = getattr(user, 'favorite_team_id', None)
+    if not favId or floosball_app is None:
+        return None
+    tm = getattr(floosball_app, 'teamManager', None)
+    try:
+        return tm.getTeamById(favId) if tm else None
+    except Exception:
+        return None
+
+
+# A club-less viewer sees the middle of the road: not the truth, and not the worst
+# scout in the league either.
+_NEUTRAL_SCOUT_VISION = 0.5
+
+
+def _scoutedCeiling(player, club):
+    """The potential band this club is shown for this prospect, or None if the player
+    is not a prospect at all.
+
+    ⚠️ THE BAND IS APPLIED SERVER-SIDE. Sending true potential to the client and hiding
+    it in the UI leaks it to anyone who opens the network tab — and potential is the
+    ONE number this whole feature is built on not knowing.
+    """
+    from managers.frontOfficeBrain import isScoutable
+    if not isScoutable(player):
+        return None
+    try:
+        from prospect_scouting import scoutedView
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        sm = getattr(floosball_app, 'seasonManager', None)
+        season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 1) or 1
+        if club is None:
+            vision, viewerId = _NEUTRAL_SCOUT_VISION, 0
+        else:
+            brain = FrontOfficeBrain(floosball_app.playerManager)
+            vision = brain.scoutingVision(getattr(club, 'coach', None), club)
+            viewerId = getattr(club, 'id', None) or 0
+        return scoutedView(player, viewerId, season, vision, week)
+    except Exception as e:
+        logger.warning(f"Scouted view failed for player {getattr(player, 'id', '?')}: {e}")
+        return None
+
+
 def _isUndraftedProspect(p) -> bool:
     """An upcoming-rookie / prospect that no team has drafted yet. Their projected
     Expected/Ceiling are hidden from the profile so the only signal is the scouting-
@@ -1210,14 +1267,20 @@ def _isUndraftedProspect(p) -> bool:
 
 
 @app.get("/api/players/{player_id}", response_model=Dict[str, Any])
-async def get_player(player_id: int, response: Response):
+async def get_player(player_id: int, response: Response,
+                    user: Optional[_User] = Depends(_getOptionalUser)):
     """
     Get detailed information about a specific player
 
     Returns:
         Full player object with attributes, stats, and history
     """
-    response.headers["Cache-Control"] = "public, max-age=120"
+    # ⚠️ THE BODY NOW CHANGES WHEN A USER IS ATTACHED — a prospect's potential band is
+    # read through the caller's own club, so two fans see different ranges for the same
+    # player. `public, max-age=120` on that is the documented double fault: a shared
+    # cache can hand one user's view to the next caller, and the browser can answer a
+    # refetch out of a body captured for somebody else.
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=120")
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -1246,12 +1309,20 @@ async def get_player(player_id: int, response: Response):
         # (overall at potential — perfect development) — drawn as markers on the
         # overall rating gauge. Both >= current when there's headroom. Hidden for
         # undrafted prospects (scouting-blurred range on the ballot is the only signal).
-        if _isUndraftedProspect(player):
+        scouted = _scoutedCeiling(player, _viewingClubFor(user))
+        if scouted is not None:
+            # ⚠️ A BAND, NOT A BLANK. This used to null the projection outright for an
+            # undrafted prospect, which is airtight and tells a fan nothing — and it
+            # LEAKED THE MOMENT HE WAS DRAFTED, because `drafting_team_id` being set
+            # flipped him back onto the exact-number branch. A prospect has still
+            # played nothing after the draft; his ceiling is a scouted opinion either
+            # way, and showing the range is what makes a pick worth arguing about.
             player_dict['expected'] = None
             player_dict['ceiling'] = None
-            # Also blank the per-attribute potential star markers — a coarser reveal
-            # of the same potential the scouting range blurs. (Currently unrendered,
-            # but stripped here so a future consumer can't reopen the fog-of-war leak.)
+            player_dict['ceilingRange'] = scouted
+            # The per-attribute potential star markers are a coarser reveal of the same
+            # number the band blurs. (Currently unrendered, but stripped here so a
+            # future consumer cannot reopen the fog-of-war leak from the side.)
             for _k in ('att1PotStars', 'att2PotStars', 'att3PotStars'):
                 if _k in player_dict:
                     player_dict[_k] = None
@@ -6013,7 +6084,8 @@ async def get_app_settings():
         settings = {row.key: row.value for row in rows}
         # Coerce booleans for keys we know are boolean (anomaly_intensity stays a string).
         for boolKey in ('feedback_visible', 'survey_visible',
-                        'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled'):
+                        'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled',
+                        'trading_enabled'):
             if boolKey in settings:
                 settings[boolKey] = str(settings[boolKey]).lower() == 'true'
         # Surface the awakened-charge dials at their EFFECTIVE value (an admin-set app_setting if present,
@@ -6029,6 +6101,11 @@ async def get_app_settings():
             ('awakened_def_fire_chance', AWAKENED_DEF_FIRE_CHANCE),
         ):
             settings.setdefault(key, default)
+        # ⚠️ NOT SEEDED INTO app_settings. An ABSENT row means "use the constant", which is
+        # what lets a deploy change the default; seeding one would freeze whatever value
+        # happened to be live at the moment the row was written.
+        from constants import TRADING_ENABLED as _tradingDefault
+        settings.setdefault('trading_enabled', bool(_tradingDefault))
         return settings
     finally:
         session.close()
@@ -6045,6 +6122,7 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text',
                'halftime_show_url', 'halftime_show_pause_seconds',
                'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled', 'anomaly_intensity',
+               'trading_enabled',
                'awakened_involve_qb', 'awakened_involve_rb', 'awakened_involve_wr', 'awakened_involve_te',
                'awakened_involve_k', 'awakened_def_fire_chance'}
     session = get_session()
@@ -8240,8 +8318,312 @@ def get_league_markets():
         session.close()
 
 
+@app.get("/api/transactions/recent")
+def get_recent_transactions(response: Response):
+    """How many trades have settled in the CURRENT week, for the nav badge.
+
+    ⚠️ A SEPARATE, TINY ENDPOINT. The nav renders on every page, and `/api/transactions`
+    builds the draft order, the walk-year list and the whole trading block — including
+    constructing a `TradeMarket` and pricing every listing in the league. Reusing it for a
+    number in the sidebar would run that work on every navigation.
+
+    ⚠️ THE CURRENT WEEK, NOT THE SEASON. A season total only grows, so by week 20 the badge
+    reads "31" and means nothing anybody can act on; it has to answer "did something just
+    happen". It empties itself at the rollover with no state to track and nothing to mark
+    as read.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import Trade
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
+    session = get_session()
+    try:
+        count = (session.query(Trade)
+                 .filter(Trade.season == season, Trade.week == week).count())
+    finally:
+        session.close()
+    response.headers["Cache-Control"] = "public, max-age=30"
+    return build_success_response({"season": season, "week": week, "trades": count})
+
+
+@app.get("/api/transactions")
+def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le=200),
+                     user: Optional[_User] = Depends(_getOptionalUser)):
+    """The league's FRONT-OFFICE DESK — useful year-round, not a trade log.
+
+    Seven sections (owner). ⚠️ FIVE OF THEM ALREADY HAD THEIR DATA: `SeasonRecapEvent`
+    holds `rookie_pick | fa_pick | cut | resign | walked | promotion | retirement |
+    hof_induction | coach_fire | coach_hire` and production has five seasons of it, while
+    the draft order and the walk-year list are both derivable today. Only **trades** and
+    **the block** are new.
+
+      rookie draft order     live, from the standings. ⚠️ MUST RE-RENDER WHEN A PICK IS
+                             TRADED — the order is WHO PICKS, not whose pick it is.
+                             ⚠️ THE ROOKIE DRAFT SPECIFICALLY. This league runs TWO
+                             worst-first drafts and the free-agency draft has its own
+                             order, which this does not serve. The ownership overlay comes
+                             from `draft_picks`, and those are rookie picks — labelling
+                             this "draft order" anywhere a reader can see it invites them
+                             to read the traded-pick markers as applying to free agency.
+      upcoming draft class   through the viewing club's own scouted band, so two fans see
+                             different ranges (see /api/draft/class)
+      potential free agents  walk-year players. ⚠️ FLAG WHO THE CLUB CANNOT KEEP — 18 of
+                             32 clubs are over the re-sign limit, and that is the story
+      players on the block   live listings: who is available and what it would take
+      trades                 as they happen
+      signings and cuts      already written every offseason
+      prospect promotions    already written
+
+    ⚠️ THE BLOCK AND THE WALK-YEAR LIST ARE THE SECTIONS WITH EDITORIAL WEIGHT, and the
+    ones that make the page worth visiting outside the trade window. "These 33 players are
+    leaving for nothing unless someone moves" is a story every week of the season.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON
+    from database.connection import get_session
+    from database.models import Trade, SeasonRecapEvent, DraftPick
+
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
+    teamsById = {getattr(t, 'id', None): t for t in (getattr(tm, 'teams', None) or [])}
+
+    def teamBlob(teamId):
+        team = teamsById.get(teamId)
+        if team is None:
+            return None
+        return {"id": teamId, "name": team.name,
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', None)}
+
+    # ---- draft order: WHO PICKS, resolved off the ORIGINAL club's finish ----
+    order = []
+    session = get_session()
+    try:
+        ranked = sorted((getattr(t, 'id', None) for t in (getattr(tm, 'teams', None) or [])),
+                        key=lambda tid: _teamWinPct(teamsById.get(tid)))
+        ownerByOrigin = {r.original_team_id: r.current_owner_id for r in
+                         session.query(DraftPick).filter_by(season=season, used=False).all()}
+        for slot, originId in enumerate(ranked, start=1):
+            ownerId = ownerByOrigin.get(originId, originId)
+            originStats = getattr(teamsById.get(originId), 'seasonTeamStats', None) or {}
+            order.append({
+                "slot": slot,
+                "originalTeam": teamBlob(originId),
+                # ⚠️ The club that PICKS. A club that traded its pick and finished worst
+                # has given away the #1 selection, and this row is where a fan sees it.
+                "owner": teamBlob(ownerId),
+                "traded": ownerId != originId,
+                # ⚠️ THE ORIGINAL CLUB'S RECORD, NOT THE OWNER'S — the slot resolves off
+                # where THAT club finishes, so the owner's record explains nothing about
+                # why the pick sits here. Without it the order is a list of names in an
+                # order a reader cannot account for.
+                "record": {
+                    "wins": int(originStats.get('wins', 0) or 0),
+                    "losses": int(originStats.get('losses', 0) or 0),
+                    "ties": int(originStats.get('ties', 0) or 0),
+                },
+            })
+
+        trades = (session.query(Trade)
+                  .filter(Trade.season == season)
+                  .order_by(Trade.id.desc()).limit(limit).all())
+        # ⚠️ RATINGS ARE RESOLVED AT READ TIME, NOT STORED IN THE MANIFEST. The manifest
+        # records WHAT changed hands — kind, id, name, detail — and adding a rating to it
+        # would only ever help trades settled after the change, while every trade already
+        # in the table stayed blank. Looking the player up now also means the figure is the
+        # one the rest of the app shows for them.
+        #
+        # ⚠️ IT IS THEIR RATING NOW, NOT AT THE TIME OF THE TRADE. Nothing snapshots a
+        # rating per trade, so this cannot be the latter; for a trade from the current week
+        # they are the same number, and further back it reads as how the deal has aged. Do
+        # not relabel it "rating at trade" without actually storing one.
+        ratingById = {}
+        for p in (getattr(floosball_app.playerManager, 'activePlayers', None) or []):
+            pid = getattr(p, 'id', None)
+            if pid is not None:
+                ratingById[pid] = round(getattr(p, 'playerRating', 0) or 0, 1)
+
+        def withRatings(assets):
+            out = []
+            for a in (assets or []):
+                a = dict(a)
+                if a.get('kind') in ('player', 'prospect'):
+                    rating = ratingById.get(a.get('id'))
+                    if rating:
+                        a['rating'] = rating
+                out.append(a)
+            return out
+
+        tradeRows = [{
+            "id": t.id, "week": t.week, "phase": t.phase,
+            "teamA": teamBlob(t.team_a_id), "teamB": teamBlob(t.team_b_id),
+            "aGave": withRatings((t.assets_json or {}).get('aGave', [])),
+            "bGave": withRatings((t.assets_json or {}).get('bGave', [])),
+            # Why each side did it. Null on trades settled before the columns existed.
+            "trigger": getattr(t, 'trigger', None),
+            "sellerWhy": getattr(t, 'seller_why', None),
+            "buyerWhy": getattr(t, 'buyer_why', None),
+        } for t in trades]
+
+        moves = (session.query(SeasonRecapEvent)
+                 .filter(SeasonRecapEvent.season == season,
+                         SeasonRecapEvent.event_type.in_(
+                             ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
+                              'rookie_pick', 'retirement')))
+                 .order_by(SeasonRecapEvent.id.desc()).limit(limit).all())
+        moveRows = [{
+            "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
+            "playerId": m.player_id, "player": m.player_name,
+            "position": m.position, "rating": m.rating, "detail": m.detail,
+        } for m in moves]
+    finally:
+        session.close()
+
+    # ---- walk-year players, and who cannot be kept ----
+    expiring = []
+    for team in getattr(tm, 'teams', None) or []:
+        walkers = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                   if p is not None and (getattr(p, 'termRemaining', 99) or 99) <= 1
+                   and not getattr(p, 'willRetire', False)]
+        # ⚠️ THE STORY IS WHO THE CLUB CANNOT KEEP. `RESIGN_LIMIT_PER_OFFSEASON` is 2, so
+        # a club with three expiring players is losing one for nothing whatever it wants.
+        overLimit = max(0, len(walkers) - int(RESIGN_LIMIT_PER_OFFSEASON))
+        # ⚠️ ENUMERATE THE SORTED LIST. This iterated the sorted order and then asked
+        # `walkers.index(p)` — the position in the UNSORTED list — so `cannotKeep` landed on
+        # whoever happened to sit first in the roster dict rather than on the weakest, which
+        # is the one thing the flag claims to mean.
+        for rank, p in enumerate(sorted(walkers,
+                                        key=lambda x: getattr(x, 'playerRating', 0))):
+            expiring.append({
+                "playerId": getattr(p, 'id', None), "name": p.name,
+                "position": p.position.name,
+                "rating": round(getattr(p, 'playerRating', 0), 1),
+                "team": teamBlob(getattr(team, 'id', None)),
+                # True for the WEAKEST of an over-limit club's walk-years — the ones the
+                # re-sign slots will not stretch to.
+                "cannotKeep": overLimit > 0 and rank < overLimit,
+            })
+
+    # ---- the block ----
+    block = []
+    tradingOn = tradingEnabled()
+    if tradingOn and sm and sm.currentSeason:
+        try:
+            from managers.tradeManager import TradeMarket
+            brain = sm._foBrainForOffseason()
+            brain.season, brain.week = season, week or 1
+            market = TradeMarket(floosball_app.playerManager, tm, brain, season, week or None)
+            for team in getattr(tm, 'teams', None) or []:
+                for listing in market.listingsFor(team):
+                    block.append({
+                        "playerId": getattr(listing.player, 'id', None),
+                        "name": listing.player.name,
+                        "position": listing.player.position.name,
+                        "rating": round(getattr(listing.player, 'playerRating', 0), 1),
+                        "team": teamBlob(getattr(team, 'id', None)),
+                        "reason": listing.trigger,
+                        "ask": round(listing.ask, 1),
+                    })
+        except Exception as e:
+            logger.warning(f"Could not build the block: {e}")
+
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=30")
+    return build_success_response({
+        "season": season,
+        "week": week,
+        "tradingEnabled": bool(tradingOn),
+        "draftOrder": order,
+        "expiring": expiring,
+        "block": block,
+        "trades": tradeRows,
+        "moves": moveRows,
+    })
+
+
+def _teamWinPct(team) -> float:
+    """Worst-first ordering key. Missing clubs sort last rather than crashing the page.
+
+    ⚠️ THE RECORD LIVES IN `seasonTeamStats`. THERE IS NO `team.wins`, AND READING IT
+    RETURNS 0 FOR ALL 32 CLUBS FOREVER. This did exactly that: every club came back at the
+    `played == 0` fallback of 0.5, `sorted` is stable, and the draft order silently became
+    **team-id order** rather than worst-first — so the fan-facing order, and every "traded"
+    flag hanging off it, named the wrong clubs. Nothing raises, because a missing attribute
+    through `getattr` is indistinguishable from a club that has not played yet.
+
+    ⚠️ THIS IS THE SECOND TIME THE SAME ATTRIBUTE HAS BITTEN. `tradeManager` read it once
+    and it flattened the entire contention gradient the market runs on — 0 expiring-surplus
+    listings out of 1,468 — which is why the comment there names it in capitals. Read it
+    through the same shape that fix landed on, and count TIES, which a two-term reading
+    silently drops.
+    """
+    if team is None:
+        return 2.0
+    stats = getattr(team, 'seasonTeamStats', None) or {}
+    wins = float(stats.get('wins', 0) or 0)
+    losses = float(stats.get('losses', 0) or 0)
+    ties = float(stats.get('ties', 0) or 0)
+    played = wins + losses + ties
+    return (wins / played) if played else 0.5
+
+
+@app.get("/api/draft/class")
+def get_draft_class(response: Response,
+                    user: Optional[_User] = Depends(_getOptionalUser)):
+    """This season's rookie class, through the viewing club's own scouting.
+
+    The class is generated at SEASON START and drafted in the offseason, so it is
+    visible and scoutable all season long. That visibility is what makes a pick a
+    tradeable asset with a known shape — "this year has a 99-potential quarterback at
+    the top, so pick 1 is precious" — and it runs the bottom-feeder story all year
+    rather than for one afternoon.
+
+    ⚠️ CURRENT RATING IS A FACT AND POTENTIAL IS A BAND. He exists and plays at that
+    level; what he might BECOME is the scouted quantity, and it is the only thing worth
+    arguing about. The band narrows as the season runs, so a pick traded in week 3 is
+    speculation on a blurry class and the same pick at week 22 is a priced asset.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    club = _viewingClubFor(user)
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 1) or 1
+
+    entries = []
+    for p in floosball_app.playerManager.activePlayers:
+        if not getattr(p, 'is_upcoming_rookie', False):
+            continue
+        entries.append({
+            "playerId": getattr(p, 'id', None),
+            "name": p.name,
+            "position": p.position.name,
+            "rating": round(getattr(p, 'playerRating', 0), 1),
+            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+            "ceilingRange": _scoutedCeiling(p, club),
+        })
+    # ⚠️ ORDERED BY WHAT HE IS TODAY, NOT BY WHAT HE MIGHT BECOME. Sorting on the
+    # believed ceiling would hand every reader a ranked board and quietly undo the
+    # uncertainty — the point is that clubs DISAGREE about that order.
+    entries.sort(key=lambda e: -e["rating"])
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=60")
+    return build_success_response({
+        "season": season,
+        "week": week,
+        "viewingTeamId": getattr(club, 'id', None) if club else None,
+        "classSize": len(entries),
+        "prospects": entries,
+    })
+
+
 @app.get("/api/teams/{team_id}/prospects")
-def get_team_prospects(team_id: int):
+def get_team_prospects(team_id: int, response: Response,
+                       user: Optional[_User] = Depends(_getOptionalUser)):
     """Prospects stashed in this team's pipeline.
 
     Surfaces the full list with development context so the UI can show progress,
@@ -8254,7 +8636,8 @@ def get_team_prospects(team_id: int):
     if not team:
         raise HTTPException(404, "Team not found")
 
-    from constants import PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD
+    from constants import (PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD,
+                           PROSPECT_SLOT_CAP_PER_POSITION)
     from database.connection import get_session
     from database.models import PlayerRatingHistory
 
@@ -8304,12 +8687,23 @@ def get_team_prospects(team_id: int):
             "draftSeason": draftSeason,
             "isUndrafted": bool(getattr(p, 'is_undrafted', False)),
             "ratingHistory": history,
+            # ⚠️ THE CLUB'S OWN READ, NOT THE TRUTH. A team page shows THAT club's
+            # scouting — which is why the band comes from `team` here and from the
+            # viewer's favourite club everywhere else.
+            "ceilingRange": _scoutedCeiling(p, team),
         })
     prospects.sort(key=lambda x: -x['rating'])
+    # The band is this club's, not the caller's, so it is the same for every reader —
+    # but it still moves week to week as the band narrows, so it cannot be cached long.
+    response.headers["Cache-Control"] = "public, max-age=60"
     return build_success_response({
         "teamId": team_id,
         "prospects": prospects,
-        "slotCapPerPosition": 2,  # mirrors constants.PROSPECT_SLOT_CAP_PER_POSITION
+        # ⚠️ READ, NOT MIRRORED. This was the literal `2` with a comment saying it
+        # mirrored the constant, sitting between two lines that import theirs — so the
+        # frontend would have kept drawing two slots the day the cap moved, and the
+        # comment would have kept insisting it was in sync.
+        "slotCapPerPosition": PROSPECT_SLOT_CAP_PER_POSITION,
         "developmentWindow": PROSPECT_DEVELOPMENT_WINDOW,
         "promotionThreshold": PROSPECT_PROMOTION_RATING_THRESHOLD,
     })
@@ -12819,7 +13213,7 @@ def _requireOwnClub(user, teamId: int):
     if not favorite:
         raise HTTPException(400, "Pick a favorite team before having your say")
     if teamId is None or int(favorite) != int(teamId):
-        raise HTTPException(403, "You can only have your say about your own club")
+        raise HTTPException(403, "You can only have your say about your own team")
 
 
 def _playerTeamId(playerId: int):
@@ -13140,7 +13534,7 @@ def post_to_game_feed(gameId: int, req: _FeedPostRequest,
         raise HTTPException(400, "The feed is not enabled")
     teamId = getattr(user, 'favorite_team_id', None)
     if not teamId:
-        raise HTTPException(400, "Pick a club before you shout at a game")
+        raise HTTPException(400, "Pick a team before you shout at a game")
     from database.connection import get_session
     from database.repositories.feed_repository import FeedError
     session = get_session()
@@ -14738,7 +15132,7 @@ def _announcementIcon(icon: str, teamId):
         return None, icon, icon.capitalize()
     if icon == 'team':
         if teamId is None:
-            raise HTTPException(400, "Pick a club, or choose a different icon")
+            raise HTTPException(400, "Pick a team, or choose a different icon")
         return teamId, None, None
     if icon != 'none':
         raise HTTPException(400, f"Unknown icon '{icon}'")
