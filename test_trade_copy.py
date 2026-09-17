@@ -19,6 +19,10 @@ SOURCE = 'managers/tradeManager.py'
 # A copy rule that covers most of the copy is a rule nobody can rely on.
 FUNCS = ('sellerWhy', 'buyerWhy', 'pickInquiriesFor', 'bidForPick')
 GENDERED = re.compile(r"\b(he|him|his|she|her|hers|man|men)\b", re.IGNORECASE)
+# ⚠️ An em or en dash reads as AI-written in this app's voice (owner, standing). It is a
+# separate rule from the two below and was missed by the first version of this sweep, which
+# is how three of them reached the page.
+DASHES = ('\u2014', '\u2013')
 
 
 def _stringsIn(funcName):
@@ -75,3 +79,16 @@ def test_theSweepActuallySeesTheStrings():
     allText = ' '.join(t for fn in FUNCS for t in _stringsIn(fn))
     assert any(w in allText for w in ('contract', 'window', 'hole', 'draft')), \
         'the strings found do not look like the reasoning copy'
+
+
+def test_theReasoningHasNoEmDashes():
+    """⚠️ SEPARATE FROM THE OTHER TWO RULES AND MISSED BY THE FIRST SWEEP. Three dashed
+    clauses reached the page and had to be normalized out of already-settled rows, which is
+    the cost of a persisted string: there is no re-render that fixes it later.
+
+    Bite check: put " \u2014 " back in any reasoning string and this fails.
+    """
+    for fn in FUNCS:
+        for text in _stringsIn(fn):
+            for d in DASHES:
+                assert d not in text, f"{fn} has an em/en dash in user-facing copy: {text!r}"
