@@ -70,7 +70,18 @@ expect("at-bat flip resets the continuation counter", g._inningsContinues == 0)
 
 # ── 2. Full games terminate + self-limit, ladder OFF and ON ──────────────
 def playSome(n, ladder, seed0=0):
+    # ⚠️ SEED NUMPY TOO, OR THIS IS NOT DETERMINISTIC AND NEVER WAS. `random.seed` alone
+    # looks like it pins the run, but player generation goes through
+    # `np.random.normal` (`floosball_player.getPlayerAttributes`), so every game was
+    # played by different players run to run. Measured: the "continuations occur under the
+    # ladder" check drew ZERO about once in 13 runs and failed the whole file, which is why
+    # it kept surfacing as an unexplained intermittent in full-suite runs.
     random.seed(seed0)
+    try:
+        import numpy as _np
+        _np.random.seed(seed0)
+    except Exception:
+        pass
     conts = 0; maxCap = 0; completed = 0
     orig = GFMT.InningsFormat.possessionReceiver
     box = {'c': 0}
