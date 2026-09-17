@@ -48,7 +48,6 @@ async def main(seasons, enabled, treasury=0):
     import constants
     from managers import tradeManager
     constants.TRADING_ENABLED = enabled
-    tradeManager.TRADING_ENABLED = enabled
 
     container, app = await boot()
     sm, pm = app.seasonManager, app.playerManager

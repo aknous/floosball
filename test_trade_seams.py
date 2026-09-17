@@ -347,7 +347,6 @@ def test_running_an_offseason_pass_twice_trades_once():
     originalFlag = constants.TRADING_ENABLED
     try:
         constants.TRADING_ENABLED = True
-        tradeManager.TRADING_ENABLED = True
 
         def spy(*a, **kw):
             calls.append(kw.get('week', a[-1] if a else None))
@@ -368,7 +367,6 @@ def test_running_an_offseason_pass_twice_trades_once():
     finally:
         tradeManager.runWeeklyPass = original
         constants.TRADING_ENABLED = originalFlag
-        tradeManager.TRADING_ENABLED = originalFlag
     print("PASS a re-run trades once, and the two windows are independent")
 
 

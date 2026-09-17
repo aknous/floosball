@@ -233,11 +233,11 @@ def test_the_club_checks_whether_the_ROSTER_actually_improves():
     m = _market(teams)
 
     worse = FakePlayer(811, 76, Position.TE, termRemaining=1)
-    assert not m.rosterWouldImprove(buyer, worse, good, 1), \
+    assert not m.rosterWouldImprove(buyer, worse, good), \
         "a 76 on one year replaced an 85 on two"
 
     better = FakePlayer(812, 90, Position.TE, termRemaining=1)
-    assert m.rosterWouldImprove(buyer, better, good, 1)
+    assert m.rosterWouldImprove(buyer, better, good)
     print("PASS a club will not make itself worse on every axis at once")
 
 
@@ -251,7 +251,7 @@ def test_the_backstop_does_NOT_block_a_TIME_trade():
     buyer.rosterDict['te'] = incumbent
     m = _market(teams)
     younger = FakePlayer(814, 78, Position.TE, termRemaining=4)
-    assert m.rosterWouldImprove(buyer, younger, incumbent, 4), \
+    assert m.rosterWouldImprove(buyer, younger, incumbent), \
         "a four-year 78 for a walk-year 82 was refused — that is the horizon trade"
     print("PASS a worse player with real term is still a trade worth making")
 
@@ -292,6 +292,77 @@ def test_the_buyer_does_not_SEND_a_better_player_at_the_position_it_is_fixing():
     buyer.rosterDict['qb'] = strong
     m = _market(teams)
     weaker = FakePlayer(821, 74, Position.QB, termRemaining=1)
-    assert not m.rosterWouldImprove(buyer, weaker, strong, 1), \
+    assert not m.rosterWouldImprove(buyer, weaker, strong), \
         "sending a 79 to receive a 74 counted as an improvement"
     print("PASS a club will not pay for an upgrade with a better player at that position")
+
+
+def test_theRosterBackstopIsNotFooledByTheNeedTilt():
+    """⚠️ A BACKSTOP THAT SHARES THE MODEL'S BIAS CANNOT CATCH THE MODEL'S ERROR.
+
+    `rosterWouldImprove` asked its question through `ratingFor`, which adds
+    `needTilt x (defensive - offensive) / 2` — so for a club short of defense a lopsided
+    70 reads as 80 and an offense-heavy 79 reads as 68, and the check waved the downgrade
+    through. Measured over 14 seasons that let 12 trades cut a higher-rated man than the
+    one bought, 11 at the SAME position and SAME contract term.
+
+    Bite check: with `ratingFor` in the comparison this returns True.
+    """
+    teams = _teams()
+    market = _market(teams)
+    market.needTilt = lambda team: 1.0          # a club that badly wants defense
+
+    incoming = FakePlayer(901, 70, Position.WR, termRemaining=1)
+    incoming.offensiveRating, incoming.defensiveRating = 60, 80   # tilts UP to 80
+    held = FakePlayer(902, 79, Position.WR, termRemaining=1)
+    held.offensiveRating, held.defensiveRating = 90, 68           # tilts DOWN to 68
+
+    buyer = teams[0]
+    assert market.ratingFor(buyer, incoming) > market.ratingFor(buyer, held), \
+        'fixture must actually invert under the tilt, or this proves nothing'
+
+    assert market.rosterWouldImprove(buyer, incoming, held) is False, \
+        'cutting a 79 to install a 70 on the same term is worse on every axis'
+
+
+def test_theBackstopStillAllowsAHorizonTrade():
+    """The rule is worse on the field AND no control gained. Gaining control still passes,
+    which is what stops the blunt reading killing the plan's horizon trade."""
+    teams = _teams()
+    market = _market(teams)
+    market.needTilt = lambda team: 0.0
+    incoming = FakePlayer(903, 74, Position.WR, termRemaining=3)
+    incoming.offensiveRating = incoming.defensiveRating = 74
+    held = FakePlayer(904, 78, Position.WR, termRemaining=1)
+    held.offensiveRating = held.defensiveRating = 78
+    assert market.rosterWouldImprove(teams[0], incoming, held) is True
+
+
+def test_theBackstopWillNotCountAProjectedResignAsControlGained():
+    """⚠️ PROJECT ONE SIDE AND NOT THE OTHER AND EVERY COMPARISON TILTS TOWARD THE DEAL.
+
+    `bidFor` passes `buyerTerm` = actual term PLUS `retentionTerm` — what the buyer expects
+    if it re-signs him. That was compared against the displaced man's ACTUAL term, so a
+    walk-year-for-walk-year swap read as control gained and the downgrade was allowed. The
+    incumbent could be re-signed just as easily. Measured, this let nine downgrades through
+    even after the backstop stopped using the need-tilted rating, the worst cutting an 84
+    back to install a 78.
+
+    Bite check: passing a projected `incomingTerm` of 3 here returned True.
+    """
+    teams = _teams()
+    buyer = teams[0]
+    incumbent = FakePlayer(830, 84, Position.RB, termRemaining=1)
+    buyer.rosterDict['rb'] = incumbent
+    m = _market(teams)
+    m.needTilt = lambda team: 0.0
+
+    worse = FakePlayer(831, 78, Position.RB, termRemaining=1)
+    assert m.rosterWouldImprove(buyer, worse, incumbent) is False, \
+        'a 78 on a walk year replaced an 84 on a walk year — no control was gained'
+
+    # and the signature gives a caller no way to supply a term at all
+    import inspect
+    params = list(inspect.signature(m.rosterWouldImprove).parameters)
+    assert 'incomingTerm' not in params, \
+        'the term must be read off the players, or a caller can pass the wrong currency'

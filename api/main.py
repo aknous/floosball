@@ -6084,7 +6084,8 @@ async def get_app_settings():
         settings = {row.key: row.value for row in rows}
         # Coerce booleans for keys we know are boolean (anomaly_intensity stays a string).
         for boolKey in ('feedback_visible', 'survey_visible',
-                        'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled'):
+                        'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled',
+                        'trading_enabled'):
             if boolKey in settings:
                 settings[boolKey] = str(settings[boolKey]).lower() == 'true'
         # Surface the awakened-charge dials at their EFFECTIVE value (an admin-set app_setting if present,
@@ -6100,6 +6101,11 @@ async def get_app_settings():
             ('awakened_def_fire_chance', AWAKENED_DEF_FIRE_CHANCE),
         ):
             settings.setdefault(key, default)
+        # ⚠️ NOT SEEDED INTO app_settings. An ABSENT row means "use the constant", which is
+        # what lets a deploy change the default; seeding one would freeze whatever value
+        # happened to be live at the moment the row was written.
+        from constants import TRADING_ENABLED as _tradingDefault
+        settings.setdefault('trading_enabled', bool(_tradingDefault))
         return settings
     finally:
         session.close()
@@ -6116,6 +6122,7 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text',
                'halftime_show_url', 'halftime_show_pause_seconds',
                'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled', 'anomaly_intensity',
+               'trading_enabled',
                'awakened_involve_qb', 'awakened_involve_rb', 'awakened_involve_wr', 'awakened_involve_te',
                'awakened_involve_k', 'awakened_def_fire_chance'}
     session = get_session()
@@ -8339,7 +8346,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
-    from constants import TRADING_ENABLED, RESIGN_LIMIT_PER_OFFSEASON
+    from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON
     from database.connection import get_session
     from database.models import Trade, SeasonRecapEvent, DraftPick
 
@@ -8367,6 +8374,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                          session.query(DraftPick).filter_by(season=season, used=False).all()}
         for slot, originId in enumerate(ranked, start=1):
             ownerId = ownerByOrigin.get(originId, originId)
+            originStats = getattr(teamsById.get(originId), 'seasonTeamStats', None) or {}
             order.append({
                 "slot": slot,
                 "originalTeam": teamBlob(originId),
@@ -8374,6 +8382,15 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                 # has given away the #1 selection, and this row is where a fan sees it.
                 "owner": teamBlob(ownerId),
                 "traded": ownerId != originId,
+                # ⚠️ THE ORIGINAL CLUB'S RECORD, NOT THE OWNER'S — the slot resolves off
+                # where THAT club finishes, so the owner's record explains nothing about
+                # why the pick sits here. Without it the order is a list of names in an
+                # order a reader cannot account for.
+                "record": {
+                    "wins": int(originStats.get('wins', 0) or 0),
+                    "losses": int(originStats.get('losses', 0) or 0),
+                    "ties": int(originStats.get('ties', 0) or 0),
+                },
             })
 
         trades = (session.query(Trade)
@@ -8409,7 +8426,12 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
         # ⚠️ THE STORY IS WHO THE CLUB CANNOT KEEP. `RESIGN_LIMIT_PER_OFFSEASON` is 2, so
         # a club with three expiring players is losing one for nothing whatever it wants.
         overLimit = max(0, len(walkers) - int(RESIGN_LIMIT_PER_OFFSEASON))
-        for p in sorted(walkers, key=lambda x: getattr(x, 'playerRating', 0)):
+        # ⚠️ ENUMERATE THE SORTED LIST. This iterated the sorted order and then asked
+        # `walkers.index(p)` — the position in the UNSORTED list — so `cannotKeep` landed on
+        # whoever happened to sit first in the roster dict rather than on the weakest, which
+        # is the one thing the flag claims to mean.
+        for rank, p in enumerate(sorted(walkers,
+                                        key=lambda x: getattr(x, 'playerRating', 0))):
             expiring.append({
                 "playerId": getattr(p, 'id', None), "name": p.name,
                 "position": p.position.name,
@@ -8417,12 +8439,13 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                 "team": teamBlob(getattr(team, 'id', None)),
                 # True for the WEAKEST of an over-limit club's walk-years — the ones the
                 # re-sign slots will not stretch to.
-                "cannotKeep": overLimit > 0 and walkers.index(p) < overLimit,
+                "cannotKeep": overLimit > 0 and rank < overLimit,
             })
 
     # ---- the block ----
     block = []
-    if TRADING_ENABLED and sm and sm.currentSeason:
+    tradingOn = tradingEnabled()
+    if tradingOn and sm and sm.currentSeason:
         try:
             from managers.tradeManager import TradeMarket
             brain = sm._foBrainForOffseason()
@@ -8446,7 +8469,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     return build_success_response({
         "season": season,
         "week": week,
-        "tradingEnabled": bool(TRADING_ENABLED),
+        "tradingEnabled": bool(tradingOn),
         "draftOrder": order,
         "expiring": expiring,
         "block": block,
@@ -8456,12 +8479,28 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
 
 
 def _teamWinPct(team) -> float:
-    """Worst-first ordering key. Missing clubs sort last rather than crashing the page."""
+    """Worst-first ordering key. Missing clubs sort last rather than crashing the page.
+
+    ⚠️ THE RECORD LIVES IN `seasonTeamStats`. THERE IS NO `team.wins`, AND READING IT
+    RETURNS 0 FOR ALL 32 CLUBS FOREVER. This did exactly that: every club came back at the
+    `played == 0` fallback of 0.5, `sorted` is stable, and the draft order silently became
+    **team-id order** rather than worst-first — so the fan-facing order, and every "traded"
+    flag hanging off it, named the wrong clubs. Nothing raises, because a missing attribute
+    through `getattr` is indistinguishable from a club that has not played yet.
+
+    ⚠️ THIS IS THE SECOND TIME THE SAME ATTRIBUTE HAS BITTEN. `tradeManager` read it once
+    and it flattened the entire contention gradient the market runs on — 0 expiring-surplus
+    listings out of 1,468 — which is why the comment there names it in capitals. Read it
+    through the same shape that fix landed on, and count TIES, which a two-term reading
+    silently drops.
+    """
     if team is None:
         return 2.0
-    wins = float(getattr(team, 'wins', 0) or 0)
-    losses = float(getattr(team, 'losses', 0) or 0)
-    played = wins + losses
+    stats = getattr(team, 'seasonTeamStats', None) or {}
+    wins = float(stats.get('wins', 0) or 0)
+    losses = float(stats.get('losses', 0) or 0)
+    ties = float(stats.get('ties', 0) or 0)
+    played = wins + losses + ties
     return (wins / played) if played else 0.5
 
 

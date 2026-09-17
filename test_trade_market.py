@@ -1,3 +1,4 @@
+import sys
 """The trade market — triggers, the auction, legality, and the seams.
 
 ⚠️ THE SEAM TESTS MATTER MORE THAN THE ARITHMETIC. Every one of them is a repeat of a
@@ -344,7 +345,6 @@ def test_the_market_is_shut_after_the_deadline():
     original = constants.TRADING_ENABLED
     try:
         constants.TRADING_ENABLED = True
-        tradeManager.TRADING_ENABLED = True
         seller = FakeTeam(1, 'Rebuild', wins=2, losses=20)
         buyer = FakeTeam(2, 'Contend', wins=20, losses=2)
         seller.rosterDict['wr1'] = FakePlayer(10, 84, termRemaining=1)
@@ -354,22 +354,50 @@ def test_the_market_is_shut_after_the_deadline():
         assert out == []
     finally:
         constants.TRADING_ENABLED = original
-        tradeManager.TRADING_ENABLED = original
     print(f"PASS nothing trades after week {constants.GM_ACTIVE_WEEK}")
 
 
-def test_the_flag_shuts_the_whole_market():
-    """⚠️ EVERY RISKY SYSTEM HERE SHIPPED BEHIND A FLAG — RULE_VOTE_ENABLED,
-    WEATHER_ENABLED, RUNNER_MOVE_ENABLED. Trading is off until measured."""
-    assert constants.TRADING_ENABLED is False, \
-        "TRADING_ENABLED defaults ON — it must stay off until the market is measured"
-    seller = FakeTeam(1, 'Rebuild', wins=2, losses=20)
-    buyer = FakeTeam(2, 'Contend', wins=20, losses=2)
-    seller.rosterDict['wr1'] = FakePlayer(10, 84, termRemaining=1)
-    assert tradeManager.runWeeklyPass(
-        FakePlayerManager([FakePlayer(99, 74)]), FakeTeamManager([seller, buyer]),
-        StubBrain(), 3, week=15) == []
-    print("PASS TRADING_ENABLED is False and the pass is a no-op")
+def test_the_kill_switch_shuts_the_whole_market():
+    """⚠️ THE MARKET MOVES REAL PLAYERS BETWEEN REAL ROSTERS, so it needs a stop that does
+    not wait for a deploy. The flag now ships ON (owner, 2026-09-17) so production's first
+    offseason has a live market; what must keep working is the OFF path.
+
+    ⚠️ IT IS TESTED THROUGH `constants.tradingEnabled`, NOT THE CONSTANT. An imported name
+    is a COPY taken at import time, so a switch written as a module-level read is inert —
+    `TRADE_WINDOW_ENABLED` already paid for that lesson. Monkeypatching the FUNCTION is the
+    only version of this test that proves the gate reads it live.
+
+    Bite check: restore `if not TRADING_ENABLED` in `runWeeklyPass` and this trades anyway.
+    """
+    original = constants.tradingEnabled
+    try:
+        constants.tradingEnabled = lambda session=None: False
+        seller = FakeTeam(1, 'Rebuild', wins=2, losses=20)
+        buyer = FakeTeam(2, 'Contend', wins=20, losses=2)
+        seller.rosterDict['wr1'] = FakePlayer(10, 84, termRemaining=1)
+        assert tradeManager.runWeeklyPass(
+            FakePlayerManager([FakePlayer(99, 74)]), FakeTeamManager([seller, buyer]),
+            StubBrain(), 3, week=15) == [], \
+            'the kill switch did not reach the weekly pass'
+    finally:
+        constants.tradingEnabled = original
+    print("PASS the admin kill switch stops the pass dead")
+
+
+def test_the_switch_falls_back_to_the_constant_when_the_db_is_unreachable():
+    """⚠️ FAILS OPEN. A locked or missing database must not silently switch a live market
+    off half way through an offseason — that leaves some clubs having traded and others
+    not, which is worse than either state."""
+    import constants as C
+    realModels = sys.modules.get('database.models')
+    sys.modules['database.models'] = None        # force the import inside to raise
+    try:
+        assert C.tradingEnabled() is bool(C.TRADING_ENABLED)
+    finally:
+        if realModels is not None:
+            sys.modules['database.models'] = realModels
+        else:
+            sys.modules.pop('database.models', None)
 
 
 # ------------------------------------------------ pass-the-parcel

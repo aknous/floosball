@@ -53,7 +53,6 @@ async def main(seasons, treasury):
     from managers import tradeManager
     enabled = os.environ.get('SHAPE_ARM', 'on') == 'on'
     constants.TRADING_ENABLED = enabled
-    tradeManager.TRADING_ENABLED = enabled
 
     logging.disable(logging.NOTSET)
     logging.getLogger().setLevel(logging.ERROR)
@@ -167,12 +166,43 @@ async def main(seasons, treasury):
 
     realPickSettle = tradeManager.settlePickTrade
 
+    def describe(obj):
+        """⚠️ ONE DESCRIBER, SHARED BY BOTH SETTLEMENT PATHS. It lived inside `spySettle`,
+        so the pick path could not reach it and built its own entries by hand — enriching
+        only the PICK pieces. Every player and prospect inside a trade-up therefore rendered
+        as "details unavailable": measured, 59 of 80 prospect pieces in the ledger, all of
+        them in a pick_swap."""
+        return {
+            'name': getattr(obj, 'name', '?'),
+            'position': getattr(getattr(obj, 'position', None), 'name', None),
+            'rating': round(getattr(obj, 'playerRating', 0) or 0, 1),
+            'term': int(getattr(obj, 'termRemaining', 0) or 0),
+            'ceiling': (obj.computeCeilingRating()
+                        if hasattr(obj, 'computeCeilingRating') else None),
+            'prospectSeasons': getattr(obj, 'prospect_seasons', None),
+        }
+
     def spyPickSettle(seasonManager, listing, winner, season, *a, **kw):
         """⚠️ COUNTED AND RECORDED HERE BECAUSE NOTHING ELSE SEES IT. `settlePickTrade` is a
         separate path, so the ledger spy on `settleTrade` never reaches it — and the harness
         sets the root logger to ERROR, so its own INFO line is invisible too. Grepping the
         log for "TRADE UP" therefore reported zero whether or not any happened, and a
-        trade-up would have been missing from the ledger entirely."""
+        trade-up would have been missing from the ledger entirely.
+
+        ⚠️ THE PIECES ARE DESCRIBED BEFORE SETTLEMENT, NOT AFTER. `settlePickTrade` moves
+        them to the seller, so a lookup on the BUYER afterwards finds nothing and every
+        player and prospect in a trade-up renders as "details unavailable" — 59 of 80
+        prospect pieces in the ledger, all in a pick_swap. The player path already captures
+        first and settles second; this one did the reverse."""
+        described = {}
+        for piece in winner.pieces:
+            if piece['kind'] == 'pick':
+                continue
+            obj = (tradeManager._findRostered(winner.team, piece['id'])
+                   or tradeManager._findProspect(winner.team, piece['id']))
+            if obj is not None:
+                described[piece['id']] = describe(obj)
+
         out = realPickSettle(seasonManager, listing, winner, season, *a, **kw)
         shape.setdefault('pickWhy', Counter())['SETTLED' if out else 'settle_refused'] += 1
         if out is not None:
@@ -186,6 +216,8 @@ async def main(seasons, treasury):
                 entry = {'kind': piece['kind'], 'name': piece['name'],
                          'toSeller': round(piece.get('value', 0), 1),
                          'toBuyer': round(piece.get('value', 0), 1)}
+                if piece['kind'] != 'pick' and piece['id'] in described:
+                    entry.update(described[piece['id']])
                 if piece['kind'] == 'pick':
                     d = piece.get('detail') or {}
                     # ⚠️ THE EXPECTED SLOT, NOT THE RAW ONE. `slot` is the ORIGINAL club's
@@ -342,17 +374,6 @@ async def main(seasons, treasury):
         buyerVals = {(a['kind'], a['id']): round(a['value'], 1)
                      for a in mkt._tradeableAssets(buyer, valuingTeam=buyer,
                                                    swapPosition=swapPos)}
-
-        def describe(obj):
-            return {
-                'name': getattr(obj, 'name', '?'),
-                'position': getattr(getattr(obj, 'position', None), 'name', None),
-                'rating': round(getattr(obj, 'playerRating', 0) or 0, 1),
-                'term': int(getattr(obj, 'termRemaining', 0) or 0),
-                'ceiling': (obj.computeCeilingRating()
-                            if hasattr(obj, 'computeCeilingRating') else None),
-                'prospectSeasons': getattr(obj, 'prospect_seasons', None),
-            }
 
         record = {
             'season': season, 'week': week,
@@ -529,12 +550,24 @@ async def main(seasons, treasury):
         print(f"    league inventory, mean per pass: {sum(p for p,_ in inv)/len(inv):.0f} "
               f"tradeable picks, {sum(x for _,x in inv)/len(inv):.0f} prospects "
               f"across {len(tm.teams)} clubs")
-        total = sum(why.values()) or 1
-        for k, label in (('built', 'bundle built (a real bid)'),
-                         ('barNotCleared', "could not reach the seller's price"),
-                         ('noAssets', '  ...of those, held NOTHING to offer'),
-                         ('tooExpensive', 'buyer refused: cost exceeded the gain')):
-            print(f"    {label:<42} {why.get(k,0):>6}  {why.get(k,0)/total:>5.0%}")
+        # ⚠️ THE EARLY REFUSALS BELONG HERE TOO. They reject BEFORE `_assemble` runs, so a
+        # funnel counting only assembly outcomes hides whichever gate is actually doing the
+        # work — and after the roster-logic fixes that is most of it. It also made the
+        # percentages meaningless, since they were shares of a denominator that excluded
+        # every early exit.
+        rows = (('notANeed', 'not a position this club is short at'),
+                ('underTheAsk', "worth less to the buyer than the seller's ask"),
+                ('noGainAfterFee', 'no gain once the cut fee is paid'),
+                ('rosterNotBetter', 'the roster would not be better'),
+                ('swapWorse', 'would send a better man at that position'),
+                ('barNotCleared', "could not reach the seller's price"),
+                ('noAssets', '  ...of those, held NOTHING to offer'),
+                ('tooExpensive', 'buyer refused: cost exceeded the gain'),
+                ('built', 'BUNDLE BUILT (a real bid)'))
+        total = sum(why.get(k, 0) for k, _ in rows if k != 'noAssets') or 1
+        for k, label in rows:
+            if why.get(k, 0) or k == 'built':
+                print(f"    {label:<45} {why.get(k,0):>5}  {why.get(k,0)/total:>4.0%}")
 
     print(f"\n  ── the funnel, by trigger ──")
     listed = shape.get('listedBy', Counter())

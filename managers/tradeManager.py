@@ -28,11 +28,12 @@ See docs/TRADING_PLAN.md §3.
 import logging
 
 import trading
-from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
+from constants import (GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_LISTINGS_PER_TEAM, TRADE_BIDS_PER_TEAM_PER_WEEK,
                        TRADE_CANDIDATES_PER_LISTING, TRADE_MAX_PIECES,
                        TRADE_PICK_HORIZON_SEASONS, FO_CUT_UPGRADE_MARGIN,
                        TRADE_MIN_CERTAINTY, TRADE_INQUIRY_ENABLED, CUT_FEE_RATE,
+                       TRADE_CUT_FEE_WEIGHT,
                        RESIGN_LIMIT_PER_OFFSEASON,
                        TRADE_INQUIRIES_PER_TEAM, TRADE_HUMP_BAND,
                        TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
@@ -535,9 +536,9 @@ class TradeMarket:
         the playoff line bought anything in-season, and 37 of 44 in-season acquisitions
         were walk-year rentals.
 
-        ⚠️ OFFSEASON ONLY (owner). In-season the market stays contract congestion; a club
-        that wants to get over the hump does it between seasons, when it can see the table
-        it finished on and a full season of the player it is buying still lies ahead.
+        ⚠️ BOTH PHASES, BUT THEY ARE DIFFERENT MARKETS — see the gate below. This said
+        OFFSEASON ONLY, which was true of the blockbuster it was written for and became
+        false the moment the in-season branch landed; the two sat fifteen lines apart.
 
         Returned as `Listing` objects so the bid, the auction and settlement are the SAME
         code — an inquiry differs in who starts it and what it costs, not in what a trade
@@ -1275,6 +1276,7 @@ class TradeMarket:
         # `topNeeds`: without this, position value cancels out of the decision entirely and
         # the market trades what is cheap rather than what matters.
         if getattr(getattr(player, 'position', None), 'value', None) not in self.topNeeds(buyer):
+            self.assembleFail['notANeed'] = self.assembleFail.get('notANeed', 0) + 1
             return None
 
         # What he is worth TO THE BUYER, on the buyer's own read of him.
@@ -1344,18 +1346,24 @@ class TradeMarket:
         # `surplus x seasons x weights`, so dividing by the rate and re-applying the weights
         # lands in the same units without inventing an exchange rate.
         if fee > 0:
-            feeCost = (float(fee) / CUT_FEE_RATE) * self._positionWeight(player) * buyerWeight
+            # ⚠️ AT A FRACTION, BECAUSE `displaced` ALREADY CHARGES THIS LOSS. See
+            # `TRADE_CUT_FEE_WEIGHT` — converting the fee 1:1 and subtracting it as well
+            # charged one loss about three times, and measured, the converted fee came to
+            # 2.1-2.8x the displaced value itself.
+            feeCost = ((float(fee) / CUT_FEE_RATE) * self._positionWeight(player)
+                       * buyerWeight * TRADE_CUT_FEE_WEIGHT)
             gross -= feeCost
         net = gross - displaced
         if net <= 0:
+            self.assembleFail['noGainAfterFee'] = self.assembleFail.get('noGainAfterFee', 0) + 1
             return None             # he does not improve this roster, once the cut is paid
 
         # ⚠️ AND THE BLUNT QUESTION, INDEPENDENT OF ALL THAT ARITHMETIC. See
         # `rosterWouldImprove` — the valuation above runs through believed ratings, position
         # weights, retention and a fee, and a yes can still come out of a roster that
         # plainly gets worse.
-        if not self.rosterWouldImprove(buyer, player, self._weakestAt(buyer, player),
-                                       buyerTerm):
+        if not self.rosterWouldImprove(buyer, player, self._weakestAt(buyer, player)):
+            self.assembleFail['rosterNotBetter'] = self.assembleFail.get('rosterNotBetter', 0) + 1
             return None
         # ⚠️ HOW WILLING THIS CLUB IS TO SPEND ASSETS AT THIS POSITION AT ALL — see
         # `TRADE_POSITION_APPETITE`. It is the only place position value decides WHETHER a
@@ -1371,6 +1379,7 @@ class TradeMarket:
             sameLeague=self._sameLeague(listing.team, buyer),
             buyerNowWeight=buyerWeight)
         if worthToBuyer < bar:
+            self.assembleFail['underTheAsk'] = self.assembleFail.get('underTheAsk', 0) + 1
             return None             # he is not worth what this would cost
 
         # ⚠️ TWO VALUATIONS OF THE SAME BUNDLE, AND BOTH ARE LOAD-BEARING. What must clear
@@ -1413,14 +1422,14 @@ class TradeMarket:
         # property of the bundle, and the bundle is sized using `displaced`. Checking early
         # is what produced the wrong answer in the first place.
         swap = _swapPieceOf(pieces, buyer, player)
-        if swap is not None and not self.rosterWouldImprove(
-                buyer, player, swap, buyerTerm):
+        if swap is not None and not self.rosterWouldImprove(buyer, player, swap):
+            self.assembleFail['swapWorse'] = self.assembleFail.get('swapWorse', 0) + 1
             return None
 
         return Bid(buyer, pieces, sum(p['value'] for p in pieces),
                    why=self.buyerWhy(buyer, listing))
 
-    def rosterWouldImprove(self, buyer, incoming, displaced, incomingTerm) -> bool:
+    def rosterWouldImprove(self, buyer, incoming, displaced) -> bool:
         """Does the club actually look better with him in it? (owner, 2026-09-16: "the team
         has to look at what their team looks like with the player they might get back and
         see if that new player actually makes their team better")
@@ -1437,15 +1446,41 @@ class TradeMarket:
         reads as churn. So a downgrade is refused only when the club gains NO control by it:
         worse on the field AND no longer under contract is a loss on every axis, which is
         the only shape this needs to catch.
+
+        ⚠️ ON THE RAW RATING, NEVER `ratingFor` — A BACKSTOP THAT SHARES THE MODEL'S BIAS
+        CANNOT CATCH THE MODEL'S ERROR. This asked the question through the need-tilted
+        read, which is one of the five places the docstring above says a wrong yes comes
+        from. `ratingFor` adds `needTilt x (defensive - offensive) / 2`, and at
+        `TRADE_NEED_MAX_TILT` 1.0 that is the whole half-difference: a lopsided 70 reads as
+        80 to a defense-poor club while an offense-heavy 79 reads as 68, so the check waved
+        through a twelve-point inversion believing it an upgrade. Measured over 14 seasons,
+        **12 trades cut a higher-rated man than the one bought** — 11 of them same position
+        AND same contract term, so no horizon story excuses any of them: Melons took a 70
+        WR and cut a 79, Pops took a 74 RB and cut an 82, each paying assets and a cut fee
+        to get worse. ⚠️ The TILT ITSELF STAYS — a club short of defense genuinely should
+        prefer the defensive half, which is the owner's own instruction, and it still picks
+        WHO goes (`_weakestAt`) and still prices the bid. What it may no longer do is
+        overturn the plain fact that the club got worse.
+
+        ⚠️ AND IT TAKES NO TERM ARGUMENT, BECAUSE THE ONE IT WAS GIVEN WAS THE WRONG
+        CURRENCY. `bidFor` passes `buyerTerm` = `termRemaining + retentionTerm(...)`, the
+        buyer's PROJECTED term if it re-signs him — and that was compared against the
+        displaced man's ACTUAL `termRemaining`. The club could re-sign the incumbent just
+        as easily, so projecting one side and not the other tilts every comparison toward
+        doing the deal, and a walk-year-for-walk-year swap read as control gained. It let
+        nine downgrades through even after the raw-rating fix above, the worst of them
+        cutting an 84 back to install a 78. Both terms are now read off the players here,
+        so no caller can hand this the wrong one.
         """
         if displaced is None:
             return True                     # an empty slot: anything is an improvement
-        inRating = self.ratingFor(buyer, incoming)
-        outRating = self.ratingFor(buyer, displaced)
+        inRating = float(getattr(incoming, 'playerRating', 0) or 0)
+        outRating = float(getattr(displaced, 'playerRating', 0) or 0)
         if inRating >= outRating:
             return True
+        inTerm = int(getattr(incoming, 'termRemaining', 0) or 0)
         outTerm = int(getattr(displaced, 'termRemaining', 0) or 0)
-        return int(incomingTerm) > outTerm
+        return inTerm > outTerm
 
     def _weakestAt(self, buyer, incoming):
         """The man who would have to go, or None if the slot is already open.
@@ -1823,7 +1858,10 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> 
     can target the same roster slot, and A -> B -> A dependencies are possible. Cheaper
     than a batch solver and it matches how the FA draft already runs one pick at a time.
     """
-    if not TRADING_ENABLED:
+    # ⚠️ THE FUNCTION, NOT THE CONSTANT — an imported name is a copy and the admin kill
+    # switch could never reach it. See `constants.tradingEnabled`.
+    from constants import tradingEnabled
+    if not tradingEnabled():
         return []
     if week is not None and int(week) > int(GM_ACTIVE_WEEK):
         return []               # rosters are frozen from the deadline to the offseason

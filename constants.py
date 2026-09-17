@@ -2551,6 +2551,25 @@ LAST_WINDOW_PROMOTE_ENABLED = True
 # a good starter a season. See docs/TRADING_PLAN.md §3.7.
 CUT_FEE_RATE = 50.0
 
+# ⚠️ THE FEE PRICES THE SAME LOSS THE VALUATION ALREADY CHARGES, so it must not enter a
+# trade decision at full weight. `cutFeeFor` is `termRemaining x surplus x CUT_FEE_RATE` and
+# `playerValue` is `surplus x seasonsOfControl x weights` — the same quantity in two
+# currencies. `bidFor` already subtracts the displaced man's VALUE, so converting his fee
+# 1:1 and subtracting that too charges one loss about three times over: measured, the
+# converted fee came to **2.1-2.8x the displaced value itself**, because the fee counts
+# WHOLE remaining seasons while `playerValue` discounts the part-season and weights later
+# years down.
+#
+# ⚠️ IT IS STILL A REAL COST AND MUST NOT BE DROPPED. Treasury pays facility upkeep, so
+# spending it has a genuine opportunity cost, and the fee is what stops a rich club churning
+# its roster. It enters as a minority term rather than a second full price.
+#
+# ⚠️ IT LANDS ALMOST ENTIRELY IN-SEASON, which is how the error surfaced. In the offseason a
+# buyer often has an open slot (holes left by earlier trades) and pays nothing; in-season
+# every roster is full, so a cut — and the fee — is unavoidable. At full weight in-season
+# trades fell to **1.9 a season across 32 clubs**, 14 of 27 of them bunched in week 15.
+TRADE_CUT_FEE_WEIGHT = 0.25
+
 # Replacement level: what a club can always have for free. NOT zero — a roster hole can
 # be filled from the free-agent pool, so an 80 is worth 13 of surplus and not 80. This is
 # the anchor every surplus-over-replacement number in the front office and the trade
@@ -2560,9 +2579,48 @@ REPLACEMENT_RATING = 67.0
 # ============================================================================
 # IN-SEASON AND OFFSEASON TRADING  (docs/TRADING_PLAN.md)
 # ============================================================================
-# ⚠️ OFF UNTIL MEASURED, matching RULE_VOTE_ENABLED / WEATHER_ENABLED /
-# RUNNER_MOVE_ENABLED. Every risky system here shipped behind a flag.
-TRADING_ENABLED = False
+# ⚠️ ON AS OF 2026-09-17 (owner), so the first offseason after production's week 22 runs
+# with a live market. It shipped False while the market was being measured, matching
+# RULE_VOTE_ENABLED / WEATHER_ENABLED / RUNNER_MOVE_ENABLED.
+TRADING_ENABLED = True
+
+
+def tradingEnabled(session=None) -> bool:
+    """THE single reading of whether the market runs — constant, overridden live by the
+    `trading_enabled` app_setting the Admin panel writes.
+
+    ⚠️ CALL IT; DO NOT READ THE CONSTANT. `from constants import TRADING_ENABLED` copies
+    the value at import time, so a module-level binding cannot be toggled and a kill switch
+    written that way silently does nothing. `TRADE_WINDOW_ENABLED` already paid for this
+    lesson — it is read lazily inside `_computeWindow` for exactly this reason.
+
+    ⚠️ IT EXISTS BECAUSE THE OFFSEASON IS DAYS AWAY AND A DEPLOY IS NOT INSTANT. The market
+    settles trades that move real players between real rosters; if it misbehaves mid-
+    offseason the owner needs to stop it now rather than after a redeploy.
+
+    ⚠️ FAILS OPEN TO THE CONSTANT. An unreachable or locked database must not silently
+    switch a live market off half way through an offseason — that would leave some clubs
+    having traded and others not, which is worse than either state.
+
+    `session` is the caller's, to avoid opening a second one against SQLite's single write
+    lock (the `getAnomalySetting` convention).
+    """
+    try:
+        from database.models import AppSetting
+        own = session is None
+        if own:
+            from database.connection import get_session
+            session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key='trading_enabled').first()
+            if row is None or row.value is None:
+                return bool(TRADING_ENABLED)
+            return str(row.value).lower() == 'true'
+        finally:
+            if own:
+                session.close()
+    except Exception:
+        return bool(TRADING_ENABLED)
 
 # ---- Why trades happen ----
 # ⚠️ THE ENGINE IS CONTRACT CONGESTION, NOT GM DISAGREEMENT. The obvious model — two GMs
