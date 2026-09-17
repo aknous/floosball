@@ -8383,7 +8383,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
-    from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON
+    from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON, GM_ACTIVE_WEEK
     from database.connection import get_session
     from database.models import Trade, SeasonRecapEvent, DraftPick
 
@@ -8511,14 +8511,28 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             })
 
     # ---- the block ----
+    # ⚠️ A CLOSED MARKET SERVES NO ROWS. `listingsFor` holds only the OPENING half of the
+    # window, so calling it directly gave a market with no deadline: measured on production
+    # at week 28, six weeks past it, this pane served 29 live listings for trades that could
+    # not happen. The window now comes from `tradeManager.tradeWindowState`, the same
+    # predicate `runWeeklyPass` gates on, so the table and the market cannot disagree.
+    # ⚠️ THE OFFSEASON IS OPEN AND ITS WEEK NUMBER DOES NOT SAY SO — `currentWeek` sits at
+    # the end of the regular season all the way through it, which reads as "deadline passed".
+    # `_offseasonFlowPhase` is what distinguishes the two, and None is the market's own
+    # calling convention for an offseason pass.
+    from managers.tradeManager import tradeWindowState, TRADE_WINDOW_OPEN
+    inOffseason = getattr(sm, '_offseasonFlowPhase', None) is not None
+    windowWeek = None if inOffseason else (week or 1)
+    windowState = tradeWindowState(windowWeek)
+
     block = []
     tradingOn = tradingEnabled()
-    if tradingOn and sm and sm.currentSeason:
+    if windowState == TRADE_WINDOW_OPEN and sm and sm.currentSeason:
         try:
             from managers.tradeManager import TradeMarket
             brain = sm._foBrainForOffseason()
             brain.season, brain.week = season, week or 1
-            market = TradeMarket(floosball_app.playerManager, tm, brain, season, week or None)
+            market = TradeMarket(floosball_app.playerManager, tm, brain, season, windowWeek)
             for team in getattr(tm, 'teams', None) or []:
                 for listing in market.listingsFor(team):
                     block.append({
@@ -8538,6 +8552,11 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
         "season": season,
         "week": week,
         "tradingEnabled": bool(tradingOn),
+        # The UI owns the wording; the sim owns the rule. Shipping a state rather than a
+        # sentence keeps the window in one place instead of re-derived on the client.
+        "tradeWindow": {"open": windowState == TRADE_WINDOW_OPEN,
+                        "state": windowState,
+                        "deadlineWeek": int(GM_ACTIVE_WEEK)},
         "draftOrder": order,
         "expiring": expiring,
         "block": block,
