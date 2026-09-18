@@ -148,3 +148,44 @@ def test_a_losing_club_is_not_badged_WINDOW_OPEN():
     assert m.nowWeight(middling) == m.nowWeight.__wrapped__(m, middling) \
         if hasattr(m.nowWeight, '__wrapped__') else True
     print("PASS a club going nowhere is not told its window is open")
+
+
+def _horizonListings(market, club):
+    return [l for l in market.listingsFor(club) if l.trigger == 'horizon_mismatch']
+
+
+def test_a_champion_with_its_core_intact_keeps_its_long_contracts():
+    """⚠️ THE TIMELINE TRIGGER USED TO ASK ONLY "IS THIS CLUB CONTENDING?".
+
+    Reported 2026-09-18: the team that had just won the Floos Bowl listed a good player
+    with three seasons left, reason "Timeline", and fans read it as the team saying it
+    could not hold him. It could. Contention is this season's win rate, so a champion is
+    the MOST contending team in the league and every one of its long contracts qualified.
+    "Term this team cannot use" is only true where the core is aging out from under the
+    record — `teamWindow`'s `closing` — and a champion whose core is intact will be
+    contending again next year.
+    """
+    champion = _club(1, 'Champs', 24, ALL_YOUNG)
+    rest = [_club(10 + i, f"F{i}", 10, {}) for i in range(6)]
+    m = _market([champion] + rest)
+    assert m.isContending(champion)
+    assert m.teamWindow(champion) == 'open', m.teamWindow(champion)
+    assert _horizonListings(m, champion) == [], "a champion is selling years it will use"
+    print("PASS a champion with its core intact keeps its long contracts")
+
+
+def test_a_fading_contender_still_cashes_in_the_years_it_cannot_use():
+    """The other half, and the reason the trigger exists: a club winning NOW on players who
+    will not be here trades term for help this season. Same record as the champion above —
+    only the arc mix differs, which is the whole point of the two axes."""
+    fading = _club(1, 'Fading', 24, ALL_OLD)
+    rest = [_club(10 + i, f"F{i}", 10, {}) for i in range(6)]
+    m = _market([fading] + rest)
+    assert m.isContending(fading)
+    assert m.teamWindow(fading) == 'closing', m.teamWindow(fading)
+    listings = _horizonListings(m, fading)
+    assert listings, "a club winning on a fading core is not cashing in its years"
+    why = listings[0].why
+    assert 'rental' not in why, f"the seller reason still calls a 3-year deal a rental: {why}"
+    assert 'more seasons' in why, why
+    print("PASS a fading contender still trades the years it cannot use")

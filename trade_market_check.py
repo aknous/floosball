@@ -79,6 +79,7 @@ async def main(seasons, enabled, treasury=0):
     tally = {'weeks': 0, 'banked': 0, 'listings': 0, 'bids': 0, 'settled': 0,
              'accepted': 0, 'noBackfill': 0, 'mustCut': 0, 'cannotAffordTheCut': 0,
              'feeTotal': 0, 'balanceTotal': 0}
+    tally['byTrigger'] = {}
     realPass = sm._runTradePass
     realBanked = sm._weekIsBanked
 
@@ -128,6 +129,7 @@ async def main(seasons, enabled, treasury=0):
             if fee > balance:
                 tally['cannotAffordTheCut'] += 1
 
+    tally['byTrigger'] = {}
     realPass = sm._runTradePass
     realBanked = sm._weekIsBanked
 
@@ -142,8 +144,16 @@ async def main(seasons, enabled, treasury=0):
             brain.season, brain.week = sm.currentSeason.seasonNumber, week
             market = TradeMarket(pm, tm, brain, sm.currentSeason.seasonNumber, week)
             for team in tm.teams:
+                window = market.teamWindow(team)
                 for listing in market.listingsFor(team):
                     tally['listings'] += 1
+                    # ⚠️ BY TRIGGER AND BY WINDOW, because "32 listings" says nothing about
+                    # whether the market is doing what each trigger was written for. The
+                    # horizon trigger fires on "contending + 3 years" alone, so this is
+                    # what shows whether it is a fading contender cashing in or a champion
+                    # selling a player it has every reason to keep.
+                    key = f"{listing.trigger}/{window}"
+                    tally['byTrigger'][key] = tally['byTrigger'].get(key, 0) + 1
                     for buyer in market.counterpartiesFor(listing):
                         if market.bidFor(listing, buyer) is not None:
                             tally['bids'] += 1
@@ -184,7 +194,15 @@ async def main(seasons, enabled, treasury=0):
                 print(f"    buyer had to cut in {tally['mustCut']} case(s); "
                       f"mean fee {meanFee:.0f}F against mean Treasury {meanBal:.0f}F; "
                       f"{tally['cannotAffordTheCut']} could not pay")
+        if tally['byTrigger']:
+            print('    listings by trigger/window: ' + ', '.join(
+                f'{k} x{v}' for k, v in sorted(tally['byTrigger'].items(), key=lambda kv: -kv[1])))
         if trades:
+            byTrigger = {}
+            for t in trades:
+                byTrigger[t.trigger] = byTrigger.get(t.trigger, 0) + 1
+            print('    trades by trigger:   ' + ', '.join(
+                f'{k} x{v}' for k, v in sorted(byTrigger.items(), key=lambda kv: -kv[1])))
             weeks = sorted(byWeek)
             print(f"    weeks:   {', '.join(f'w{w}x{byWeek[w]}' for w in weeks)}")
             early = sum(n for w, n in byWeek.items() if w < 12)
