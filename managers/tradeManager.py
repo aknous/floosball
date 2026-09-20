@@ -2325,10 +2325,20 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
     # at all — and where it is one, the club is discarding a BETTER incumbent to protect a
     # man it just bought, which is not an improvement on the thing being prevented.
     phase = 'season' if week is not None else 'offseason'
-    if wasHeadlineAcquisition(worst, getattr(
-            getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0), phase):
+    seasonNum = getattr(getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0)
+    if wasHeadlineAcquisition(worst, seasonNum, phase):
         logger.info(f"Trade declined: {buyer.name} would have to cut "
                     f"{worst.name}, bought in this same {phase}")
+        return None
+    # ⚠️ NOR A PROSPECT PROMOTED IN THIS SAME OFFSEASON. The carve-out above deliberately
+    # exempts the offseason, because a gap-filler signed mid-season SHOULD be replaceable
+    # once the season ends — but a promotion is the opposite kind of move. The club spent
+    # a pick on him and committed a roster spot days ago, and he has not played a down.
+    # So the exemption that makes the trade rule right is exactly what leaves this hole.
+    from managers.playerManager import wasPromotedThisOffseason
+    if wasPromotedThisOffseason(worst, seasonNum):
+        logger.info(f"Trade declined: {buyer.name} would have to cut {worst.name}, "
+                    f"promoted in this same offseason")
         return None
     # ⚠️ NO SECOND UPGRADE TEST HERE. `bidFor` already established that the incoming
     # player beats this exact man — on the buyer's own BELIEVED, position-weighted read —

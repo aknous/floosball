@@ -38,6 +38,53 @@ def _perfRating(player, attr: str) -> Optional[int]:
     return value if value > 0 else None
 
 
+def stampPromotion(player, season) -> None:
+    """Mark that this prospect was promoted onto a roster in THIS offseason.
+
+    ⚠️ A PROMOTION IS A COMMITMENT, AND NOTHING RECORDED IT. Reported live: a team
+    drafted a prospect, promoted him, and cut him again — all inside one offseason. The
+    FA draft already carries the right rule for its own signings (`_draftFilledSlots`,
+    "a slot filled during this draft is off limits"), but that set is stamped only when
+    a FREE AGENT is signed, so a promoted prospect walked straight past it. The cut then
+    cost the club the pick, the prospect and a fee to end up back where it started.
+
+    ⚠️ THE SEASON IS ENOUGH HERE, unlike the trade stamp next door, which needs the
+    phase as well because trades happen in-season AND in the offseason and the offseason
+    runs under the number of the season it follows. Every promotion path is offseason-only
+    (`_promoteProspectsAutonomously` from `_handleOffseason`, and the prospect branch of
+    `_attemptRosterFill` from the FA draft), so a matching season number can only mean
+    this offseason. Once play starts the number has moved on and the man is cuttable,
+    which is exactly the rule: promoted in the offseason, he starts the season there.
+
+    ⚠️ IN-MEMORY, and a restart clears it — the same trade-off `stampTradeAcquisition`
+    documents. It fails permissive: the worst case is one legal-looking cut, not a lost
+    player.
+    """
+    try:
+        player._promotedInSeason = int(season or 0)
+    except Exception:
+        pass
+
+
+def wasPromotedThisOffseason(player, season) -> bool:
+    """Was this player promoted off the prospect list in the offseason now running?
+
+    The single predicate behind every cut path, so "promoted, therefore not cuttable"
+    cannot be enforced in one place and forgotten in the next — the FA-draft upgrade cut,
+    the GM's cut-for-upgrade sweep, the cut that makes room for ANOTHER prospect, and the
+    cut that makes room for a trade are four separate deciders that all reach a roster.
+    """
+    if player is None:
+        return False
+    stamped = getattr(player, '_promotedInSeason', None)
+    if stamped is None:
+        return False
+    try:
+        return int(stamped) == int(season or 0)
+    except (TypeError, ValueError):
+        return False
+
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -5364,6 +5411,7 @@ class PlayerManager:
         # arrive. `_draftFilledSlots` is stamped whenever this function fills a slot.
         from constants import FO_DRAFT_CUT_UPGRADE_MARGIN
         filledThisDraft = getattr(team, '_draftFilledSlots', None) or set()
+        seasonNumber = self._currentSeasonNumber()
 
         def _upgradeCandidates():
             """(slot, freeAgent, 'upgrade') where the board says he clearly beats the man
@@ -5383,8 +5431,15 @@ class PlayerManager:
                 if bestVal is None:
                     continue
                 # replace the WEAKEST man at the position (WR has two slots)
+                # ⚠️ `filledThisDraft` COVERS FA SIGNINGS ONLY, so a prospect promoted
+                # into a slot — by this very function two rounds earlier, or by
+                # `_promoteProspectsAutonomously` a step before the draft — was never in
+                # it and could be cut on the spot. That is the reported draft → promote →
+                # cut, and it is the same rule as the comment above, not a new one.
                 held = [(sl, team.rosterDict.get(sl)) for sl in slots
-                        if sl not in filledThisDraft and team.rosterDict.get(sl) is not None]
+                        if sl not in filledThisDraft and team.rosterDict.get(sl) is not None
+                        and not wasPromotedThisOffseason(team.rosterDict.get(sl),
+                                                         seasonNumber)]
                 held = [(sl, p, board.get(getattr(p, 'id', None))) for sl, p in held]
                 held = [h for h in held if h[2] is not None]
                 if not held:
@@ -5619,6 +5674,11 @@ class PlayerManager:
                 promoted.termRemaining = promoted.term
             except Exception:
                 promoted.termRemaining = 1
+            # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
+            # later in this same offseason — including two rounds further into this very
+            # draft, which `_draftFilledSlots` does not prevent because that set is
+            # stamped by FA SIGNINGS only.
+            stampPromotion(promoted, self._currentSeasonNumber())
 
             freeAgencyDict.setdefault(team.name, []).append({
                 'action': 'promote', 'player': promoted.name,
@@ -5646,6 +5706,20 @@ class PlayerManager:
         # Check if roster is now complete
         remaining = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k') if team.rosterDict.get(k) is None]
         return len(remaining) == 0
+
+    def _currentSeasonNumber(self) -> int:
+        """The season the sim is on, or 0 if it cannot be read.
+
+        0 is the safe answer: `wasPromotedThisOffseason` compares against the live
+        season, so an unreadable number simply leaves the player cuttable rather than
+        freezing every roster in the league.
+        """
+        try:
+            sm = self.serviceContainer.getService('season_manager')
+            season = getattr(sm, 'currentSeason', None) if sm else None
+            return int(getattr(season, 'seasonNumber', 0) or 0)
+        except Exception:
+            return 0
 
     def releasePlayerToFreeAgency(self, player, team, freeAgentLists: dict) -> None:
         """Release a rostered player to the free agent pool (GM Mode cut)."""

@@ -8354,6 +8354,13 @@ class SeasonManager:
                 continue                    # vacates on its own
             if (getattr(incumbent, 'termRemaining', 0) or 0) <= 1:
                 continue                    # walk-year: he is leaving anyway
+            # ⚠️ Not a prospect this club promoted minutes ago in the loop above. Trading
+            # one just-promoted prospect for another is the churn this rule exists to
+            # stop, and it costs a cut fee to end up with the same number of rookies.
+            from managers.playerManager import wasPromotedThisOffseason
+            if wasPromotedThisOffseason(
+                    incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
+                continue
             value = brain.decisionValue(incumbent, coach=coach, team=team)
             if worstValue is None or value < worstValue:
                 worstSlot, worstPlayer, worstValue = slot, incumbent, value
@@ -8492,6 +8499,12 @@ class SeasonManager:
                 best.termRemaining = best.term
             except Exception:
                 best.termRemaining = 1
+            # ⚠️ Promoting is a commitment for the season. Without this he can be cut
+            # again before a snap is played — by the FA draft's upgrade cut, by a trade
+            # needing room, or by the very next turn of this same loop making room for
+            # another prospect.
+            from managers.playerManager import stampPromotion
+            stampPromotion(best, getattr(self.currentSeason, 'seasonNumber', 0))
             promotions.append({
                 'id': getattr(best, 'id', None),
                 'name': best.name,
