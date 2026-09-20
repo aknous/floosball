@@ -69,11 +69,106 @@ FIELDS = ['game', 'team', 'down', 'ytg', 'yte', 'qtr', 'qsecs', 'scoreDiff', 'of
           'homeScore', 'awayScore']
 
 
-def harvest(games: int, seed: int = 20260914):
-    """Play `games` matchups and return (snap rows, final scores)."""
+def _camel(name):
+    head, *rest = name.split('_')
+    return head + ''.join(w.capitalize() for w in rest)
+
+
+def realTeams(dbPath):
+    """The LIVE league's 32 teams, built from a database snapshot.
+
+    ⚠️ THE SYNTHETIC POOL IS NOT A LEAGUE, AND THIS EXISTS BECAUSE OF IT. `_makeTeam`
+    draws one physical and one mental centre per team from `randint(74, 92)`, which gives
+    QB accuracy a standard deviation of 5.6 against the live league's 10.7 — HALF the real
+    spread, with the means nearly identical. `CLAUDE.md` records a tuning pass that was
+    ranked wrongly by exactly this (the sack curve, whose matchup differentials spanned
+    -72..+65 synthetic against a real -41..+31). Anything calibrated on a tail statistic
+    must be measured here; central rates transfer better but still carry a bias worth
+    quoting rather than guessing.
+
+    ⚠️ READ-ONLY, AND POINT IT AT A COPY. Pull one with `fly ssh sftp get`, and take the
+    `-wal` FILE TOO: production runs in WAL mode, so the main file alone is a stale
+    snapshot — recent writes (a season's freshly minted card templates, for instance) live
+    only in the WAL until a checkpoint.
+
+    ⚠️ Defense is DERIVED from the roster rather than set, unlike the synthetic path's flat
+    `defRun`/`defPass`. That is the point: in a real league a good roster has a good
+    defense, so offense and defense are correlated, and the synthetic pool's independent
+    draws break exactly the matchup spread being measured.
+    """
+    import sqlite3
+    con = sqlite3.connect(f'file:{dbPath}?mode=ro', uri=True)
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+
+    coaches = {r['id']: r for r in cur.execute('SELECT * FROM coaches')}
+    byTeam = {}
+    for row in cur.execute("""SELECT p.id, p.name, p.team_id, p.position, p.player_rating,
+                                     a.* FROM players p
+                              JOIN player_attributes a ON a.player_id = p.id
+                              WHERE p.team_id IS NOT NULL"""):
+        byTeam.setdefault(row['team_id'], []).append(row)
+
+    POS = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+    teams = []
+    for t in cur.execute('SELECT * FROM teams ORDER BY id'):
+        squad = byTeam.get(t['id']) or []
+        if len(squad) < 6:
+            continue                       # an unfilled roster cannot play a game
+        team = _makeTeam(t['name'], (t['name'] or '???')[:3].upper(), 10000 + t['id'] * 100)
+        team.id = t['id']
+        team.elo = t['elo'] if 'elo' in t.keys() and t['elo'] else 1500
+        keys = set(vars(team.rosterDict['qb'].attributes).keys())
+
+        def build(row, slot):
+            player = team.rosterDict[slot]
+            player.name = row['name']
+            player.id = row['id']
+            for col in row.keys():          # snake_case column -> camelCase attribute
+                name = _camel(col)
+                if name in keys and row[col] is not None:
+                    setattr(player.attributes, name, row[col])
+            if hasattr(player, 'updateRating'):
+                player.updateRating()
+            return player
+
+        wrs = sorted((r for r in squad if POS.get(r['position']) == 'WR'),
+                     key=lambda r: -(r['player_rating'] or 0))
+        for slot, want in (('qb', 'QB'), ('rb', 'RB'), ('te', 'TE'), ('k', 'K')):
+            match = next((r for r in squad if POS.get(r['position']) == want), None)
+            if match is not None:
+                build(match, slot)
+        for slot, row in zip(('wr1', 'wr2'), wrs):
+            build(row, slot)
+
+        coach = coaches.get(t['coach_id']) if 'coach_id' in t.keys() else None
+        if coach is not None:
+            # ⚠️ The eight ATTRIBUTES only. `overallRating` is a read-only property derived
+            # from them, and `name`/`id` are not attributes of the decision model at all.
+            for col in ('offensive_mind', 'defensive_mind', 'adaptability', 'aggressiveness',
+                        'clock_management', 'player_development', 'scouting', 'attitude'):
+                if col in coach.keys() and coach[col] is not None:
+                    setattr(team.coach, _camel(col), coach[col])
+        team.deriveDefenseFromRoster()
+        teams.append(team)
+    con.close()
+    if len(teams) < 2:
+        raise SystemExit(f'only {len(teams)} usable teams in {dbPath}')
+    return teams
+
+
+def harvest(games: int, seed: int = 20260914, teams=None):
+    """Play `games` matchups and return (snap rows, final scores).
+
+    `teams` overrides the synthetic pool — pass `realTeams(db)` to measure the live
+    league instead, which is the only way to see a tail statistic honestly.
+    """
     rng = random.Random(424242)
     random.seed(seed)
     np.random.seed(seed)
+    if teams is not None:
+        pool = list(teams)
+        return _play(games, pool, rng)
     teams = []
     for t in range(32):
         team = _makeTeam(f'T{t}', f'T{t:02d}', 10000 + t * 100,
@@ -84,6 +179,11 @@ def harvest(games: int, seed: int = 20260914):
         team.coach.generateAttributes()
         teams.append(team)
 
+    return _play(games, teams, rng)
+
+
+def _play(games, teams, rng):
+    """The measured loop itself — shared by the synthetic and real-roster pools."""
     rows, scores, current = [], [], {'game': None}
     original = FG.Game.playCaller
 
@@ -323,6 +423,8 @@ def main() -> int:
                     help='directory of nflverse pbp_YYYY.csv.gz files')
     ap.add_argument('--out', default='', help='save the harvested rows here')
     ap.add_argument('--compare', nargs='+', default=[], help='report saved arms instead of playing')
+    ap.add_argument('--db', default='', help='measure the LIVE league from a database copy '
+                                             '(pull the -wal file too; prod runs in WAL mode)')
     args = ap.parse_args()
 
     nfl = loadNfl(args.nfl) if args.nfl and os.path.isdir(args.nfl) else []
@@ -336,8 +438,10 @@ def main() -> int:
         report([(l, r, [1]) for l, r, _s in arms], nfl)
         return 0
 
-    rows, scores = harvest(args.games)
-    print(f'{args.games} games, {len(rows):,} snaps\n')
+    pool = realTeams(args.db) if args.db else None
+    rows, scores = harvest(args.games, teams=pool)
+    print(f'{args.games} games, {len(rows):,} snaps'
+          f'{"  [LIVE ROSTERS]" if pool else "  [synthetic pool]"}\n')
     if args.out:
         save(rows, args.out)
     report([('this build', rows, scores)], nfl)

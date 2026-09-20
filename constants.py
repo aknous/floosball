@@ -1485,7 +1485,14 @@ DEAD_BALL_ADMIN_SECONDS = int(_os.environ.get('FLOOS_DEAD_BALL_SECS', '2'))
 # tier together and says nothing about whether a medium throw is harder than a short one,
 # which is the thing that was wrong.
 PASS_CONTACT_CEILING = float(_os.environ.get('FLOOS_CONTACT_CEIL', '99.0'))
-PASS_CONTACT_CENTER = float(_os.environ.get('FLOOS_CONTACT_MID', '36.0'))
+# ⚠️ CALIBRATED ON THE LIVE LEAGUE, NOT THE SYNTHETIC POOL (36.0 -> 32.0, 2026-09-20).
+# Fitted first against `scenario._makeTeam`'s pool, where QB accuracy has a standard
+# deviation of 5.6 against the real league's 11.2 — half the spread at nearly the same
+# mean. `baseContact` is a LOGISTIC, so a wider input spread changes the AVERAGE output
+# and not merely its variance: measured, the same constants gave 65.7% completion on
+# the synthetic pool and 61.5% on the season-7 roster, overshooting the 64.2% target
+# instead of landing on it. Re-measure with `playcall_nfl_check.py --db <copy>`.
+PASS_CONTACT_CENTER = float(_os.environ.get('FLOOS_CONTACT_MID', '32.0'))
 PASS_CONTACT_STEEPNESS = float(_os.environ.get('FLOOS_CONTACT_K', '0.050'))
 # Reach helps most on a ball that is badly placed; these are the ends of the old 0.05 /
 # 0.4 / 0.7 band ladder, now ramped continuously by how errant the throw is.
