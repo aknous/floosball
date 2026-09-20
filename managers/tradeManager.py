@@ -1065,11 +1065,28 @@ class TradeMarket:
         return blocked
 
     def _horizonMismatch(self, team, player, contending: bool) -> bool:
-        """A contender holding long term it would swap for now, or the reverse."""
-        term = int(getattr(player, 'termRemaining', 0) or 0)
-        if contending:
-            return term >= 3        # years it will not be around to use
-        return False                # a rebuilder's long deals are exactly what it wants
+        """A team winning NOW, on a core that will not be here, holding years it cannot use.
+
+        ⚠️ IT USED TO ASK ONLY "IS THIS TEAM CONTENDING?", AND THAT PUT CHAMPIONS ON THE
+        BLOCK. Reported 2026-09-18: the team that had just won the Floos Bowl listed a good
+        player with three seasons left, reason "Timeline", which fans read as the team
+        saying it could not hold him. It could: contention is this season's win rate, so
+        the champion is the MOST contending team in the league, and every one of its long
+        contracts qualified. "Term this team cannot use" is only true where the core is
+        aging out from under the record, which is exactly what `teamWindow` calls
+        `closing` — a side still winning on players who will not be here. A champion with
+        its core intact reads `open`, will contend again next year, and has every reason
+        to keep the contract.
+
+        ⚠️ THE WINDOW, NOT THE RECORD, IS THE TEST. Both axes already exist and measure
+        different things: the record says whether a team is winning, the arc mix says
+        whether that is about to continue. This trigger is about the second one.
+        """
+        if not contending:
+            return False            # a rebuilder's long deals are exactly what it wants
+        if self.teamWindow(team) != 'closing':
+            return False            # winning with the core intact: the years are an asset
+        return int(getattr(player, 'termRemaining', 0) or 0) >= 3
 
     def sellerWhy(self, team, player, trigger) -> str:
         """Why this team is willing to move a player, in its own terms.
@@ -1120,8 +1137,15 @@ class TradeMarket:
             why = (f"{name}'s attitude ({int(att)}) drags the room down every week they "
                    f"stay." if att else f"{name} is a locker-room problem.")
         elif trigger == 'horizon_mismatch':
-            why = ("Holding term this team cannot use." if not self.isContending(team)
-                   else "Holding a rental this team cannot keep.")
+            # ⚠️ THE TWO STRINGS HERE USED TO BE THE WRONG WAY ROUND. The trigger only
+            # fires for a contender holding 3+ years, and the contending branch called
+            # that player "a rental this team cannot keep" — the opposite of the contract
+            # that put them on the block. Fans reasonably read it as nonsense. There is
+            # only one case now, so it is stated plainly, with the years named.
+            term = int(getattr(player, 'termRemaining', 0) or 0)
+            why = (f"{name} is signed for {term} more seasons and the core around them is "
+                   f"aging out before that contract ends, so the team would rather have "
+                   f"the help while it is still winning.")
         elif trigger == 'inquiry':
             why = f"Nobody put {name} on the block. Another team called and asked."
         else:
@@ -2301,10 +2325,20 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
     # at all — and where it is one, the club is discarding a BETTER incumbent to protect a
     # man it just bought, which is not an improvement on the thing being prevented.
     phase = 'season' if week is not None else 'offseason'
-    if wasHeadlineAcquisition(worst, getattr(
-            getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0), phase):
+    seasonNum = getattr(getattr(seasonManager, 'currentSeason', None), 'seasonNumber', 0)
+    if wasHeadlineAcquisition(worst, seasonNum, phase):
         logger.info(f"Trade declined: {buyer.name} would have to cut "
                     f"{worst.name}, bought in this same {phase}")
+        return None
+    # ⚠️ NOR A PROSPECT PROMOTED IN THIS SAME OFFSEASON. The carve-out above deliberately
+    # exempts the offseason, because a gap-filler signed mid-season SHOULD be replaceable
+    # once the season ends — but a promotion is the opposite kind of move. The club spent
+    # a pick on him and committed a roster spot days ago, and he has not played a down.
+    # So the exemption that makes the trade rule right is exactly what leaves this hole.
+    from managers.playerManager import wasPromotedThisOffseason
+    if wasPromotedThisOffseason(worst, seasonNum):
+        logger.info(f"Trade declined: {buyer.name} would have to cut {worst.name}, "
+                    f"promoted in this same offseason")
         return None
     # ⚠️ NO SECOND UPGRADE TEST HERE. `bidFor` already established that the incoming
     # player beats this exact man — on the buyer's own BELIEVED, position-weighted read —

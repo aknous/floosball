@@ -92,6 +92,9 @@ class Stub:
         s.freeAgents = list(fas); s._faDraftBoards = {14: board}
     def _leftThisTeamThisOffseason(s, p, t): return False
     def _getPlayerTerm(s, p): return 2
+    # No service container here; 0 is the real class's own fallback and leaves the
+    # just-promoted guard inert, which is what these cases want to measure.
+    def _currentSeasonNumber(s): return 0
     releasePlayerToFreeAgency = PlayerManager.releasePlayerToFreeAgency
 
 def runPick(incumbentRating, faRating, filledThisDraft=()):
@@ -165,6 +168,7 @@ def draftWithPreference(soft):
                 s._faPreferenceNotes = dict(b.preferenceNotes)
             def _leftThisTeamThisOffseason(s, p, tm): return False
             def _getPlayerTerm(s, p): return 2
+            def _currentSeasonNumber(s): return 0
             releasePlayerToFreeAgency = PlayerManager.releasePlayerToFreeAgency
         hl, ev = [], []
         PlayerManager._attemptRosterFill(Stub(), t, [t], [], [star, modest], [], [], [],

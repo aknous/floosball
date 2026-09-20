@@ -1061,6 +1061,21 @@ class FrontOfficeBrain:
                 continue                      # vacates on its own
             if (getattr(player, 'termRemaining', 0) or 0) <= 1:
                 continue                      # walk-year: retention decides them
+            # ⚠️ A prospect promoted in this same offseason has not played a down for the
+            # club that just committed to him. The sweep runs before promotions today, so
+            # this is a guard rather than a live fix — but "promoted, therefore not
+            # cuttable" has to hold at every decider that reaches a roster, or it gets
+            # re-broken the next time the step order moves (and it has moved).
+            # ⚠️ `self.season` IS THE BRAIN'S OWN CALENDAR, stamped by
+            # `_foBrainForOffseason` from `currentSeason.seasonNumber` — the same number
+            # the promotion stamps with. Reaching through `self.playerManager` for it
+            # instead would work and is worse: it couples the brain to a manager it
+            # otherwise only asks about players, and every partial mock of that manager
+            # in the tests would need a new method. The default of 0 matches no stamp,
+            # so an unstamped brain simply leaves the player cuttable.
+            from managers.playerManager import wasPromotedThisOffseason
+            if wasPromotedThisOffseason(player, self.season):
+                continue
             # ⚠️ SENTIMENT IS ON THE BAR HERE, NOT IN THE VALUE. A cut is a DEPARTURE,
             # and on a departure the club's own valuation is the side that does not
             # bind — so a beloved player raises the upgrade the club must be confident

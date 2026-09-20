@@ -4873,6 +4873,34 @@ TD_DRAIN_MAX_YARDS = 5      # close enough that the score is near-certain, not h
 # save. This is a threat, not a bet.
 LEAD_THREAT_TD_YARDS = 10
 
+# ⚠️ A TIMEOUT DOES NOT ONLY BANK TIME FOR THE ANSWER — IT HANDS THE SAME TIME TO THE
+# DRIVE IT IS REACTING TO. That trade is only good when the extra seconds cannot improve
+# the offense's outcome. Inside LEAD_THREAT_TD_YARDS they cannot: the score is one snap
+# away either way. But limb 1 fired at the kicker's MAXIMUM range, which is a kick he
+# would often miss, and stopping the clock there buys him ~18 yards of field position —
+# measured against fgMakeProbability, that is worth +0.54 of a made kick at 0.42, +0.27
+# at 0.69, +0.12 at 0.84 and ~0.00 by 0.90. The defense was paying a timeout to turn a
+# coin-flip into a gimme. The bar sits where the curve flattens: at 0.75 and above the
+# 18 yards is worth under a fifth of a kick, so the clock is close to free to give back.
+LEAD_THREAT_FG_MIN_PROB = 0.75
+
+# ⚠️ AND THE SAVED TIME HAS TO BE USABLE. The whole justification for a LEADING defense
+# burning a timeout is that it "buys a possession to win in regulation instead of a
+# coin-flip overtime" — but nothing checked that a possession was still possible, and
+# measured over a 432-state sweep the rule fired at exactly the same 74% rate with 0:15
+# on the clock as with 1:50. Reported as the leader stopping the clock at 0:20 and then
+# getting the ball back nowhere near able to do anything with it.
+#
+# The floor is the whole sequence, not just the answer: one snap for the offense to
+# score (~7s), a kickoff, then a minimal answering drive — two clock-stopped snaps and a
+# kick, ~21s. Below this even the optimistic version fails, and the timeout is spent on
+# nothing.
+#
+# ⚠️ LEADING ONLY. A TRAILING defense at 0:15 is right to burn timeouts: it loses
+# otherwise, so a 2% chance beats none. The leader is trading a real asset — the clock
+# that is protecting its lead — for that 2%, which is why the gate is asymmetric.
+LEAD_ANSWER_MIN_SECONDS = 30
+
 GLITCH_CARDS_ENABLED = True
 
 # Trigger base, by the on-card player's position on the attention ladder. Chosen over an
