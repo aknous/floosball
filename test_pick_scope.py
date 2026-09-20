@@ -12,7 +12,8 @@ import re
 
 SEASON = 'managers/seasonManager.py'
 PLAYER = 'managers/playerManager.py'
-OWNERSHIP = ('DraftPick', 'current_owner_id', 'draft_picks', '_applyPickOwnership')
+OWNERSHIP = ('DraftPick', 'current_owner_id', 'draft_picks', '_applyPickOwnership',
+             '_rookieDraftSlots')
 
 
 def _funcSource(path, name):
@@ -51,7 +52,31 @@ def test_freeAgencyNeverConsultsPickOwnership():
 def test_ownershipIsScopedToTheSeasonAndFirstRound():
     """⚠️ A traded pick is `(season, round, original team, current owner)`. Without the season
     and round filter the rookie draft would re-order itself using next year's picks too."""
-    body = _funcSource(SEASON, '_applyPickOwnership')
+    body = _funcSource(SEASON, '_rookieDraftSlots')
     assert 'DraftPick.season == season' in body, 'ownership must be scoped to this season'
     assert 'DraftPick.round_number == 1' in body, 'ownership must be scoped to round 1'
-    assert 'DraftPick.used == False' in body, 'a spent pick must not re-order anything'
+
+
+def test_ownershipSurvivesTheDraftStarting():
+    """⚠️ THE READER DOES NOT FILTER ON `used`. The draft stamps every pick of the season
+    spent as it begins, so a `used == False` filter made ownership vanish the moment the
+    draft started: the board fell back to standings order mid-draft, and a restart
+    mid-draft re-read the order and handed every traded slot back to its original club.
+    Season + round already scope it to this one draft.
+
+    Bite check: restore `DraftPick.used == False` in `_rookieDraftSlots` and this fails.
+    """
+    body = _funcSource(SEASON, '_rookieDraftSlots')
+    assert 'used' not in body.split('"""')[-1], 'the ownership reader must not filter on used'
+    assert 'self._rookieDraftSlots(' in _funcSource(SEASON, '_applyPickOwnership'), \
+        'the draft must resolve slots through the shared reader'
+
+
+def test_theBoardReadsTheSameOwnership():
+    """The offseason board renders the rookie order through the draft's own reader, so the
+    two cannot disagree, and only in the phases before free agency."""
+    src = open('api/main.py').read()
+    body = _funcSource('api/main.py', 'get_offseason_info')
+    assert 'sm._rookieDraftSlots(' in body, 'the board must resolve traded picks'
+    assert "('post_bowl', 'frontoffice', 'rookie_draft')" in body, \
+        'ownership must only order the board before free agency'

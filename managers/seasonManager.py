@@ -7669,6 +7669,15 @@ class SeasonManager:
                     # ⚠️ ANNOUNCED, NOT SILENT. It replaces the forfeit a reader used to
                     # see, and a slot changing hands mid-draft is the single most
                     # interesting thing that happens in one.
+                    self._offseasonTransactions.append({
+                        'type': 'trade',
+                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        'counterpartTeam': entry['to'], 'counterpartAbbr': entry['toAbbr'],
+                        'gave': f"S{seasonNum} draft slot",
+                        'got': f"S{entry['forSeason']} R1 pick",
+                        'player': f"S{seasonNum} draft slot",
+                        'position': '—', 'rating': 0,
+                    })
                     self._recordOffseasonEvent(
                         'trade', teamName=entry['team'],
                         detail=(f"could not use their draft slot and traded it to "
@@ -7716,9 +7725,47 @@ class SeasonManager:
         Best-effort: an unreadable pick table leaves the standings order untouched, which
         is the pre-trading behaviour and never worse than not drafting.
         """
-        from constants import rookieDraftEnabled
         if not worstFirst:
             return worstFirst
+        try:
+            from database.connection import get_session
+            from database.models import DraftPick
+            slots = self._rookieDraftSlots(worstFirst)
+            moved = sum(1 for original, owner in slots if owner is not original)
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            session = get_session()
+            try:
+                # ⚠️ Spent, so it cannot be traded again next season.
+                session.query(DraftPick).filter(
+                    DraftPick.season == season, DraftPick.round_number == 1,
+                ).update({DraftPick.used: True}, synchronize_session=False)
+                session.commit()
+            finally:
+                session.close()
+            if moved:
+                logger.info(f"Rookie draft: {moved} slot(s) belong to another club")
+            return [owner for _original, owner in slots]
+        except Exception as e:
+            logger.warning(f"Could not apply pick ownership: {e}")
+            return worstFirst
+
+    def _rookieDraftSlots(self, worstFirst: list) -> list:
+        """`[(originalTeam, owningTeam), …]` in slot order. Read-only.
+
+        ⚠️ ONE READER FOR THE DRAFT AND THE BOARD. `/api/offseason` renders the order
+        before and during the draft, and it used to serve `freeAgencyOrder` straight
+        through, so a traded pick showed under the club that gave it away while the
+        draft itself handed the slot to the buyer.
+
+        ⚠️ `used` IS NOT FILTERED. The draft stamps every pick of the season spent as it
+        starts, so filtering on it made ownership vanish the moment the draft began —
+        from the board, and from the draft itself on a mid-draft restart, which re-reads
+        this and would have fallen back to the standings order. Season + round already
+        scope it to this draft.
+        """
+        pairs = [(t, t) for t in worstFirst]
+        if not worstFirst:
+            return pairs
         try:
             from database.connection import get_session
             from database.models import DraftPick
@@ -7726,32 +7773,17 @@ class SeasonManager:
             byId = {getattr(t, 'id', None): t for t in worstFirst}
             session = get_session()
             try:
-                rows = {r.original_team_id: r for r in session.query(DraftPick).filter(
-                    DraftPick.season == season, DraftPick.round_number == 1,
-                    DraftPick.used == False).all()}                 # noqa: E712
-                if not rows:
-                    return worstFirst
-                out, moved = [], 0
-                for team in worstFirst:
-                    row = rows.get(getattr(team, 'id', None))
-                    if row is None:
-                        out.append(team)
-                        continue
-                    owner = byId.get(row.current_owner_id, team)
-                    if owner is not team:
-                        moved += 1
-                    out.append(owner)
-                    # ⚠️ Spent, so it cannot be traded again next season.
-                    row.used = True
-                session.commit()
-                if moved:
-                    logger.info(f"Rookie draft: {moved} slot(s) belong to another club")
-                return out
+                ownerByOrigin = {r.original_team_id: r.current_owner_id
+                                 for r in session.query(DraftPick).filter(
+                                     DraftPick.season == season,
+                                     DraftPick.round_number == 1).all()}
             finally:
                 session.close()
+            return [(team, byId.get(ownerByOrigin.get(getattr(team, 'id', None)), team))
+                    for team in worstFirst]
         except Exception as e:
-            logger.warning(f"Could not apply pick ownership: {e}")
-            return worstFirst
+            logger.warning(f"Could not read draft pick ownership: {e}")
+            return pairs
 
     async def _runPreDraftPass(self, teamsWorstFirst: list, gmResults: list) -> None:
         """Roll through teams worst→best BEFORE the rookie draft begins.
@@ -8047,10 +8079,29 @@ class SeasonManager:
                         self, entry['listing'], entry['winner'], season, None)
                 if result is not None:
                     settled.append(result)
+                    # ⚠️ BOTH CLUBS AND BOTH SIDES. This carried only the seller's name
+                    # (no abbr) and what it gave up, so the offseason page could not say
+                    # who the other party was or what came back — and with no abbr the
+                    # row filed under no team at all.
+                    teamsById = {getattr(t, 'id', None): t
+                                 for t in (getattr(teamManager, 'teams', None) or [])}
+
+                    def _abbr(teamId, fallbackName):
+                        t = teamsById.get(teamId)
+                        if t is not None:
+                            return getattr(t, 'abbr', t.name[:3].upper())
+                        return (fallbackName or '')[:3].upper()
+
+                    aGave = ', '.join(p['name'] for p in result.get('aGave') or []) or 'nothing'
+                    bGave = ', '.join(p['name'] for p in result.get('bGave') or []) or 'nothing'
                     self._offseasonTransactions.append({
                         'type': 'trade',
-                        'team': result['teamAName'], 'teamAbbr': '',
-                        'player': ', '.join(p['name'] for p in result['aGave']),
+                        'team': result['teamAName'],
+                        'teamAbbr': _abbr(result.get('teamAId'), result['teamAName']),
+                        'counterpartTeam': result.get('teamBName'),
+                        'counterpartAbbr': _abbr(result.get('teamBId'), result.get('teamBName')),
+                        'gave': aGave, 'got': bGave,
+                        'player': aGave,
                         'position': '—', 'rating': 0,
                     })
             if settled:
@@ -9397,6 +9448,25 @@ class SeasonManager:
         phase resume skip work that already mutated DB state (e.g. front-
         office contract decrements, training stat development).
         """
+        # ⚠️ PERSIST THE PLAYERS BEFORE THE MARKER. The marker makes a restart SKIP the step,
+        # so it may only be written once the step's effects are in the database — and the
+        # offseason steps mutate players in memory only (contract decrements, expirations,
+        # retirements, trades), with the one full save not coming until `_saveSeasonState`
+        # after the whole offseason. Measured on production, season 6, mid-offseason: all
+        # 2 retirements and all 35 expired contracts were still on their old teams in the
+        # database behind a completed `frontoffice_decisions`, so any deploy in that window
+        # would have reloaded pre-offseason rosters and skipped the step that changes them.
+        # A failed save still marks the step: leaving it unmarked is WORSE, because a later
+        # step's successful save would write these changes anyway and a restart would then
+        # apply them twice (contracts decremented twice).
+        try:
+            import time as _time
+            _t0 = _time.monotonic()
+            self.playerManager.savePlayerData()
+            logger.info(f"Offseason step '{step}': players saved in {_time.monotonic() - _t0:.1f}s")
+        except Exception as e:
+            logger.error(f"Offseason step '{step}': player save failed, a restart before the "
+                         f"end-of-offseason save will lose this step's changes: {e}")
         if not hasattr(self, '_offseasonCompletedSteps') or self._offseasonCompletedSteps is None:
             self._offseasonCompletedSteps = set()
         self._offseasonCompletedSteps.add(step)

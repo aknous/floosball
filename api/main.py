@@ -7527,8 +7527,19 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         sourceOrder = sm.currentSeason.freeAgencyOrder
     else:
         sourceOrder = []
-    for t in sourceOrder:
-        draftOrder.append({
+    # ⚠️ UP TO AND THROUGH THE ROOKIE DRAFT THE BOARD IS THE ROOKIE ORDER, AND A TRADED
+    # PICK IS PICKED BY ITS OWNER. `freeAgencyOrder` is team objects in standings order and
+    # cannot carry ownership, so serving it raw listed every traded slot under the club
+    # that gave it away while the draft handed it to the buyer. Resolved through the same
+    # reader the draft uses, so the two cannot disagree. FA picks are not tradeable, so
+    # the FA phases keep the plain order.
+    from constants import rookieDraftEnabled as _rookieDraftEnabled
+    if flowPhase in ('post_bowl', 'frontoffice', 'rookie_draft') and _rookieDraftEnabled():
+        slots = sm._rookieDraftSlots(list(sourceOrder))
+    else:
+        slots = [(t, t) for t in sourceOrder]
+    for slotNum, (original, t) in enumerate(slots, start=1):
+        row = {
             "name": t.name,
             "city": getattr(t, 'city', ''),
             "abbr": getattr(t, 'abbr', t.name[:3].upper()),
@@ -7537,7 +7548,18 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             "complete": getattr(t, 'freeAgencyComplete', False),
             # FA order is by Appeal (facilities-derived), not market tier.
             "appeal": round(_facMgr.computeAppeal(getattr(t, 'facilities', {}) or {}), 1),
-        })
+            "slot": slotNum,
+            "traded": original is not t,
+        }
+        if original is not t:
+            # The club whose finish put the pick HERE. The owner's record explains
+            # nothing about the slot.
+            row["originalTeam"] = {
+                "id": getattr(original, 'id', None),
+                "name": original.name,
+                "abbr": getattr(original, 'abbr', original.name[:3].upper()),
+            }
+        draftOrder.append(row)
     transactions = getattr(sm, '_offseasonTransactions', [])
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
     faWindowEnd = getattr(sm, '_faWindowEnd', None)
