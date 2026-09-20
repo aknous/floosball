@@ -351,7 +351,22 @@ EFFECT_EDITION_TIER = {
     "captain": "diamond",
 
     # ── Prognostication cards ──
-    "nose_picker": "holographic", "medium": "holographic", "parlay": "holographic",
+    # ⚠️ `nose_picker` IS PRISMATIC BECAUSE EVERY OTHER STREAK CARD IS. It was the only
+    # streak effect in the game below prismatic, and edition IS the effect tier — so it
+    # drew `EDITION_POWER_SCALE` 1.70 against the 0.70 every card it competes with
+    # mechanically draws, a 2.43x dial. Minted at rating 80 that put it at 43.5 FP in
+    # week one against Metronome's 40.9 and Snowball Fight's 17.5, and 120 FP by week 17.
+    #
+    # ⚠️ AND IT IS THE ONE STREAK WHOSE CONDITION IS NOT A PERFORMANCE OUTCOME. Every
+    # prismatic peer asks the game for something — a kicker makes his kicks, the roster
+    # scores, a team wins. This one asks the user to submit picks by hand, which is free
+    # and can be guaranteed every week. A streak card's whole design is that value is
+    # built and can be lost; this had the highest floor in the class and no risk at all.
+    # Reported as too strong and trivial to max out.
+    #
+    # Moving the tier fixes the size BY CONSTRUCTION rather than by choosing a smaller
+    # number: the gate bar, the power scale and the mint pool all follow the tier.
+    "nose_picker": "prismatic", "medium": "holographic", "parlay": "holographic",
     # ── Roster-construction-driven (next-season additions) ──
     "synergy": "holographic", "vanguard": "holographic", "range": "holographic",
     "loyalty": "holographic",
@@ -6808,6 +6823,29 @@ def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: in
 
 # ─── Streak Condition Checking (for week-end reset logic) ────────────────────
 
+def picksWereSubmittedManually(picks) -> bool:
+    """Did the user make this week's Prognostications themselves?
+
+    ⚠️ THE SINGLE DEFINITION, because there were FOUR and they all had the same bug.
+    `seasonManager` (the week-end settle), `fantasyTracker` (the live display) and
+    `cardProjection` (twice, for the live week and for the historical average) each
+    wrote `any(not p.is_auto ...)` inline — which asks whether ONE pick was manual, not
+    whether auto-pick stayed out of it.
+
+    ⚠️ ONE HAND-MADE PICK ALONGSIDE FIFTEEN AUTO-FILLS KEPT THE STREAK ALIVE, against
+    the card's own tooltip ("submit picks yourself instead of letting auto-pick fill
+    them in") and its own code comment ("any auto-pick fill-in breaks the streak"). So
+    a user with auto-pick switched on held the streak for free, which is most of why it
+    was trivial to max out.
+
+    An empty week is NOT a manual week: no picks were submitted at all.
+    """
+    picks = list(picks or [])
+    if not picks:
+        return False
+    return not any(getattr(p, 'is_auto', False) for p in picks)
+
+
 def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
     """Check if a streak card's condition was met this week.
 
@@ -6951,8 +6989,10 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20") >= _streakBar("puntsIn20", 5, 2.03)
 
     if condition == "pickem_manual_submit":
-        # Streak grows when the user submitted Prognostications manually
-        # this week (any auto-pick fill-in breaks the streak).
+        # Streak grows when the user submitted Prognostications manually this week; ANY
+        # auto-pick fill-in breaks it. That was always the stated rule and never the
+        # implemented one — see `picksWereSubmittedManually`, which is now the single
+        # definition behind the four places that used to decide this inline.
         return bool(getattr(ctx, 'userManualPickSubmittedThisWeek', False))
 
     return True

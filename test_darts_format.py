@@ -56,11 +56,28 @@ def dartsRules(target=X, **overrides):
     return rules
 
 
+def _seedAll(seed):
+    """⚠️ SEED NUMPY TOO, OR THIS IS NOT DETERMINISTIC AND NEVER WAS.
+
+    `random.seed` alone looks like it pins a run, but player generation goes through
+    `np.random.normal` (`floosball_player.getPlayerAttributes`), so every fixture was built
+    from different players run to run. Measured before this: the file failed **5 runs in
+    20**, surfacing as an unexplained intermittent in full-suite runs and teaching everyone
+    to ignore a red suite.
+    """
+    random.seed(seed)
+    try:
+        import numpy as _np
+        _np.random.seed(seed)
+    except Exception:
+        pass
+
+
 def playDarts(count, seed=5, target=X, withOvertime=False, **overrides):
     """Play real games and return their finals. Deliberately the whole engine — the point
     of a certification pass is that the format survives contact with it."""
     async def run():
-        random.seed(seed)
+        _seedAll(seed)
         out = []
         for _ in range(count):
             game = Scenario(gameRules=dartsRules(target, **overrides)).game
@@ -565,7 +582,7 @@ class AnExactLandingIsNotSpentOnAHoop(unittest.TestCase):
         self.assertFalse(g._dartsNeedIsExactLanding())
         self.assertEqual(g._hoopPointsNeeded(g.homeScore - g.awayScore), 'helpful')
         self.assertIsNotNone(g._hoopTarget(), 'fixture has no pair in range')
-        random.seed(3)
+        _seedAll(3)
         fired = sum(1 for _ in range(200) if g._shouldAttemptHoopShot())
         self.assertGreater(fired, 40, 'the fixture never shoots, so the vetoes prove nothing')
 
@@ -640,7 +657,7 @@ class TheConversionIsMeasuredAgainstTheTarget(unittest.TestCase):
     def _picks(self, scoreAfter, oppScore=5, quarter=3, n=40):
         out = collections.Counter()
         for i in range(n):
-            random.seed(i)
+            _seedAll(i)
             g = self._afterTd(scoreAfter, oppScore, quarter)
             r = g._chooseConversion(g.homeTeam)
             out[(r['kind'], float(r['points']))] += 1
@@ -1158,7 +1175,12 @@ class AnEarlyFinishIsADecidedGame(unittest.TestCase):
         # sample sat right on the guard and any change to play-calling tipped it, which reads
         # as this test failing when nothing it asserts has moved. Widen the sample rather
         # than lower the bar.
-        cls.finals = playDarts(60, seed=808)
+        # ⚠️ 60 GAMES CANNOT TEST A RARE EVENT, and the sample size was the real fault
+        # here — not the seed. A "close" finish (the loser within 4 of the target) is about
+        # a fifth of target finishes, and the first 60 games at this seed contain ZERO, so
+        # `assertTrue(close)` was a coin flip dressed as an assertion. Measured at this
+        # seed: n=60 -> 0 close, n=120 -> 7, n=150 -> 12. The extra games cost ~6s.
+        cls.finals = playDarts(150, seed=808)
 
     def test_earlyFinishesAreTheLopsidedOnes(self):
         landed = [(min(h, a), max(h, a)) for h, a in self.finals if h == X or a == X]

@@ -43,6 +43,54 @@ GEN_TRUESKILL_STD = 10
 # potential = trueSkill + randint(0, POTENTIAL_HEADROOM). Narrowed from the old
 # 30: true skill is the reliable target; potential is the occasional overshoot.
 POTENTIAL_HEADROOM = 15
+
+# ---- The late bloomer ----
+# ⚠️ WITHOUT THIS THE STORY IS IMPOSSIBLE, NOT MERELY RARE. Measured over 4,000 generated
+# prospects: `corr(draft rating, ceiling) = 0.918`, and ceiling minus draft rating is a
+# band of median +9 with a standard deviation of **3.0**. Of 1,275 prospects drafted at 66
+# or below, **not one** could ever reach 90; of 2,199 at 70 or below, none. The cause is
+# structural rather than a tuning miss: `potential = trueSkill + randint(0, HEADROOM)` is
+# drawn PER ATTRIBUTE, and the composite rating averages three or four of those independent
+# draws, so the central limit crushes the spread. A low pick is capped by arithmetic.
+#
+# ⚠️ THE BLOOM IS ONE DRAW SHARED BY EVERY ATTRIBUTE, which is the whole fix. Another
+# per-attribute roll would be averaged away exactly like the first one.
+#
+# ⚠️ AND IT IS LATENT: it does NOT touch `potentialX` at generation. `prospect_scouting`
+# derives its band from `computeCeilingRating()`, which reads `potentialX` — so a bloom
+# applied up front would show up in every team's scouted range and the player would go
+# first overall, which is the opposite of the story. It is held as a hidden number and
+# applied during a development season, after the draft, after teams have committed.
+LATE_BLOOM_ENABLED = True
+# Per prospect, at class generation. At a 32-player class this is ~0.6 a season.
+LATE_BLOOM_CHANCE = 0.02
+# Points added to trueSkill AND potential on every trained attribute when it fires.
+# ⚠️ TRUE SKILL AS WELL AS POTENTIAL. Raising potential alone would leave the player
+# reaching it only through the gated overshoot roll, which mostly does not happen — he
+# would carry a ceiling nobody ever sees.
+# ⚠️ SIZED AGAINST THE COMPOSITE, NOT THE ATTRIBUTES. A bloom of +14 on every trained
+# attribute moves the displayed rating only +8, because `playerRating` is
+# `(skillRating*3 + playMaking + xFactor)/5` and playMaking/xFactor are NOT trained — so
+# the bloom reaches three fifths of the number. At +14 the gain was indistinguishable from
+# the ordinary development band (median +9), which is to say invisible. Measured per
+# attribute -> composite: +20 -> ~12, +32 -> ~19.
+LATE_BLOOM_MIN, LATE_BLOOM_MAX = 20, 32
+# Chance per development season that a pending bloom fires, so it lands at an unpredictable
+# point in the window rather than always in year one.
+#
+# ⚠️ IT SCALES WITH THE DEVELOPMENT ENVIRONMENT (owner): a good coach and good facilities
+# make the bloom far likelier, a poor pair make it a long shot. `devBias` already carries
+# exactly that quantity — coach `playerDevelopment` (60 -> 0, 80 -> +2, 100 -> +4) plus the
+# Training Facility bonus — so the chance rides it rather than inventing a second reading of
+# the same thing.
+#
+# ⚠️ LESS PROBABLE, NEVER IMPOSSIBLE. A floor keeps a badly-run team from being a hard wall,
+# so the talent is squandered by the odds rather than by a rule. And because the bloom must
+# fire inside the development window or the prospect walks, a poorly-run team genuinely does
+# lose players it never knew it had: at devBias 0 the chance across a 3-season window is
+# about 27%, against about 87% at devBias 4.
+LATE_BLOOM_FIRE_BASE = 0.10
+LATE_BLOOM_FIRE_PER_BIAS = 0.10
 # Rookies/prospects DEBUT this many attribute points below their true skill and
 # develop up into it over their early seasons (~6-9 rating pts; calibrate). A
 # future 5-star looks like a solid 3-4-star as a rookie. Founding/FA-generated
@@ -1562,7 +1610,84 @@ SCOUTING_BANDS = [
     (65, 10),   # 65-79: ±10
     (0, 15),    # <65: ±15
 ]
+# ⚠️ ACCURACY COMES FROM `frontOfficeBrain.scoutingVision`, NOT FROM THE LINE ABOVE.
+# The comment above this table says accuracy is "coach.scouting + funding tier bonus",
+# and FUNDING_SCOUTING_BONUS is the OLD MARKET-TIER SYSTEM, superseded by
+# facilityEffect('scouting_bonus'). `scoutingVision` already blends the GM's own
+# `scouting` with the Scouting Department behind FO_SCOUT_FACILITY_ENABLED, and is what
+# every other front-office judgement uses — so the band rides it and there is one
+# definition of how well a club sees. ✅ This is also what finally makes the Scouting
+# Department honest: its UI copy promises "clearer read on draft prospects" and until
+# now it only sharpened free-agent valuations.
 FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
+
+# ---- The band narrows as the season runs ----
+# Band width scales with BOTH scouting accuracy and how long the club has been
+# watching. A club on the ±10 tier, true potential 88, one fixed opinion:
+#
+#   week 1  band ±14  believes 96  shows  82-100
+#   week 8  band ±10  believes 94  shows  84-100
+#   week 15 band ±7   believes 92  shows  85-99
+#   week 22 band ±4   believes 90  shows  86-94
+#
+# ✅ THE BELIEF CONVERGES ON THE TRUTH AS WELL AS THE RANGE, because the error scales
+# with the band and the club's own draw is FIXED. Early it is confidently wrong-ish and
+# openly unsure; late it is close and knows it. Nothing ever jumps — the same opinion
+# simply sharpens, which is exactly what a fan should see after a facility upgrade too.
+#
+# ✅ A PERFECT SCOUT IS UNAFFECTED: SCOUTING_BANDS gives ±0 at accuracy ≥95, and zero
+# times any scale is still zero. An elite scouting operation sees the exact number in
+# week 1 and has nothing to gain from waiting — the Department's ceiling being worth
+# something.
+#
+# This is what gives the trade deadline a shape. Without it a pick is exactly as
+# knowable in week 3 as in week 22, and there is no reason to trade at one moment
+# rather than another.
+SCOUT_BAND_EARLY = 1.4
+SCOUT_BAND_LATE = 0.4
+
+# ⚠️ THE ERROR IS NARROWER THAN THE RANGE THAT IS SHOWN, and conflating them makes the
+# UI lie. If a club's misjudgement were drawn at the full band width, then `belief ± band`
+# contains the truth exactly when |draw| <= 1 — i.e. ONE CLUB IN THREE is shown a range
+# the real number falls outside. A page that says "82-100" about an 78 is not uncertainty,
+# it is a wrong answer with error bars on it.
+#
+# Drawing the error at half the band makes the stated range a ~2-sigma interval, so it
+# contains the truth ~95% of the time while the belief spread — which is what actually
+# makes two clubs disagree and trade — stays wide.
+SCOUT_ERROR_SIGMA_FRACTION = 0.5
+
+# ---- The cull ----
+# ⚠️ IT SHIPS WITH THE DRAFT, NOT AFTER IT. 192 roster spots are FIXED. Growing the
+# candidate population raises the bar with no change to how players are generated —
+# pure selection pressure. Resampling the current empirical rating distribution:
+#
+#     population   rostered mean   4-star-plus share
+#        224 (today)     80.5            35%
+#        300             83.0            48%
+#        400             85.0            63%
+#
+# Intake of one class a season against ~19 replacement need (192 spots / median
+# longevity 10) leaves a ~13/season surplus. Unchecked that reaches ~63% four-star by
+# season 20 — EVERY TEAM ENDS UP WITH FOUR-STAR PLAYERS, which is the one thing this
+# feature must not do. A cull at the surplus rate holds it flat at 34% indefinitely.
+# "After" means the pool grows 13 a season until it arrives.
+CULL_ENABLED = True
+
+# Seasons a never-rostered player sits in the pool before he is eligible. A grace
+# window, not a probation: one offseason of going unpicked says more about the draft
+# order than about the player.
+CULL_MIN_POOL_SEASONS = 2
+
+# ⚠️ THE BAR IS RELATIVE TO THE LEAGUE'S OWN MEAN, NOT AN ABSOLUTE NUMBER — the same
+# self-normalising argument as the anomaly threshold. An absolute bar written against
+# today's curve silently stops culling the moment the curve moves, which is precisely
+# what this exists to prevent it from doing.
+#
+# ⚠️ IT CANNOT BE CALIBRATED AGAINST CURRENT DATA: none of today's free agents have
+# seasonsPlayed == 0, so there is no population to fit against. The fraction is chosen
+# on judgement and MEASURED once a class has actually cycled through.
+CULL_RATING_FRACTION_OF_MEAN = 0.92
 
 # ============================================================================
 # FACILITIES  (Markets→Facilities system — see docs/MARKETS_FACILITIES_PLAN.md)
@@ -2197,11 +2322,32 @@ COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
 # is the whole intake model — it produces nothing while the pool is above target
 # (so an inflated pool drains), then replaces retirees one-for-one once at
 # target. ROSTER_SUPPLY_BUFFER_PER_POSITION sets the steady-state pool depth.
-# OFF (plan Part F). No rookie class is generated and the draft has nothing to
-# draft: new players enter ONLY as the position-supply deficit fill — a trickle
-# into the FA pool that produces nothing while the pool is above target, so it
-# cannot inflate. Existing prospects drain through and are not replaced.
-ROOKIE_DRAFT_ENABLED = False
+# ⚠️ THIS FLAG HAD ZERO READERS FOR SIX WEEKS. `68e5608` excised the draft itself
+# and left the switch behind describing it in the present tense, so flipping it did
+# nothing at all — the same trap class as AUTONOMOUS_FO_ENABLED documented directly
+# beneath, polarity reversed. It is WIRED again as of the prospect-draft restoration
+# and is the real switch: `playerManager.assignPlayersToTeams` (whether a class is
+# held out of the FA pool or released into it), `seasonManager.startNewSeason`
+# (whether a class is generated) and the offseason draft phase all read it through
+# `rookieDraftEnabled()` below.
+#
+# ON: a class of one prospect per club is generated at SEASON START, visible and
+# scoutable all season, and drafted worst-first in the offseason. New players still
+# also arrive through `ensurePositionSupply`, which stays the per-position EMERGENCY
+# it already is (it generates only a deficit, so it produces nothing while a position
+# is above target and cannot double the faucet).
+#
+# OFF: no class is generated and the draft has nothing to draft. New players enter
+# ONLY as the position-supply deficit fill, and any class left in the database is
+# released into free agency on load rather than being stranded there forever.
+ROOKIE_DRAFT_ENABLED = True
+
+
+def rookieDraftEnabled() -> bool:
+    """THE single reading of whether the draft runs. Two call sites computed this
+    expression independently before, which is how a flag and an env override drift
+    apart. `NO_ROOKIE_DRAFT` is the sim/harness escape hatch."""
+    return bool(ROOKIE_DRAFT_ENABLED) and not _os.environ.get('NO_ROOKIE_DRAFT')
 
 # ---- Autonomous Front Office (docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md) ----
 # The sim's GM brain makes roster decisions; fans express sentiment that tips
@@ -2487,6 +2633,718 @@ FO_FA_CONTENTION = 0.30
 # sits under a proven veteran's almost by definition, and the whole pipeline
 # would wash out to free agency instead of ever reaching a roster.
 FO_PROSPECT_PROMOTE_EDGE = 0.88
+
+# ---- Attitude: a toxic player damages the room, and the GM could not see it ----
+# ⚠️ THE SIM MODELS THE DAMAGE AND GAVE THE GM NO WAY TO PERCEIVE IT.
+# `seasonManager._propagateAttitudeContagion` runs EVERY WEEK, nudging each starter's
+# confidence and determination toward the room's average attitude — its own docstring
+# says "a toxic veteran genuinely poisons teammates' confidence". `frontOfficeBrain`
+# never read `attitude`. Not once.
+#
+# Points off a player's valuation per attitude point below neutral (80). Anchored on a
+# decision that should flip: Chud Bumpington (TE, rating 85, attitude 45) on a Melons
+# roster whose room averages 62.8 —
+#     0     -> effective 85.0, rank 2 of 6 on his own roster
+#     0.10  -> 81.5, still 2 of 6
+#     0.20  -> 78.0, rank 3 of 6      <- the point the decision actually changes
+#     0.30  -> 74.5, rank 4 of 6      <- overstates it; he drops under a clean 78
+# 0.20 is where a 45-attitude 85 first falls below a clean 79.
+#
+# ⚠️ SOFT, FOR THE REASON THE APPEAL GATE ALREADY TAUGHT. Discount difficult players
+# hard enough and they pool in free agency, never get signed, and the supply floor
+# generates replacements around them — the exact failure that made
+# FLOOS_SOFT_APPEAL_PENALTY a 0.90 multiplier rather than a veto.
+#
+# ✅ Not double-counting rating: corr(rating, attitude) = +0.293 across 192 rostered
+# players — 85+ attitude averages 84.2 rating against 79.3 for sub-55, nowhere near
+# enough that rating already carries it.
+FO_ATTITUDE_ENABLED = True
+FO_ATTITUDE_NEUTRAL = 80.0
+FO_ATTITUDE_PENALTY_PER_POINT = 0.20
+
+# ⚠️ THE TRADE COMES FROM THE ROOM, NOT FROM BLINDNESS. The naive version (seller
+# discounts, buyer does not) would have GMs palming headcases off on each other. But
+# the drift lands in whichever room he is IN, so every club prices it and a difficult
+# player is simply worth less to everybody. What differs is the ROOM: drift works off
+# `(avgAttitude x 3 + coachAttitude) / 4`, so a strong room with a leader coach absorbs
+# one bad apple while an already-toxic room compounds. Exoticos (room 82.8) can take a
+# headcase Grillmeisters (62.7) cannot, and pays less than his rating suggests — change
+# of scenery as arithmetic, and it makes a good locker room a tradeable asset in itself.
+#
+# ⚠️ A NEUTRAL ROOM (80) REPRODUCES THE ANCHOR TABLE ABOVE EXACTLY, and so does a
+# valuation with no team attached — the room only ever scales a penalty that is already
+# correct, it never invents one. Bounded so the room can never dominate the attribute.
+FO_ATTITUDE_ROOM_SENSITIVITY = 0.02     # per point the room sits away from neutral
+FO_ATTITUDE_ROOM_MIN = 0.60             # the best room in the league absorbs this much
+FO_ATTITUDE_ROOM_MAX = 1.40             # the worst compounds it this much
+
+# ---- Fan sentiment on a DEPARTURE clears a bar; on a CHOICE it tips the order ----
+# ⚠️ THESE ARE DIFFERENT QUESTIONS AND ONE TERM CANNOT SERVE BOTH.
+#
+# Where a club is choosing AMONG players — which walk-year men to keep with a scarce
+# re-sign slot, whose name sits where on a draft board — sentiment belongs on the VALUE,
+# because the value is what sets the ORDER and the order is the decision. That is
+# `SENTIMENT_MAX_VALUE_SWING` and it stays exactly where it is.
+#
+# Where a club is choosing WHETHER TO LET ONE GO, the value side measurably does
+# nothing, because the club's own constraint does not bind: measured on a trade, letting
+# a beloved player's tilt raise his club's valuation left every buyer's clearing price
+# IDENTICAL across the full tilt range — the seller was losing him for nothing, so any
+# offer beat keeping him and only the BUYER could refuse. So on a departure, sentiment
+# raises THE SURPLUS THE MOVE MUST CLEAR.
+#
+# Multiplier on that bar at full love and full fanTrust. At +30% a favourite costs a
+# contender about three extra picks of value; at +100% he is only movable to the
+# strongest buyer in the league. A disliked player lowers the bar by the same rule,
+# floored so it can never reach zero and make a departure free.
+# See docs/TRADING_PLAN.md §2 ("it must raise the BAR, not the seller's valuation").
+SENTIMENT_BAR_MAX_RAISE = 1.00
+SENTIMENT_BAR_MIN_SCALE = 0.40
+
+# ⚠️ ON A PROSPECT'S LAST WINDOW THE EDGE ABOVE IS THE WRONG COMPARISON ENTIRELY.
+# It prices the prospect against the free agent this club could sign instead —
+# correct in every earlier window, where declining to promote means "leave him in
+# the pipeline and revisit next year". On the FINAL window there is no next year:
+# `_advanceProspectWindow` releases him for nothing the moment it runs, so the club
+# is choosing between the prospect and NOTHING, not between the prospect and a free
+# agent. That is the third instance of one structural error (a decision written for
+# one context, reused where the alternative changed and the comparison did not) —
+# see docs/TRADING_PLAN.md §9.
+#
+# The consequence lands squarely on the prospect draft's own story: a bottom-feeder
+# drafts the headline prospect, develops him for three seasons and loses him free
+# because its slot at his position happened to be occupied.
+LAST_WINDOW_PROMOTE_ENABLED = True
+
+# ---- Cutting a player with term left costs Treasury ----
+# `cutFee = remainingSeasons x (rating - REPLACEMENT_RATING) x CUT_FEE_RATE` Floobits.
+#
+# ⚠️ THIS IS THE SAFE USE OF A CURRENCY WITH A 227x SPREAD. Treasury was rejected as a
+# trade ASSET precisely because that spread let the richest club fund the entire market;
+# as a COST the same spread constrains the poor instead of empowering the rich. A club
+# cannot buy a player with Treasury, only ROSTER SPACE, and a club that churns talent
+# pays for it — Treasury's other claim is facility upkeep (`resolveSeasonEnd` spends it
+# at season end), so cutting freely costs a facility level later. No extra rule needed.
+#
+# ⚠️ FLOORED AT ZERO, NEVER A DEBT: a club that cannot pay simply cannot cut. Letting the
+# fee go negative hands a broke club unlimited roster churn, the opposite of the intent.
+#
+# At 50 F per surplus-season, measured against the live Treasury spread: a filler with
+# 1 year left is 250F (25 of 32 clubs can pay), a good starter with 2 is 1,700F (16/32),
+# an elite player with 3 is 4,350F (15/32) — the median club affords roughly one cut of
+# a good starter a season. See docs/TRADING_PLAN.md §3.7.
+CUT_FEE_RATE = 50.0
+
+# ⚠️ THE FEE PRICES THE SAME LOSS THE VALUATION ALREADY CHARGES, so it must not enter a
+# trade decision at full weight. `cutFeeFor` is `termRemaining x surplus x CUT_FEE_RATE` and
+# `playerValue` is `surplus x seasonsOfControl x weights` — the same quantity in two
+# currencies. `bidFor` already subtracts the displaced man's VALUE, so converting his fee
+# 1:1 and subtracting that too charges one loss about three times over: measured, the
+# converted fee came to **2.1-2.8x the displaced value itself**, because the fee counts
+# WHOLE remaining seasons while `playerValue` discounts the part-season and weights later
+# years down.
+#
+# ⚠️ IT IS STILL A REAL COST AND MUST NOT BE DROPPED. Treasury pays facility upkeep, so
+# spending it has a genuine opportunity cost, and the fee is what stops a rich club churning
+# its roster. It enters as a minority term rather than a second full price.
+#
+# ⚠️ IT LANDS ALMOST ENTIRELY IN-SEASON, which is how the error surfaced. In the offseason a
+# buyer often has an open slot (holes left by earlier trades) and pays nothing; in-season
+# every roster is full, so a cut — and the fee — is unavoidable. At full weight in-season
+# trades fell to **1.9 a season across 32 clubs**, 14 of 27 of them bunched in week 15.
+TRADE_CUT_FEE_WEIGHT = 0.25
+
+# Replacement level: what a club can always have for free. NOT zero — a roster hole can
+# be filled from the free-agent pool, so an 80 is worth 13 of surplus and not 80. This is
+# the anchor every surplus-over-replacement number in the front office and the trade
+# market prices against, and it is measured off the pool rather than guessed.
+REPLACEMENT_RATING = 67.0
+
+# ============================================================================
+# IN-SEASON AND OFFSEASON TRADING  (docs/TRADING_PLAN.md)
+# ============================================================================
+# ⚠️ ON AS OF 2026-09-17 (owner), so the first offseason after production's week 22 runs
+# with a live market. It shipped False while the market was being measured, matching
+# RULE_VOTE_ENABLED / WEATHER_ENABLED / RUNNER_MOVE_ENABLED.
+TRADING_ENABLED = True
+
+
+def tradingEnabled(session=None) -> bool:
+    """THE single reading of whether the market runs — constant, overridden live by the
+    `trading_enabled` app_setting the Admin panel writes.
+
+    ⚠️ CALL IT; DO NOT READ THE CONSTANT. `from constants import TRADING_ENABLED` copies
+    the value at import time, so a module-level binding cannot be toggled and a kill switch
+    written that way silently does nothing. `TRADE_WINDOW_ENABLED` already paid for this
+    lesson — it is read lazily inside `_computeWindow` for exactly this reason.
+
+    ⚠️ IT EXISTS BECAUSE THE OFFSEASON IS DAYS AWAY AND A DEPLOY IS NOT INSTANT. The market
+    settles trades that move real players between real rosters; if it misbehaves mid-
+    offseason the owner needs to stop it now rather than after a redeploy.
+
+    ⚠️ FAILS OPEN TO THE CONSTANT. An unreachable or locked database must not silently
+    switch a live market off half way through an offseason — that would leave some clubs
+    having traded and others not, which is worse than either state.
+
+    `session` is the caller's, to avoid opening a second one against SQLite's single write
+    lock (the `getAnomalySetting` convention).
+    """
+    try:
+        from database.models import AppSetting
+        own = session is None
+        if own:
+            from database.connection import get_session
+            session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key='trading_enabled').first()
+            if row is None or row.value is None:
+                return bool(TRADING_ENABLED)
+            return str(row.value).lower() == 'true'
+        finally:
+            if own:
+                session.close()
+    except Exception:
+        return bool(TRADING_ENABLED)
+
+# ---- Why trades happen ----
+# ⚠️ THE ENGINE IS CONTRACT CONGESTION, NOT GM DISAGREEMENT. The obvious model — two GMs
+# value a player differently, so they swap — is noise wearing a strategy's clothes: with
+# six position-locked slots there are no holes and no surpluses, every club has exactly
+# one of each, and nothing creates a NEED. `RESIGN_LIMIT_PER_OFFSEASON` is 2, and on the
+# live league 89 of 192 players (46%) are on walk years, 18 of 32 clubs have more than
+# two expiring, and 33 players — 2,420 rating points — walk for ZERO return at season
+# end. A club about to lose a player for nothing should sell him for something.
+
+# ---- Valuation: surplus over replacement x seasons of control ----
+# Value = how much better than freely available, multiplied by how long you keep it.
+# `termRemaining` already carries the time half: a walk-year player traded in week 10 is
+# 0.64 seasons of control against 2.64 for the same player with three years left — a 4x
+# spread on identical talent, which is what makes a contract an asset rather than a
+# detail. Replacement is REPLACEMENT_RATING above, not zero.
+
+# ⚠️ THE CONTENTION WEIGHT IS WHAT MAKES A MARKET EXIST AT ALL. On the raw scale picks
+# dominate rentals ~10x and nothing would ever clear. The missing term is that clubs do
+# not share a discount rate: a contender prices THIS season high and the future low, a
+# club going nowhere does the reverse, BOTH ARE RIGHT, and that gap is the trade.
+#
+#   nowWeight = (contention / leagueMean) ** TRADE_CONTENTION_EXPONENT
+#
+# Swept on a real rental at week 10 — the earliest pick each buyer would part with:
+#
+#   buyer                  e=1.0   e=1.25   e=1.5   e=2.0
+#   Pinecones (25.6W)        20      17       12       2
+#   Curd (21.0W)             24      22       20      15
+#   Waffles (15.8W)          26      26       26      25
+#
+# At 2.0 the best club in the league pays a top-two pick for a six-week rental, which no
+# real club does. Linear compresses the whole market into picks 20-26 — a 6-slot spread
+# with little separating a 25-win club from a 16-win one. 1.25 gives 9 slots and lands a
+# rental mid-round.
+TRADE_CONTENTION_EXPONENT = 1.25
+
+# ⚠️ CONTENTION IS UNCERTAIN EARLY, AND THAT PRODUCES THE DEADLINE FOR FREE. A club does
+# not know in week 2 whether it is a contender, so `nowWeight` reads off a blend of prior
+# expectation and this season's evidence — the same shape
+# `teamManager.applyRegularSeasonPressureBlend` already uses.
+#
+#   week  Pinecones  Bees   gap
+#     1     1.00     1.00   1.00     <- nobody can tell yet
+#     8     1.54     0.84   1.84
+#    12     1.87     0.75   2.50
+#    15+    2.12     0.68   3.12
+#
+# ⚠️ IN WEEK 1 EVERY CLUB SITS AT 1.00, so buyer and seller price the future identically,
+# there is no gap to trade across, and NOTHING FIRES. The market opens as the table
+# separates — a deadline without a deadline rule. Certainty arrives at week 15 and the
+# deadline is week 22, leaving a seven-week window where clubs KNOW and must act.
+TRADE_CONTENTION_RAMP_WEEKS = 14
+
+# ⚠️ AND A CLUB DOES NOT ACT ON A POSITION IT CANNOT YET READ (owner, 2026-09-15:
+# "ideally teams wait until closer to the deadline as thats when they would have more
+# clarity on their postseason position").
+#
+# The plan expected the market to open by itself as the table separated — "a deadline
+# without a deadline rule" — and it did not, for a reason the ramp cannot fix. Measured
+# over three seasons: **80% of trades were `horizon_mismatch` and 60% of in-season trades
+# landed in weeks 1-7.** The cause is that in week 1 `nowWeight` is EXACTLY 1.00 for every
+# club, so `isContending` (>= 1.0) is TRUE LEAGUE-WIDE — which correctly silences the
+# expiring-surplus trigger and simultaneously fires the horizon trigger for all 32 clubs
+# at once, on a confidence none of them has earned. The market's busiest week was the one
+# where nobody knew anything.
+#
+# So listing requires CLARITY, expressed as the same ramp: a club will not put a man on
+# the block until this much of the season's evidence is in. At 0.5 that is week 8, which
+# opens the market halfway to certainty (week 15) and leaves the whole run-in to the
+# week-22 deadline for the contention gradient to do the rest.
+#
+# ⚠️ IN-SEASON ONLY. In the offseason `contentionRamp` is 0.0 BY DEFINITION — contention
+# is unknown for a season that has not been played — so applying this there would shut the
+# offseason market completely, when the plan explicitly wants it running on the
+# blocked-prospect / locker-room / horizon triggers.
+#
+# ⚠️ 1.0, WHICH IS FULL CERTAINTY AT WEEK 15 — and the plan names that window itself:
+# "certainty arrives at week 15 while the deadline is week 22, leaving a SEVEN-WEEK WINDOW
+# WHERE CLUBS KNOW AND MUST ACT." Measured at 0.5 (week 8) the market opened the instant
+# it was allowed and emptied itself there — 5 of 6 in-season trades in weeks 8-10 — which
+# is the week-1 cluster moved rather than removed, because supply is exhausted by the
+# first pass that can see it. Anchoring on certainty rather than on a chosen week means
+# the gate moves with `TRADE_CONTENTION_RAMP_WEEKS` instead of drifting away from it.
+TRADE_MIN_CERTAINTY = 1.0
+
+# ---- Deadline desperation: the buyer's clock ----
+# ⚠️ ONLY THE SELLER HAD A CLOCK, AND THE MARKET RAN BACKWARDS BECAUSE OF IT. The ask
+# decays toward the deadline (`reserveDecay`, 0.48 at week 15 down to 0.22 at week 22)
+# while the buyer's `nowWeight` is FLAT from week 15 — the contention ramp completes there
+# and nothing pushes afterwards. Measured over six seasons, the price actually PAID fell
+# as the deadline approached: median bid-to-ask 3.17 in weeks 15-17 against 2.12 in weeks
+# 19-21. A club making a playoff push got its best bargains on the last day, which is the
+# reverse of every real deadline.
+#
+# Both sides are under the same force and it should act on both: the seller's asset is
+# expiring, and so is the BUYER'S OPPORTUNITY. Before the deadline a contender can decline
+# and wait for a better listing; at week 21 this is the last one there will be, so the
+# option it is giving up by refusing is worth less and less. That is what makes a deadline
+# deal expensive in reality, and it is the missing half of the model.
+#
+# How far above a player's plain value a maximally-contending club will go on the final
+# day. At 0.6 a club weighting the present 1.8x the league pays up to ~1.5x — a real
+# premium, not a blank cheque.
+#
+# ⚠️ SCALED BY CONTENTION, so it is DESPERATION rather than a date: a club going nowhere
+# has nothing to push for and pays exactly what the player is worth, on the deadline as on
+# any other day. And ⚠️ NOTHING in the offseason, where there is no closing window at all.
+TRADE_DEADLINE_PREMIUM = 0.6
+
+# ---- Clubs trade for what they NEED, not just for the biggest number ----
+# ⚠️ `playerRating` IS LITERALLY `(offensiveRating + defensiveRating) / 2`, so the two
+# halves are averaged away before the market ever sees them and a club with a defensive
+# hole gets no signal at all. Every player in the league is the same KIND of asset to
+# every club, which is why the market reads as "buy the best number available" rather than
+# as a front office addressing a weakness.
+#
+# The tilt is how far a club's defense lags its offense RELATIVE TO THE LEAGUE, so it says
+# "weak here compared to everyone else" rather than "weak in absolute terms" — a club that
+# is simply bad at both has no particular need and should just take talent.
+#
+# ⚠️ IT MUST BE NEUTRAL FOR A BALANCED CLUB. At tilt 0 a player is worth exactly his
+# `playerRating`, so this only ever redistributes value between clubs with genuine
+# imbalances and never inflates the whole market.
+TRADE_NEED_SENSITIVITY = 2.5
+
+# How far the tilt can move a player's effective rating, at maximum need. Half the gap
+# between his two halves: a player 20 points better defensively than offensively is worth
+# up to 10 points more to a club that badly needs defense, and 10 less to one that does not.
+TRADE_NEED_MAX_TILT = 1.0
+
+# ---- The core a club builds around is NOT a trade asset ----
+# ⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE (owner, 2026-09-15: "teams
+# should also be identifying star players to build around and not consider every highly
+# rated player as a trade asset"). Every trigger priced a star as an asset with a big
+# number on it, so a club's best man went on the block whenever the arithmetic said the
+# return cleared — which is how a rebuilder ends up selling the one player its rebuild is
+# supposed to be for.
+#
+# How many players a club treats as untouchable. Two, against a six-slot roster: enough to
+# be a core, small enough that the other two thirds of the roster is still a market.
+TRADE_CORE_SIZE = 2
+
+# ⚠️ AND A CORE PLAYER HAS TO ACTUALLY BE A STAR, or "the best two players on a 2-14 club"
+# become untouchable and the worst clubs stop trading altogether — the exact opposite of
+# what a rebuild does. Keyed to the game's own notion of one: 4-star (TierA, 84+) or
+# better.
+TRADE_CORE_MIN_RATING = 84.0
+
+# ⚠️ A DECLINING STAR IS A LEGITIMATE ASSET, AND EXEMPTING HIM WOULD BE THE WORSE ERROR.
+# Selling high on a fading veteran is one of the few genuinely smart things a front office
+# can do, and the arc is already classified (`frontOfficeBrain.classifyArc`). The core is
+# who you build around; a player on the way down is not that, however good he still looks.
+TRADE_CORE_EXCLUDES_DECLINING = True
+
+# ---- The ask decays toward the floor ----
+# Hold out early, take what you can get late. Both ends decay together, so a late seller
+# is never squeezed into a giveaway.
+#   week      1     10     15     20     22
+#   reserve  100%   67%    48%    30%    22%
+TRADE_RESERVE_DECAY_FLOOR = 0.20
+
+# ---- The four modifiers — all a PRICE, never a VETO ----
+# Matching how `sentimentTilt` is described everywhere else in the front office: it tips
+# close calls, it never dictates.
+
+# ⚠️ A DIVISION RIVAL IS FACED FOUR TIMES AS OFTEN AS ANYBODY ELSE, and the ratio is the
+# premium rather than a chosen number: 12 division games across 3 rivals is 4 apiece,
+# while the other 12 league games spread over 12 clubs and the 4 interleague over 4. They
+# are also the only clubs that can take a DIVISION TITLE, which at 8 divisions is what
+# most of the league is playing for.
+#
+# ⚠️ SCALED BY THE RIVAL'S THREAT, NOT FLAT. Selling a rental to a 3-9 rival costs
+# nothing; selling to the club you are chasing is self-harm.
+TRADE_DIVISION_PREMIUM = 0.35       # at a rival of average contention
+TRADE_LEAGUE_PREMIUM = 0.09         # same league, other division: 1 game a season
+# (cross-league is 1 game and no shared title — no premium at all)
+
+# ---- Rate limits ----
+# ⚠️ THE MARKET IS SUPPLY-CONSTRAINED, SO THESE ARE A SAFETY RAIL RATHER THAN A BALANCE
+# LEVER. Counted on the live league the triggers produce ~14 expiring-surplus listings
+# across 8 non-contending clubs and ~18 locker-room listings across 15 clubs, against 16
+# buyers — and each listing sells ONCE. The ceiling is departing players, not appetite.
+# So: ship with the weekly limits and NO per-season cap, then count. A per-season cap
+# constrains something that is not currently the binding constraint, and guessing its
+# value before a season has run is how it ends up wrong.
+TRADE_LISTINGS_PER_TEAM = 1         # else every congested club posts three in week 1
+TRADE_BIDS_PER_TEAM_PER_WEEK = 1    # stops a contender hoovering the block in one pass
+TRADE_CANDIDATES_PER_LISTING = 4    # approach the best few, not all 31
+
+# ---- The blockbuster: a buyer kicking the tires, in the offseason only ----
+# ⚠️ EVERY TRIGGER ABOVE IS SELLER-INITIATED, so a star under contract was unreachable
+# from BOTH ends: his club had no reason to post him, and no buyer could ask. Measured
+# over six seasons, all 44 in-season buyers were already contenders (win% .611 to .867,
+# median .733), 37 of their 44 acquisitions had exactly one season left, and not one club
+# below the playoff line bought anything mid-season. A middling club trying to get over
+# the hump had no path at all.
+#
+# ⚠️ OFFSEASON ONLY (owner, 2026-09-15: "it makes sense that these trades would only
+# happen in the offseason. but its definitely buyer initiated. a team would 'kick the
+# tires' on players theyre interested in"). In-season the market stays what it is — a
+# contender buying the present from clubs that cannot keep it.
+TRADE_INQUIRY_ENABLED = True
+TRADE_INQUIRIES_PER_TEAM = 2        # kick a couple of tires, not all 31
+
+# ⚠️ THE BUYER MUST HAVE BEEN CLOSE, or this is not "over the hump" — it is a bad club
+# mortgaging a future it needs. Missed the playoffs, and within this much win% of the
+# worst club that made them.
+#
+# ⚠️ MEASURED AT 0.18 THIS ADMITTED 9-19 CLUBS, because with 16 of 32 qualifying the cut
+# sits near .500 and five games is 0.179 of win% — so the band's whole width was spent on
+# teams nobody would call middling. The blockbusters it produced were all bought by clubs
+# five games adrift. At 0.09 the buyer is within about two and a half games of the field,
+# which is a club one player short rather than one rebuild short.
+TRADE_HUMP_BAND = 0.09              # ~2.5 games over a 28-game season
+
+# ⚠️ AN UNSOLICITED APPROACH COSTS MORE THAN A LISTING, and that is the whole difference
+# between the two paths. A club that posted a player has decided to move him; a club
+# answering the phone has decided nothing and is under no pressure, so it quotes over the
+# odds. ⚠️ THIS MUST LIFT THE FLOOR, NOT ONLY THE ASK — `settle` clears at the floor, so a
+# premium on the ask alone is decoration.
+TRADE_INQUIRY_PREMIUM = 1.35
+
+# ⚠️ A CORE PLAYER CAN BE PRISED AWAY, AND HAS TO BE, OR THERE IS NO BLOCKBUSTER. The core
+# rule stops a club SHOPPING its franchise player; it was never meant to make him
+# non-existent to the rest of the league, and the players worth a blockbuster are exactly
+# the ones it covers. So he has a price, and it is a punishing one — on top of the
+# unsolicited premium, so prising a core player runs ~3x a normal ask.
+TRADE_CORE_PREMIUM = 1.25
+
+# ⚠️ AND THE BUYER HAS TO BE WILLING TO OVERPAY, OR THE TWO RANGES NEVER OVERLAP AND NO
+# INQUIRY CAN CLEAR AT ANY PIECE CAP. `_assemble` refuses once the bundle costs the buyer
+# more than the player is worth TO IT, so the buyer's ceiling is exactly 1.0x linear value
+# while the seller is quoting 1.35x — the premium was unpayable by construction, and the
+# first two attempts at this (retargeting the hole, then raising the piece cap) each moved
+# the measured rate between 0 and 1 trade in six seasons because neither touched the
+# arithmetic.
+#
+# ⚠️ THE OVERPAY BELONGS ON THE BUYER, NOT AS A DISCOUNT ON THE SELLER. A franchise player
+# costs a franchise price and that valuation is correct; what a linear model cannot express
+# is why a club on the cusp wants him MORE than his parts are worth — the marginal win
+# converts a near-miss into a berth, which is what "getting over the hump" actually means.
+# `deadlineUrgency` is this same term in-season and returns parity in the offseason, which
+# is precisely the window this path runs in.
+TRADE_HUMP_APPETITE = 1.70
+
+# ⚠️ AND THE SEASON NEEDS ITS OWN, because an unsolicited quote is unpayable without one.
+# Owner, 2026-09-16: "in season trades should also be buyers kicking the tires on seller
+# teams, not just sellers posting players they want to sell." A contender approaching a
+# club that is going nowhere pays above the player's linear worth for the same reason a
+# hump club does — the man converts a contending season into a deeper run — but LESS than
+# a hump club, because the marginal win is worth most exactly at the cut line.
+#
+# ⚠️ `deadlineUrgency` CANNOT DO THIS JOB and it is worth recording why: it scales the bar
+# AND the ceiling together, so it changes the SIZE of the package and never whether the
+# buyer clears at all. It also peaks at 1.36 (week 22, a strong contender), which would put
+# in-season inquiries at "the final week, sometimes" rather than a market.
+TRADE_INQUIRY_APPETITE = 1.50
+
+# ---- Trading UP the draft ----
+# ⚠️ A PICK COULD ONLY EVER BE CHANGE, NEVER THE THING BEING BOUGHT. A `Listing` was always
+# a player, so there was no pick-for-pick trade in the system at all and the classic
+# draft-day move could not be expressed. Measured over 8 seasons before this: of 86 picks
+# that changed hands, **one** was a top-8 and 66% sat in the 17-24 band — because picks flow
+# FROM buyers, buyers are contenders (median win% .641), and a contender's own pick lands
+# late. The valuable picks belong to the clubs that never pay with them.
+#
+# ⚠️ AND THE PRICES ALREADY MAKE THE TRADE WORK. Slot 1 is worth 55.0 against slot 4's 40.2,
+# so moving down three spots costs 14.8 — while a 78-rated starter on two years is worth
+# 15.8. "Drop a few spots and take a real player" is close to break-even with a slight edge
+# to the club moving down, which is exactly why both sides do it in real drafts.
+#
+# ⚠️ OFFSEASON ONLY, because a pick's SLOT is only known once the season has finished, and
+# because the buyer is shopping for an upgrade (owner, 2026-09-16: "offseason is buyers
+# looking for ways to upgrade, which can include jumping up in the draft").
+# ---- Where a club is in its contention cycle ----
+# ⚠️ THE MARKET READ THIS SEASON'S RECORD AND NOTHING ELSE, so a club's window was invisible
+# to it. `_computeContention`, `isContending`, `nowWeight`/`laterWeight` and `isOverTheHump`
+# all key off wins and losses, and the only career arc in the system is per-PLAYER
+# (`frontOfficeBrain.classifyArc`) with nothing aggregating it.
+#
+# ⚠️ MEASURED OVER 224 CLUB-SEASONS (seasons 8+ of a 14-season run): **corr(win%,
+# regressing share) = +0.000**. The record carries literally zero information about where a
+# club is in its cycle. The pair that makes the case: Caddies at **.750 with 0% of their
+# weighted starters in decline**, and Cranes at **.893 with 60%** — the best team in the
+# league, two-thirds of it fading, priced identically to a young one.
+#
+# ⚠️ AND THE POPULATION ONLY EXISTS AFTER SEASON 6 (owner, 2026-09-16: "you'd need to let
+# the sim run for 10+ seasons to see it, thats when players start retiring, so there's a mix
+# of old vets and rookies"). Measured: 0% regressing through season 5, 8% at season 6,
+# settling at ~20% from season 10. A six-season sample says this feature is inert; it is not,
+# it is just younger than the question.
+TRADE_WINDOW_ENABLED = True
+
+# Position-weighted share of the starting six, so a fading quarterback counts for more than
+# a fading kicker. Bands chosen off the measured spread (median 17%, max 68%).
+# ⚠️ SIZED SO ONE FADING QUARTERBACK CLOSES A WINDOW AND ONE FADING KICKER DOES NOT, which
+# is the whole reason it is position-weighted. Against a starting six weighing 4.17, one
+# fading man is: QB 24%, RB 19%, WR 17%, TE 14%, K 8%. At 0.30 nothing short of two starters
+# qualified and an aging franchise quarterback — the textbook closing window — read as wide
+# open. The measured median regressing share is 17%, so this sits just above it.
+TRADE_WINDOW_DECLINE_HIGH = 0.22
+TRADE_WINDOW_ASCENT_HIGH = 0.70     # this much still climbing = the window is ahead
+
+# ⚠️ IT MOVES `nowWeight`, WHICH IS THE ONE DIAL THE WHOLE MARKET ALREADY TURNS ON. A
+# closing contender pays up because next season is worse — the alternative to winning now is
+# not winning later, it is not winning. A club whose window has not opened does the reverse.
+TRADE_WINDOW_NOW_CLOSING = 1.25
+TRADE_WINDOW_NOW_OPENING = 0.80
+
+TRADE_PICK_SWAP_ENABLED = True
+
+# How much better the target pick must be, as a share of the buyer's own best, before it is
+# worth a phone call. Below this the two slots are interchangeable and the move is churn.
+# Half-width, in rating points, of the blend either side of each rookie-term threshold.
+# ⚠️ For PICKS only — see `trading.expectedRookieTerm`. A real player's contract is a whole
+# number of years and keeps the step.
+ROOKIE_TERM_BLEND = 5.0
+TRADE_PICK_SWAP_MIN_GAIN = 1.6
+# ⚠️ AND AN ABSOLUTE FLOOR, BECAUSE A RATIO CANNOT SAY "MEANINGFUL" (owner: a team going
+# "from 14 to 20 or something like that" is churn). A relative bar asks whether the new slot
+# is 1.6x the old one, which mid-board is a handful of places and about four ceiling points
+# on a prospect who may never be promoted at all — measured, moving 20 -> 14 clears 1.6x
+# exactly. The floor says the jump has to be worth something in its own right, which is what
+# separates a trade-up from shuffling.
+TRADE_PICK_SWAP_MIN_ABS = 8.0
+
+# ⚠️ A TOP PICK IS A CENTERPIECE AND IS PRICED LIKE ONE. Slots 1-3 carry an extra premium on
+# top of the unsolicited one — a club does not give up the first selection in the draft at
+# the going rate (owner: "a pick in the 1-3 zone would be considered a centerpiece just
+# because of what kind of player comes with a pick that high").
+# ⚠️ AND IT MUST STAY UNDER THE BUYER'S APPETITE OR THE FEATURE CANNOT FIRE AT ALL. At 1.30
+# the top-3 quote came to 1.35 x 1.30 = 1.755 against a ceiling of 1.70, so the only picks
+# the feature exists for were the ones it could never move — the same arithmetic that
+# defeated the blockbuster twice, for the third time. `test_pick_swap.py` pins the
+# relationship rather than the number.
+TRADE_PICK_PREMIUM_TOP = 1.20
+TRADE_PICK_PREMIUM_TOP_SLOTS = 3
+
+# So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
+# sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
+# above the league's read and its incumbent is genuinely poor. A club's franchise player
+# changing hands should need someone to be convinced, not just solvent.
+
+# ⚠️ AND THE BUYER MUST ACTUALLY BE FIXING SOMETHING. Without a real gap over the
+# incumbent every club inquires about every star every offseason, which is a carousel
+# rather than a blockbuster.
+TRADE_INQUIRY_MIN_UPGRADE = 5.0     # rating points over the man he would replace
+
+# ⚠️ A BLOCKBUSTER IS ALLOWED TO BE A PARAGRAPH. `TRADE_MAX_PIECES` is 3 so an ordinary
+# trade reads as a sentence, which is right for a walk-year rental and wrong for the one
+# trade type that is SUPPOSED to be a haul. Measured at three pieces, the typical inquiry
+# bundle reached only **0.78 of the bar** — so the piece cap, not the premium, was what
+# refused nearly every call, and lowering the price would have been the wrong fix to a
+# problem the price was not causing.
+TRADE_INQUIRY_MAX_PIECES = 5
+
+# ---- A club addresses its biggest problems, not whatever is on the block ----
+# ⚠️ `positionWeight` MULTIPLIES BOTH THE ASK AND THE BUYER'S WORTH, SO IT DIVIDES OUT OF
+# THE COMPARISON ENTIRELY — position value sets a trade's PRICE and had no effect at all on
+# WHETHER it happened. The same cancellation `nowWeight` had, one level up. Measured over
+# six seasons: kickers were 17% of all trades against 17% of the league's starters, i.e.
+# they traded at their HEADCOUNT while being worth 0.35 of a quarterback, and quarterbacks
+# were 1%. The market traded what was CHEAP rather than what mattered.
+#
+# ⚠️ A FLAT VALUE FLOOR DOES NOT FIX IT — tried and measured. The kicker trades that clear
+# have genuinely large upgrades (a 96 replacing a 70), so a floor removes marginal trades
+# at every position and leaves kickers alone: at a floor of 15 their share ROSE to 16%.
+#
+# ⚠️ NOR DOES GIVING THE BUYER THE FREE-AGENT ALTERNATIVE, which is the principled mirror
+# of `_backfillRating` and was also tried. The supply floor tops every position up equally,
+# so the pool is uniform (best free agent 79-86 at all five positions) and the alternative
+# suppresses every position alike: trades 71 -> 59, kickers 12 -> 12, and it took the
+# blockbuster path to zero.
+#
+# What a front office actually does is spend its attention and its picks on the problems
+# that cost it the most, and a kicker deficit is worth 0.35 of the same deficit at
+# quarterback. So a club bids only on positions among its biggest gaps against the league.
+# Three of five: wide enough that a club is not locked to one hole all season, narrow
+# enough that the least important position has to genuinely matter to make the list.
+TRADE_BUYER_NEEDS = 3
+
+# ---- A club will not spend assets at every position ----
+# ⚠️ THIS IS A FRONT-OFFICE CONVENTION, NOT A VALUATION, AND IT IS DELIBERATELY EXPLICIT.
+# Owner, 2026-09-15: "I dont think teams should be trying to trade for kickers that often
+# in the first place." Three mechanisms were tried first and none of them works, for a
+# reason worth recording:
+#
+#   * `positionWeight` MULTIPLIES THE ASK AND THE BUYER'S WORTH ALIKE, so it divides out of
+#     every comparison — position value sets a trade's PRICE and had no effect at all on
+#     whether it happened. Measured over six seasons, kickers were 17% of trades against
+#     17% of the league's starters, i.e. they traded at their headcount; quarterbacks 1%.
+#   * NEEDS-RANKING does not separate them. `_positionalGaps` weights the deficit linearly,
+#     so a 14-point kicker gap (x0.35 = 4.9) genuinely ties an 8-point tight end gap
+#     (x0.60 = 4.8). At three needs kickers were still 16% of trades, at two needs 14%, and
+#     every blockbuster in both arms was a kicker.
+#   * A MAGNITUDE BAR cannot either, because the sizes really are the same: the measured
+#     blockbusters came out at 21.6 (a 92 TE), 21.0 (a 90 K) and 20.2 (a 94 WR). A bar that
+#     excludes the kicker excludes the other two.
+#
+# ⚠️ AND THE SIM'S OWN NUMBERS SIDE WITH THE MARKET, WHICH IS WHY NOTHING EMERGENT WORKED.
+# `FLOOS_POS_FORCE` measures a better kicker at **+0.87 wins** against a quarterback's
+# +1.70 — about 51%, while `POSITION_VALUE` already prices him at 0.35. Under this
+# simulation a good kicker genuinely is worth trading for. That real football says
+# otherwise is a design call about how the league should FEEL, so it is written here as
+# one rather than disguised as a derivation.
+#
+# ⚠️ IT SCALES THE BUYER'S WILLINGNESS ONLY. A kicker's VALUE is untouched everywhere it
+# matters — cards, draft boards, re-sign decisions, the cut fee — because he is worth what
+# he is worth; clubs simply do not spend picks there.
+TRADE_POSITION_APPETITE = {'QB': 1.0, 'RB': 1.0, 'WR': 1.0, 'TE': 1.0, 'K': 0.35}
+
+# ⚠️ BUT A CLUB WHOSE KICKER IS ACTUALLY BLOWING GAMES SHOULD GO AND GET ONE (owner,
+# 2026-09-15: "if a team actually needs a K (their own K is underperforming, has blown
+# games) then it makes sense to look for one at the trade deadline. I just dont think it
+# makes sense for teams to unload mulitple assets for one in the offseason"). That is two
+# rules, not one, and they pull in opposite directions:
+#
+#   IN-SEASON the low appetite is LIFTED when the incumbent is genuinely missing kicks —
+#   read off what he has actually done this season, not his rating. A kicker can rate 82
+#   and be 9 for 17; the rating gap `_positionalGaps` measures cannot see that, and
+#   "has blown games" is precisely a performance claim.
+#
+#   IN THE OFFSEASON nothing is lifted and the bundle is capped at a single piece. There
+#   are no blown kicks to react to yet, and the objection is specifically to a club
+#   unloading several assets for one.
+#
+# League FG% runs ~80% (see the field-goal entry), so a kicker under 70 has cost his club
+# real games rather than been unlucky once.
+TRADE_KICKER_CRISIS_FG_PCT = 70.0
+TRADE_KICKER_CRISIS_MIN_ATT = 10    # enough kicks that it is a record, not a bad afternoon
+
+# ⚠️ AND IN THE OFFSEASON A LOW-APPETITE POSITION COSTS ONE PIECE, FULL STOP. Not a
+# discount — a hard cap, because the complaint is about the SHAPE of the deal ("unload
+# multiple assets") rather than its price, and a price rule can always be cleared by a
+# club that wants him enough.
+TRADE_LOW_APPETITE_MAX_PIECES = 1
+
+# ---- A forfeited draft slot is paid out, not simply lost ----
+# ⚠️ NO NEW EXCHANGE RATE. `cutFeeFor` already converts "seasons of control x surplus over
+# replacement" into Floobits at `CUT_FEE_RATE`, and that is the same quantity `playerValue`
+# is built from — so a slot can be paid at the rate the league already uses for destroying
+# control, with nothing invented.
+#
+# ⚠️ PRICED ON WHO IS ACTUALLY LEFT, NOT ON THE SLOT NUMBER — the same correction the buyer
+# needed. A forfeit only happens late, where `pickSlotSkill` expects a replacement-level
+# player and would pay **0F at slot 30**, making the compensation cosmetic exactly where it
+# is owed. The board empties unevenly and the man still sitting there is what the slot was
+# actually worth.
+#
+# ⚠️ THE FAUCET IS NEGLIGIBLE AND THAT IS WHAT MAKES THIS SAFE. Measured over twelve
+# seasons, FOUR slots went unsold league-wide — so even a generous payment is on the order
+# of **4F per club-season** against a production median Treasury of 1,896F. There is also
+# no exploit: forfeiting pays LESS than trading the slot, and a club cannot engineer one
+# anyway (it would have to be full at exactly the positions the board still holds, which
+# depends on picks other clubs have not made yet).
+FORFEIT_PAYOUT_ENABLED = True
+FORFEIT_PAYOUT_RATE = 0.5           # share of the sale it did not get; must stay < 1.0
+TRADE_MAX_PIECES = 3                # a trade should read as a sentence
+
+# ---- Rookie picks ----
+# Expected true skill of the player taken at each slot (order statistics of 32 draws from
+# the live generation constants, 4,000 classes):
+#   pick     1     3     8    12    16    24    32
+#   skill  98.6  92.0  85.2  81.6  78.4  71.8  57.2
+# Pick 1 is a future superstar, pick 16 league-average, pick 32 a token. That steepness
+# is what makes an early pick a real asset and gives the market denominations to settle a
+# gap with.
+TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
+
+# ⚠️ A FUTURE PICK IS DISCOUNTED BY SLOT, NOT FLAT, and the measurement says why. Variance
+# by slot over 6,000 simulated classes, as a fraction of the surplus that slot delivers:
+#   pick      1     3     5    16    24     32
+#   sd/surp  0.15  0.13  0.13  0.19  0.49  50.3
+# A top-5 pick's class-to-class variation is a small fraction of what it delivers — the
+# worst class in 6,000 still gave pick 1 an 86. A late pick's variation is comparable to
+# its ENTIRE value. So not knowing the class costs a late pick most and a top pick least.
+#
+# ⚠️ And the discount is for TIME AND RISK, NOT EXPECTATION: every class is drawn from the
+# same distribution, so a future pick's expected class is identical to this year's. What
+# is worse is that it pays later and it pays less predictably.
+TRADE_FUTURE_PICK_DISCOUNT_TOP = 0.95      # near-nil in the top 5
+TRADE_FUTURE_PICK_DISCOUNT_LATE = 0.55     # steep in the back half
+
+# ⚠️ A FUTURE PICK'S SLOT IS NOT KNOWN, and reading it off TODAY'S table is what made a
+# contender's own picks worthless. The draft order is derived from the current standings;
+# applied to a pick two seasons out it priced an 11-4 club's own first-rounders as slot
+# 30 — below replacement level, therefore worth literally nothing — so it handed over
+# THREE OF THEM for a rental kicker. The plan says it plainly: with a future pick "you know
+# neither your slot NOR the class."
+#
+# Each season out regresses the slot toward the middle of the draft by this factor. This
+# season's pick is untouched: by the time the market opens at week 15 the table is settled.
+TRADE_PICK_SLOT_REGRESSION = 0.45
+
+# ---- A prospect's control is a DEADLINE, not a term ----
+# `seasonsOfControl` measures seasons of CONTRIBUTION off `termRemaining`. A prospect has
+# neither: he contributes nothing while in the pipeline, and PROSPECT_DEVELOPMENT_WINDOW
+# is the number of offseasons his club has to PROMOTE HIM OR LOSE HIM.
+#
+#   prospect_seasons  window left  p(promoted)  value
+#          0               3          0.83       52.5   fresh, full runway
+#          1               2          0.70       43.9   mid-window
+#          2               1          0.45       28.3   ⚠️ DISTRESSED
+#
+# ⚠️ A PROSPECT AT 2/3 IS A DISTRESSED ASSET — his holder must find him a slot this
+# offseason or lose him for nothing, which is the walk-year squeeze one level down.
+# ✅ AND THE DEADLINE TRAVELS. `prospect_seasons` moves with the player, so a buyer
+# inherits the same clock: a distressed prospect is worth buying only if you have the
+# slot the seller does not, which is exactly the trade that should happen — and it cannot
+# be gamed by passing him around, because each pass burns the same window.
+TRADE_PROSPECT_SLOT_OPENS_CHANCE = 0.45
+
+# ---- Mid-season free-agent signing, and the roster window ----
+# A club may sign a free agent to fill an EMPTY slot mid-season, which is the piece that
+# makes player-for-picks available to everybody rather than only to clubs with a pipeline.
+#
+# ⚠️ SCOPE IS FILLING A HOLE, NOT UPGRADING. A signing is available when a roster slot is
+# empty — after a trade, and nowhere else. Letting clubs sign over a filled slot would be
+# a second, continuous free-agency market and would undo the position-lock logic the rest
+# of the design rests on.
+#
+# ⚠️ THE TERM IS THIS SEASON OR ONE MORE, NEVER A FULL `_getPlayerTerm` DEAL. Anything
+# longer makes hole-filling a cheap way to ACQUIRE TERM: a club could trade a player away
+# in week 15 and sign a three-year replacement, converting a roster hole into an asset.
+#
+# ⚠️ AND THE THIN POOL IS THE REAL DETERRENT, BY DESIGN. Best available today is 68 at QB
+# and 70 at WR against a league median of 79 — so what a trade COSTS depends sharply on
+# position: a kicker is nearly free to move (the pool replaces him at -3) and a
+# quarterback is expensive (-12). The market will move kickers and hoard quarterbacks
+# without a rule saying so. Signing is what a club does when it has no prospect and no
+# better option, not a strategy.
+TRADE_MIDSEASON_SIGNING_TERM = 1
+
+# ⚠️ CUT / SIGN / TRADE ARE ALL LIVE UNTIL WEEK 22, THEN ROSTERS FREEZE until the
+# offseason. One window, one deadline, three verbs: a club can reshape its roster right up
+# to the final game day and then must play what it has through the run-in and the
+# playoffs. That the deadline is GM_ACTIVE_WEEK is convenient rather than coincidental —
+# the Front Office block already opens there, so the freeze and the offseason machinery
+# share a boundary.
 
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
@@ -4168,6 +5026,34 @@ TD_DRAIN_MAX_YARDS = 5      # close enough that the score is near-certain, not h
 # a defense that waits for that same certainty has already lost the clock it was trying to
 # save. This is a threat, not a bet.
 LEAD_THREAT_TD_YARDS = 10
+
+# ⚠️ A TIMEOUT DOES NOT ONLY BANK TIME FOR THE ANSWER — IT HANDS THE SAME TIME TO THE
+# DRIVE IT IS REACTING TO. That trade is only good when the extra seconds cannot improve
+# the offense's outcome. Inside LEAD_THREAT_TD_YARDS they cannot: the score is one snap
+# away either way. But limb 1 fired at the kicker's MAXIMUM range, which is a kick he
+# would often miss, and stopping the clock there buys him ~18 yards of field position —
+# measured against fgMakeProbability, that is worth +0.54 of a made kick at 0.42, +0.27
+# at 0.69, +0.12 at 0.84 and ~0.00 by 0.90. The defense was paying a timeout to turn a
+# coin-flip into a gimme. The bar sits where the curve flattens: at 0.75 and above the
+# 18 yards is worth under a fifth of a kick, so the clock is close to free to give back.
+LEAD_THREAT_FG_MIN_PROB = 0.75
+
+# ⚠️ AND THE SAVED TIME HAS TO BE USABLE. The whole justification for a LEADING defense
+# burning a timeout is that it "buys a possession to win in regulation instead of a
+# coin-flip overtime" — but nothing checked that a possession was still possible, and
+# measured over a 432-state sweep the rule fired at exactly the same 74% rate with 0:15
+# on the clock as with 1:50. Reported as the leader stopping the clock at 0:20 and then
+# getting the ball back nowhere near able to do anything with it.
+#
+# The floor is the whole sequence, not just the answer: one snap for the offense to
+# score (~7s), a kickoff, then a minimal answering drive — two clock-stopped snaps and a
+# kick, ~21s. Below this even the optimistic version fails, and the timeout is spent on
+# nothing.
+#
+# ⚠️ LEADING ONLY. A TRAILING defense at 0:15 is right to burn timeouts: it loses
+# otherwise, so a 2% chance beats none. The leader is trading a real asset — the clock
+# that is protecting its lead — for that 2%, which is why the gate is asymmetric.
+LEAD_ANSWER_MIN_SECONDS = 30
 
 GLITCH_CARDS_ENABLED = True
 

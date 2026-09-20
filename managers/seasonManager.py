@@ -408,10 +408,45 @@ class SeasonManager:
         # they don't show a spurious development arc from the re-map's runway.
         self._maybeFreezeLegacyDevArc()
 
-        # There is no rookie class. New players arrive only as the
-        # position-supply deficit fill — a trickle straight into the FA pool,
-        # sized to what retirement actually took out, so the pool holds steady
-        # instead of inflating by a full class every season.
+        # ── The season's rookie class, generated UP FRONT ───────────────────
+        # ⚠️ AT SEASON START, NOT AT WEEK 22. The class was first planned for week 22,
+        # reasoning that it should be sized against the holes retirement is about to
+        # open. That dependency does not exist: at one round the class size is fixed by
+        # the TEAM COUNT, not by how many players retire. And week 22 is where in-season
+        # trades CLOSE, so a pick would have been traded blind for its entire window.
+        #
+        # Generating here gives the class a whole season of visibility, which is what
+        # makes a pick a tradeable asset with a known shape — "this year has a
+        # 99-potential quarterback at the top, so pick 1 is precious" — and runs the
+        # bottom-feeder story all year rather than for one afternoon in the offseason.
+        #
+        # Idempotent across restarts: a class already flagged for this season is reused,
+        # never topped up. ⚠️ `startNewSeason` is ALSO the mid-season resume path called
+        # on every deploy, so a non-idempotent generator here would mint a fresh class
+        # on every restart and the draft pool would grow without bound.
+        from constants import rookieDraftEnabled
+        if rookieDraftEnabled():
+            existingUpcoming = [p for p in self.playerManager.activePlayers
+                                if getattr(p, 'is_upcoming_rookie', False)]
+            if existingUpcoming:
+                logger.info(f"Rookie class already exists ({len(existingUpcoming)} "
+                            f"players) — reusing")
+            else:
+                rookies = self.playerManager._generateRookieClass(seasonNumber)
+                for r in rookies:
+                    r.is_upcoming_rookie = True
+                    r.team = 'Upcoming Rookie'
+                    if r not in self.playerManager.activePlayers:
+                        self.playerManager.activePlayers.append(r)
+                    self.playerManager.addToPositionList(r)
+                self.playerManager.sortPlayersByPosition()
+                logger.info(f"Generated {len(rookies)} upcoming rookies for "
+                            f"season {seasonNumber}")
+        else:
+            # No class. New players arrive only as the position-supply deficit fill —
+            # a trickle straight into the FA pool, sized to what retirement actually
+            # took out, so the pool holds steady instead of inflating by a class a year.
+            logger.info("Rookie draft off — intake is the position-supply trickle only")
 
         # Persist season record early so startDate survives restarts
         self._saveSeasonToDatabase()
@@ -1088,6 +1123,23 @@ class SeasonManager:
             # NOW advance the week checkpoint — must be LAST so a crash before
             # this point causes the week to replay rather than be silently skipped.
             await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
+
+            # ── The trade market ────────────────────────────────────────────
+            # ⚠️ HERE AND NOWHERE ELSE, and the position is the whole safety argument.
+            # `_onWeekComplete` has just BANKED the week — weekly FP written, card
+            # bonuses settled — so the week's record is closed before a single player
+            # changes clubs.
+            #
+            # `cardEffects` reads a depicted player's club at scoring time
+            # (`rosterPlayerTeamIds` / `teamResults`) and the lineup locks at kickoff, so
+            # a trade executed BETWEEN TWO SLATES moves a player between the lock and the
+            # bank, and a card equipped against club A scores against club B's result.
+            # This project has had FOUR separate incidents in exactly that seam: the
+            # lineup-snapshot drift, `equipped_cards` not being a historical record, the
+            # leaderboard's second door, and Veteran's backfill.
+            #
+            # A trade is therefore a between-weeks event like every other roster change.
+            self._runTradePass(self.currentSeason.currentWeek)
 
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -2149,7 +2201,8 @@ class SeasonManager:
                             user_id=userId, season=season, week=week,
                         ).all()
                         if weekPicks:
-                            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+                            from managers.cardEffects import picksWereSubmittedManually
+                            userManualPickSubmittedThisWeek = picksWereSubmittedManually(weekPicks)
                             for p in weekPicks:
                                 if p.correct is True:
                                     userWeeklyPickemCorrect += 1
@@ -3921,9 +3974,12 @@ class SeasonManager:
         the scheduler depends on. An anchor already ON a Monday is its own day 0, so this is
         exactly what the old code did for the old anchor -- it is a generalisation, not a move.
         """
-        offset = 4 if _isEdt(seasonStart.date()) else 5
-        etDate = (seasonStart - datetime.timedelta(hours=offset)).date()
-        return etDate + datetime.timedelta(days=(0 - etDate.weekday()) % 7)
+        # ⚠️ Delegates to the ONE definition. This math also lives in the shop's cycle
+        # boundary, and when it was duplicated there by hand it was written as the naive
+        # `.date()` read and shipped a seasonal off-by-one-day bug. See
+        # timingManager.firstGameDateFor.
+        from managers.timingManager import firstGameDateFor
+        return firstGameDateFor(seasonStart)
 
     def getWeekStartTime(self, now:datetime.datetime, week:int):
         from managers.timingManager import TimingMode
@@ -5008,12 +5064,25 @@ class SeasonManager:
                                LeagueNewsItem.pinned == True,          # noqa: E712
                                LeagueNewsItem.season < seasonNumber)
                        .update({'pinned': False}, synchronize_session=False))
+            # ⚠️ COMMIT UNCONDITIONALLY, NOT `if changed`. A bulk update EXECUTES
+            # IMMEDIATELY and takes SQLite's single write lock — and it takes it whether
+            # or not it matches a row. Gating the commit on `changed` therefore left the
+            # shared session sitting on an open write transaction in exactly the case
+            # where there was nothing to do, and every other session's write then waited
+            # out the full 30s busy_timeout and failed.
+            #
+            # ⚠️ IT MADE A FRESH START UNREACHABLE. A brand-new league has no champion
+            # row to unpin, so `changed` is 0 every time; two lines later
+            # `maybeResetRuleOverridesForSeason` opens its own session and dies with
+            # "database is locked" before week 1 exists. Measured: `in_transaction` goes
+            # False -> True across this call on a 0-row update, and the next independent
+            # write fails.
+            #
+            # This is the SAME SHAPE the docstring here already warned about and that
+            # took production down through `_publishChampionNews` — an unpin that has
+            # written and then does not release. It was one `if` away from repeating it.
+            self.db_session.commit()
             if changed:
-                # ⚠️ Commit rather than leaving it on the shared session. A bulk update
-                # executes immediately and takes SQLite's single write lock; leaving it
-                # open here is the shape that took production down once already, when a
-                # publisher raised between an unpin and its commit.
-                self.db_session.commit()
                 logger.info(f"Unpinned {changed} stale champion news item(s) "
                             f"at the start of season {seasonNumber}")
         except Exception as e:
@@ -6381,6 +6450,17 @@ class SeasonManager:
         # Mark the season as in the offseason week.
         self.currentSeason.currentWeek = 0
         self.currentSeason.currentWeekText = 'Offseason'
+        # ⚠️ The draft pool is DERIVED from `is_upcoming_rookie` on load rather than
+        # stashed on the manager, so a resume needs no rebuild step — which is the
+        # whole reason the old `_pendingRookiePool` restore could be dropped. Logged
+        # because "the draft found nothing" and "the draft already ran" are
+        # indistinguishable from the outside otherwise.
+        try:
+            pool = sum(1 for p in self.playerManager.activePlayers
+                       if getattr(p, 'is_upcoming_rookie', False))
+            logger.info(f"restoreForOffseasonResume: {pool} undrafted rookie(s) in the pool")
+        except Exception:
+            pass
 
     def _restoreFreeAgencyOrder(self) -> None:
         """Rebuild `freeAgencyOrder` from the playoff checkpoint.
@@ -6669,10 +6749,16 @@ class SeasonManager:
             # STEP 1: Increment free agent years for existing free agents
             logger.info("Step 1: Increment free agent years")
             for player in self.playerManager.freeAgents:
-                if hasattr(player, 'freeAgentYears'):
-                    player.freeAgentYears += 1
-                else:
-                    player.freeAgentYears = 1
+                # ⚠️ `hasattr` IS NOT THE QUESTION — THE ATTRIBUTE CAN EXIST AND BE None.
+                # The column is nullable, so a player loaded from a row that never had a
+                # free-agent spell carries None, and `None += 1` raised TypeError out of
+                # the FIRST step of the offseason. That aborts `_handleOffseason` before
+                # the `frontoffice_decisions` marker is written, so the whole offseason —
+                # retirements, the rookie draft, free agency — silently never runs, and
+                # the league rolls into the next season with the previous one's rosters.
+                # Observed on the owner's development database as an offseason that would
+                # not advance.
+                player.freeAgentYears = int(getattr(player, 'freeAgentYears', 0) or 0) + 1
 
             # STEP 2: (was: resolve GM fire/re-sign votes). The binding votes
             # are gone — coach turnover is decided in STEP 2.5 by gmTurnover,
@@ -6835,19 +6921,105 @@ class SeasonManager:
         if faOrderForPredraft:
             await self._runPreDraftPass(faOrderForPredraft, gmResults)
 
+        # STEP 3.78: Advance the prospect development window — release washouts.
+        #
+        # ⚠️ ORDER IS THE WHOLE FIX. This used to be step 7.5, after training and
+        # AFTER `_processFreeAgency`, so a prospect washing out in offseason N was
+        # released into the pool once that offseason's FA draft had already run: he
+        # was unsignable until offseason N+1 and sat idle for a whole extra season.
+        #
+        # ⚠️ AND IT COST TWICE. `ensurePositionSupply` runs before the FA draft and
+        # excludes prospects by design, so it generated a fresh free agent for a hole
+        # the washing-out prospect could have filled — the league gained a body it did
+        # not need AND the prospect went unused.
+        #
+        # Running here puts him in the pool for the draft that is about to happen,
+        # lets the supply floor COUNT him instead of replacing him, and — once the
+        # rookie draft ships — means this season's new draftees are not yet in
+        # `team.prospects`, so they correctly start at prospect_seasons 0 rather than
+        # being incremented in the offseason they arrived.
+        #
+        # ⚠️ IT NEEDS ITS OWN GATE. Where it used to sit it was covered by
+        # `training_and_finalize`; here it is not, and it INCREMENTS — an unguarded
+        # re-run on a restart would age every prospect twice and wash out a class
+        # early. The offseason is exactly where this project's restarts land.
+        if not self._isOffseasonStepComplete('prospect_window'):
+            try:
+                windowResult = self.playerManager._advanceProspectWindow()
+                for rel in windowResult.get('released', []):
+                    self._offseasonTransactions.append({
+                        'type': 'prospect_release',
+                        'team': rel.get('fromTeam'), 'teamAbbr': '',
+                        'playerId': rel.get('playerId'),
+                        'player': rel.get('name'), 'position': rel.get('position'),
+                        'rating': rel.get('rating'),
+                    })
+            except Exception as e:
+                logger.error(f"Prospect window advance failed: {e}")
+            self._markOffseasonStepComplete('prospect_window')
+        else:
+            logger.info("Step 3.78 skipped — prospect_window already complete")
+
+        # STEP 3.79: Cull the never-rostered pool.
+        #
+        # ⚠️ IT RUNS AFTER THE WASHOUT RELEASE AND BEFORE THE SUPPLY FLOOR, and both
+        # halves of that matter. After the release, so a prospect who has just washed
+        # out is judged on the same footing as everyone else in the pool rather than
+        # being invisible to it for a season. Before the floor, so the floor tops up the
+        # pool the cull actually left behind — reversed, the league would generate
+        # replacements and then delete them, or delete bodies the floor had just
+        # decided it needed.
+        #
+        # ⚠️ AND IT IS GATED, because removal is not idempotent in any useful sense:
+        # a re-run on a restart culls again against a pool that has already shrunk.
+        if not self._isOffseasonStepComplete('pool_cull'):
+            try:
+                seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+                cullResult = self.playerManager.cullUnsignedPool(seasonNum)
+                for gone in cullResult.get('removed', []):
+                    self._offseasonTransactions.append({
+                        'type': 'pool_cull',
+                        'team': '', 'teamAbbr': '',
+                        'playerId': gone.get('playerId'),
+                        'player': gone.get('name'), 'position': gone.get('position'),
+                        'rating': gone.get('rating'),
+                    })
+            except Exception as e:
+                logger.error(f"Pool cull failed: {e}")
+            self._markOffseasonStepComplete('pool_cull')
+        else:
+            logger.info("Step 3.79 skipped — pool_cull already complete")
+
+        # ── Offseason trade window, pass A ──────────────────
+        # ⚠️ AFTER THE FRONT OFFICE AND BEFORE THE DRAFT, because that gap is the only
+        # moment a club knows who it kept, what the pool holds AND where it picks — and
+        # because THIS YEAR'S PICKS ARE STILL LIVE. They are spent the moment the draft
+        # runs, so pass B can only trade future ones.
+        self._runOffseasonTradePass('pre_draft')
+
         # ── End of front-office phase ────────────────────────
-        # The rookie draft used to sit here, between the front office and free
-        # agency. There is no rookie class to draft any more, so the offseason
-        # goes straight from front-office decisions to the FA draft — but it
-        # still HOLDS for draft day first. Dropping that hold with the phase
-        # would have pulled free agency to the next top of the hour, i.e. an
-        # hour after the Floos Bowl, overnight.
+        # The rookie draft sits here, between the front office and free agency. The
+        # hold to draft day is load-bearing in its own right: dropping it would pull
+        # free agency to the next top of the hour, i.e. an hour after the Floos Bowl,
+        # overnight.
         await self.timingManager.waitForOffseason()
         # ⚠️ The frontoffice phase's persisted target IS draft day, and it is what the
         # countdown has been showing users. Passing it means a restart honors the
         # scheduled moment rather than recomputing "next noon" — which, a minute after
         # the target, lands a full day later.
         await self.timingManager.waitUntilNoonEt(self._offseasonFlowTarget)
+
+        # ── PHASE: rookie_draft ──────────────────────────────
+        # ⚠️ STEP-GATED AND SNAPSHOTTED ON ENTRY like every other offseason phase. The
+        # picks are NOT idempotent — each one moves a rookie into a pipeline — so a
+        # deploy landing mid-draft would otherwise re-run it and draft the class twice.
+        # The offseason is exactly where this project's restarts land.
+        await self._runRookieDraftPhase()
+
+        # ── Offseason trade window, pass B ──────────────────
+        # Smaller: a club that just drafted a quarterback may now have a surplus one, and
+        # the pool it is about to fish is known. ⚠️ This year's picks are gone.
+        self._runOffseasonTradePass('pre_fa')
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (promotions just moved some prospects up,
@@ -6986,9 +7158,11 @@ class SeasonManager:
                     fundingBonus = teamFundingBonus.get(pid, 0)
                     player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
 
-            # STEP 7.5: Advance prospect development window — auto-release washouts
-            logger.info("Step 7.5: Prospect development window advancement")
-            self.playerManager._advanceProspectWindow()
+            # STEP 7.5 (MOVED): the prospect development window used to advance HERE,
+            # after training and 53 lines after the FA draft had already run — so a
+            # washout was released into a pool nobody could draft from until the NEXT
+            # offseason, and he sat idle for a full extra season. It now runs in the
+            # front-office phase, right after the promotions pass; see STEP 3.78.
 
             # STEP 8: (retired) Handling retired players on fantasy rosters is gone in
             # the fantasy/cards fusion — the roster IS the equipped cards, so a retired
@@ -7366,6 +7540,252 @@ class SeasonManager:
         finally:
             session.close()
 
+    async def _runRookieDraftPhase(self) -> None:
+        """The rookie draft phase: worst-first, one pick per club, live per pick.
+
+        ⚠️ THE ORDER IS `freeAgencyOrder`, WHICH IS WORST-FIRST BY FINAL RECORD. That is
+        the entire pitch of this feature — a bottom-feeder drafting a huge prospect —
+        and it is why the class is worth generating at all. A free-agent pick cannot
+        substitute: an FA is a known quantity with a rating on the card, and there is no
+        story in signing a 74. The uncertainty IS the feature.
+
+        ⚠️ THE BRAIN IS BUILT ONCE FOR THE WHOLE DRAFT, not per pick. `_scoutError` is
+        drawn once and held on the brain, so a fresh brain per club would give each pick
+        a new opinion of the same player and a club could pass on a prospect it had
+        rated highly one pick earlier. It is also stamped with the season and the
+        deadline week, which is what lets a prospect's ceiling be read as this club's
+        standing BELIEF rather than as ground truth.
+        """
+        if self._isOffseasonStepComplete('rookie_draft'):
+            logger.info("Rookie draft already complete — skipping")
+            self._offseasonPhase = 'rookie_draft'
+            return
+        from constants import rookieDraftEnabled
+        if not rookieDraftEnabled():
+            return
+
+        rookies = [p for p in self.playerManager.activePlayers
+                   if getattr(p, 'is_upcoming_rookie', False)]
+        if not rookies:
+            # ⚠️ NOT A FAULT AND NOT A REASON TO GENERATE ONE HERE. A league that ran a
+            # season with the draft off has no class, and minting one at draft time
+            # would hand every club a prospect nobody was ever able to scout — the
+            # opposite of the season-long visibility the whole design rests on.
+            logger.info("Rookie draft: no class for this season — nothing to draft")
+            self._markOffseasonStepComplete('rookie_draft')
+            return
+
+        await self._setOffseasonFlow('rookie_draft', None)
+        self._offseasonPhase = 'rookie_draft'
+
+        draftOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) or []
+        if not draftOrder:
+            teamManager = self.serviceContainer.getService('team_manager')
+            draftOrder = list(getattr(teamManager, 'teams', None) or [])
+            logger.warning("Rookie draft: no worst-first order available — "
+                           "falling back to team order")
+        # ⚠️ A TRADED PICK HAS TO ACTUALLY CHANGE WHO PICKS, and until now it did not.
+        # The draft read `freeAgencyOrder` straight through, so every pick the market
+        # moved was COSMETIC: a club could trade for the first selection, watch the
+        # transactions page say so, and then not get it. The whole pick economy —
+        # a quarter of every bundle — was paying for nothing.
+        draftOrder = self._applyPickOwnership(draftOrder)
+
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+
+        brain = self._foBrainForOffseason()
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+
+        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
+            try:
+                await broadcaster.broadcast_season_event({
+                    'event': 'rookie_draft_start',
+                    'season': seasonNum,
+                    'totalRookies': len(rookies),
+                    'rookies': [{'id': getattr(r, 'id', 0), 'name': r.name,
+                                 'position': r.position.name,
+                                 'rating': round(getattr(r, 'playerRating', 0), 1),
+                                 'tier': r.playerTier.name}
+                                for r in rookies],
+                })
+            except Exception as e:
+                logger.warning(f"Could not broadcast rookie_draft_start: {e}")
+
+        pickGen = self.playerManager.rookieDraftPickGenerator(
+            rookies, draftOrder, leagueHighlights, brain=brain,
+            season=self.currentSeason.seasonNumber,
+            leagueTeams=list(getattr(
+                self.serviceContainer.getService('team_manager'), 'teams', None) or []))
+        try:
+            for entry in pickGen:
+                kind = entry.get('type')
+                if kind == 'on_clock':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_on_clock',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        })
+                        await self.timingManager.waitBetweenOffseasonPicks()
+                elif kind == 'pick':
+                    self._offseasonTransactions.append({
+                        'type': 'rookie_pick',
+                        'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                        'playerId': entry.get('playerId'),
+                        'player': entry['playerName'], 'position': entry['position'],
+                        'rating': entry['rating'], 'tier': entry['tier'],
+                    })
+                    self._recordOffseasonEvent(
+                        'rookie_pick', teamName=entry['teamName'],
+                        teamAbbr=entry['teamAbbr'], teamId=entry.get('teamId'),
+                        playerId=entry.get('playerId'), playerName=entry['playerName'],
+                        position=entry['position'], rating=entry['rating'],
+                        tier=entry['tier'])
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_pick',
+                            'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                            'playerId': entry.get('playerId'),
+                            'player': entry['playerName'], 'position': entry['position'],
+                            'rating': entry['rating'], 'tier': entry['tier'],
+                        })
+                elif kind == 'skip':
+                    reason = entry.get('reason')
+                    self._offseasonTransactions.append({
+                        'type': 'rookie_skip',
+                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        'player': ('(pipeline full — forfeited pick)'
+                                   if reason == 'pipeline_full'
+                                   else '(no eligible rookies)'),
+                        'position': '—', 'rating': 0,
+                    })
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_skip',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            'reason': reason,
+                        })
+                elif kind == 'pick_traded':
+                    # ⚠️ ANNOUNCED, NOT SILENT. It replaces the forfeit a reader used to
+                    # see, and a slot changing hands mid-draft is the single most
+                    # interesting thing that happens in one.
+                    self._offseasonTransactions.append({
+                        'type': 'trade',
+                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        'counterpartTeam': entry['to'], 'counterpartAbbr': entry['toAbbr'],
+                        'gave': f"S{seasonNum} draft slot",
+                        'got': f"S{entry['forSeason']} R1 pick",
+                        'player': f"S{seasonNum} draft slot",
+                        'position': '—', 'rating': 0,
+                    })
+                    self._recordOffseasonEvent(
+                        'trade', teamName=entry['team'],
+                        detail=(f"could not use their draft slot and traded it to "
+                                f"{entry['to']} for a Season {entry['forSeason']} pick"))
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_pick_traded',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            'to': entry['to'], 'toAbbr': entry['toAbbr'],
+                            'forSeason': entry['forSeason'],
+                        })
+                elif kind == 'complete':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_complete',
+                            'totalPicks': len(entry.get('picks', [])),
+                            'undraftedCount': len(entry.get('undrafted', [])),
+                        })
+        except Exception as e:
+            logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
+            # ⚠️ DRAIN THE REST. The generator MUTATES as it yields, so abandoning it
+            # mid-draft leaves half a class in limbo — flagged as upcoming rookies with
+            # nothing left that will ever place them.
+            for _ in pickGen:
+                pass
+
+        if (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()
+                and not getattr(self.timingManager, '_isFastCatchingUp', False)):
+            await asyncio.sleep(3)
+
+        self._markOffseasonStepComplete('rookie_draft')
+
+    def _applyPickOwnership(self, worstFirst: list) -> list:
+        """Re-point each draft slot at whoever OWNS that pick, and stamp it spent.
+
+        ⚠️ THE SLOT IS THE ORIGINAL CLUB'S AND THE SELECTION IS THE OWNER'S. The order is
+        "who picks", not "whose pick it is": a club that traded its own first-rounder and
+        then finished worst has handed the buyer the number one selection, which is the
+        whole drama of trading a pick and the only shape that makes it a real gamble.
+
+        ⚠️ A CLUB CAN HOLD TWO SLOTS AND MUST PICK TWICE, so this returns a list that may
+        repeat a club — the draft loop iterates it, and de-duplicating here would silently
+        void the pick somebody paid for.
+
+        Best-effort: an unreadable pick table leaves the standings order untouched, which
+        is the pre-trading behaviour and never worse than not drafting.
+        """
+        if not worstFirst:
+            return worstFirst
+        try:
+            from database.connection import get_session
+            from database.models import DraftPick
+            slots = self._rookieDraftSlots(worstFirst)
+            moved = sum(1 for original, owner in slots if owner is not original)
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            session = get_session()
+            try:
+                # ⚠️ Spent, so it cannot be traded again next season.
+                session.query(DraftPick).filter(
+                    DraftPick.season == season, DraftPick.round_number == 1,
+                ).update({DraftPick.used: True}, synchronize_session=False)
+                session.commit()
+            finally:
+                session.close()
+            if moved:
+                logger.info(f"Rookie draft: {moved} slot(s) belong to another club")
+            return [owner for _original, owner in slots]
+        except Exception as e:
+            logger.warning(f"Could not apply pick ownership: {e}")
+            return worstFirst
+
+    def _rookieDraftSlots(self, worstFirst: list) -> list:
+        """`[(originalTeam, owningTeam), …]` in slot order. Read-only.
+
+        ⚠️ ONE READER FOR THE DRAFT AND THE BOARD. `/api/offseason` renders the order
+        before and during the draft, and it used to serve `freeAgencyOrder` straight
+        through, so a traded pick showed under the club that gave it away while the
+        draft itself handed the slot to the buyer.
+
+        ⚠️ `used` IS NOT FILTERED. The draft stamps every pick of the season spent as it
+        starts, so filtering on it made ownership vanish the moment the draft began —
+        from the board, and from the draft itself on a mid-draft restart, which re-reads
+        this and would have fallen back to the standings order. Season + round already
+        scope it to this draft.
+        """
+        pairs = [(t, t) for t in worstFirst]
+        if not worstFirst:
+            return pairs
+        try:
+            from database.connection import get_session
+            from database.models import DraftPick
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            byId = {getattr(t, 'id', None): t for t in worstFirst}
+            session = get_session()
+            try:
+                ownerByOrigin = {r.original_team_id: r.current_owner_id
+                                 for r in session.query(DraftPick).filter(
+                                     DraftPick.season == season,
+                                     DraftPick.round_number == 1).all()}
+            finally:
+                session.close()
+            return [(team, byId.get(ownerByOrigin.get(getattr(team, 'id', None)), team))
+                    for team in worstFirst]
+        except Exception as e:
+            logger.warning(f"Could not read draft pick ownership: {e}")
+            return pairs
+
     async def _runPreDraftPass(self, teamsWorstFirst: list, gmResults: list) -> None:
         """Roll through teams worst→best BEFORE the rookie draft begins.
 
@@ -7555,6 +7975,196 @@ class SeasonManager:
                     except Exception as e:
                         logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
 
+    def _runTradePass(self, week: int) -> list:
+        """One weekly pass of the trade market. Best-effort — ⚠️ NOTHING HERE MAY BREAK A
+        WEEK, which is the lesson `_publishGameNews` already taught: its first version
+        read an attribute off the wrong object and the AttributeError raised straight out
+        of `_simulateGame`, failing every game in the slate.
+
+        ⚠️ AND IT REFUSES TO RUN INSIDE A LIVE WEEK. The caller places it after
+        `_onWeekComplete`, which is the correct seam, but a future caller might not — so
+        the guard is here rather than in a comment. `weekIsFullyRecorded` is the predicate
+        the fantasy side already trusts.
+        """
+        from constants import TRADING_ENABLED, GM_ACTIVE_WEEK
+        if not TRADING_ENABLED or not self.currentSeason:
+            return []
+        if int(week or 0) >= int(GM_ACTIVE_WEEK):
+            return []           # rosters freeze at the deadline
+        try:
+            if not self._weekIsBanked(week):
+                logger.warning(f"Trade pass skipped — week {week} is not banked yet")
+                return []
+            from managers import tradeManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            season = self.currentSeason.seasonNumber
+            self._ensureDraftPicks(season)
+            brain = self._foBrainForOffseason()
+            brain.season, brain.week = season, int(week or 1)
+            accepted = tradeManager.runWeeklyPass(
+                self.playerManager, teamManager, brain, season, week)
+            settled = []
+            for entry in accepted:
+                # ⚠️ SEQUENTIAL, RE-VALIDATING AGAINST THE STATE THE LAST ONE LEFT. Within
+                # one pass trades interact: a club may promote a prospect to cover a sale
+                # and that prospect may be the asset another club is buying, and two
+                # accepted trades can target the same roster slot. `settleTrade` re-checks
+                # and returns None rather than executing an illegal move.
+                result = tradeManager.settleTrade(
+                    self, entry['listing'], entry['winner'], season, week)
+                if result is not None:
+                    settled.append(result)
+            if settled:
+                logger.info(f"Trade pass week {week}: {len(settled)} trade(s) settled")
+            return settled
+        except Exception as e:
+            logger.error(f"Trade pass failed in week {week}: {e}", exc_info=True)
+            return []
+
+    def _runOffseasonTradePass(self, passName: str) -> list:
+        """One of the two offseason trade windows.
+
+        ⚠️ THE GAP BETWEEN THE FRONT OFFICE AND THE DRAFT IS THE WINDOW, and it is ~19
+        hours of wall clock. By then every club knows three things it does not know at any
+        other moment: WHO IT KEPT, WHAT THE POOL HOLDS, and WHERE IT PICKS.
+
+            pass A — pre-rookie-draft: the main one. Roster settled, pick known, needs
+                     visible. ⚠️ THIS IS WHERE PICK TRADING LIVES, because this year's
+                     picks are spent the moment the draft runs. That asymmetry is worth
+                     honouring rather than smoothing.
+            pass B — pre-FA-draft: smaller. A club that just drafted a quarterback may now
+                     have a surplus one, and the pool it is about to fish is known.
+
+        ⚠️ THE VALUATION CHANGES HERE, IN THE CLUB'S FAVOUR, AND BOTH HALVES MATTER.
+        `seasonsOfControl` JUMPS — the walk-years are already gone, so everyone remaining
+        has whole seasons of term and the rental market does not exist at all. And
+        `nowWeight` RESETS, because contention is unknown for a season that has not been
+        played — which removes the buyer/seller asymmetry entirely, so the offseason market
+        cannot run on contention. It runs on the other three triggers: blocked prospect
+        (loudest here, right after promotions), locker room, and horizon mismatch. That is
+        a genuinely different market rather than the same one at a different date, which is
+        the argument for having both.
+
+        ⚠️ STEP-GATED AND NON-NEGOTIABLE. Every other offseason phase guards on
+        `_isOffseasonStepComplete` and marks itself done; a deploy landing mid-pass would
+        otherwise re-run it and trade AGAIN from an already-changed roster — and the
+        offseason is exactly where this project's restarts land.
+        """
+        from constants import TRADING_ENABLED
+        step = f'trade_{passName}'
+        if self._isOffseasonStepComplete(step):
+            logger.info(f"Offseason trade pass '{passName}' already complete — skipping")
+            return []
+        if not TRADING_ENABLED or not self.currentSeason:
+            self._markOffseasonStepComplete(step)
+            return []
+        settled = []
+        try:
+            from managers import tradeManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            season = self.currentSeason.seasonNumber
+            self._ensureDraftPicks(season)
+            brain = self._foBrainForOffseason()
+            # `week=None` is what tells the valuation this is the offseason: whole
+            # seasons of control, and contention at parity.
+            for entry in tradeManager.runWeeklyPass(
+                    self.playerManager, teamManager, brain, season, None):
+                # ⚠️ A PICK TRADE HAS ITS OWN SETTLEMENT — nobody is displaced, nothing
+                # is cut and no slot is backfilled, so `settleTrade`'s roster ordering does
+                # not apply to it at all.
+                if entry.get('kind') == 'pick':
+                    result = tradeManager.settlePickTrade(
+                        self, entry['listing'], entry['winner'], season)
+                else:
+                    result = tradeManager.settleTrade(
+                        self, entry['listing'], entry['winner'], season, None)
+                if result is not None:
+                    settled.append(result)
+                    # ⚠️ BOTH CLUBS AND BOTH SIDES. This carried only the seller's name
+                    # (no abbr) and what it gave up, so the offseason page could not say
+                    # who the other party was or what came back — and with no abbr the
+                    # row filed under no team at all.
+                    teamsById = {getattr(t, 'id', None): t
+                                 for t in (getattr(teamManager, 'teams', None) or [])}
+
+                    def _abbr(teamId, fallbackName):
+                        t = teamsById.get(teamId)
+                        if t is not None:
+                            return getattr(t, 'abbr', t.name[:3].upper())
+                        return (fallbackName or '')[:3].upper()
+
+                    aGave = ', '.join(p['name'] for p in result.get('aGave') or []) or 'nothing'
+                    bGave = ', '.join(p['name'] for p in result.get('bGave') or []) or 'nothing'
+                    self._offseasonTransactions.append({
+                        'type': 'trade',
+                        'team': result['teamAName'],
+                        'teamAbbr': _abbr(result.get('teamAId'), result['teamAName']),
+                        'counterpartTeam': result.get('teamBName'),
+                        'counterpartAbbr': _abbr(result.get('teamBId'), result.get('teamBName')),
+                        'gave': aGave, 'got': bGave,
+                        'player': aGave,
+                        'position': '—', 'rating': 0,
+                    })
+            if settled:
+                logger.info(f"Offseason trade pass '{passName}': {len(settled)} settled")
+        except Exception as e:
+            logger.error(f"Offseason trade pass '{passName}' failed: {e}", exc_info=True)
+        self._markOffseasonStepComplete(step)
+        return settled
+
+    def _weekIsBanked(self, week: int) -> bool:
+        """Has this week's fantasy record been written? The trade seam's gate."""
+        try:
+            from managers.fantasyTracker import weekIsFullyRecorded
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            from database.connection import get_session
+            from database.models import WeeklyPlayerFP
+            session = get_session()
+            try:
+                return session.query(WeeklyPlayerFP).filter_by(
+                    season=season, week=int(week or 0)).first() is not None
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Could not confirm week {week} is banked: {e}")
+            return False        # ⚠️ fail CLOSED — no trade beats a mis-scored week
+
+    def _ensureDraftPicks(self, season: int) -> None:
+        """Seed pick rows for this season and the tradeable horizon.
+
+        Lazy and idempotent: a pick has to EXIST before it can be traded, and a future
+        pick belongs to a draft that has not happened yet. `freeAgencyOrder` is rebuilt
+        from the standings each season and is a list of team OBJECTS, so it cannot carry
+        ownership — which is why these need rows at all.
+        """
+        from constants import TRADE_PICK_HORIZON_SEASONS
+        from database.connection import get_session
+        from database.models import DraftPick
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = list(getattr(teamManager, 'teams', None) or [])
+        if not teams:
+            return
+        session = get_session()
+        try:
+            for s in range(int(season), int(season) + int(TRADE_PICK_HORIZON_SEASONS) + 1):
+                existing = {r.original_team_id for r in
+                            session.query(DraftPick).filter_by(season=s, round_number=1).all()}
+                for team in teams:
+                    tid = getattr(team, 'id', None)
+                    if tid is None or tid in existing:
+                        continue
+                    session.add(DraftPick(season=s, round_number=1,
+                                          original_team_id=tid, current_owner_id=tid))
+            session.commit()
+        except Exception as e:
+            logger.warning(f"Could not seed draft picks: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        finally:
+            session.close()
+
     def _foBrainForOffseason(self):
         """Build (and cache for this offseason) the front-office decider.
 
@@ -7584,6 +8194,16 @@ class SeasonManager:
                            f"valuing on attributes alone: {e}")
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
                                  performanceMap=performanceMap)
+        # ⚠️ STAMP WHERE IN THE CALENDAR THIS BRAIN IS STANDING, or a prospect's ceiling
+        # is read under the wrong seed and the GM's belief diverges from the band the
+        # FANS ARE SHOWN — the exact divergence `_ceilingRating` reads the belief to
+        # close. The season is part of the scouting seed on purpose (a club's read
+        # resets for next year's class), so leaving it at the default 0 would give every
+        # season the same opinions AND make them disagree with every fan-facing surface.
+        # The week is the deadline: by the offseason the band has fully sharpened.
+        from constants import GM_ACTIVE_WEEK as _DEADLINE_WEEK
+        brain.season = int(season or 0)
+        brain.week = int(_DEADLINE_WEEK)
         self._foBrainCache = (season, brain)
         return brain
 
@@ -7687,6 +8307,122 @@ class SeasonManager:
         except Exception:
             pass
 
+    @staticmethod
+    def _isFinalProspectWindow(prospect) -> bool:
+        """Is this the last offseason this club can promote him?
+
+        ⚠️ THE OFF-BY-ONE IS THE WHOLE POINT. `_advanceProspectWindow` INCREMENTS
+        first and then releases anyone at or past `PROSPECT_DEVELOPMENT_WINDOW`, and
+        it runs immediately after the promotions pass — so a prospect sitting on
+        WINDOW-1 right now is released the moment this pass ends. Testing `>= WINDOW`
+        here would fire only on a player who has already been let go.
+        """
+        from constants import PROSPECT_DEVELOPMENT_WINDOW, LAST_WINDOW_PROMOTE_ENABLED
+        if not LAST_WINDOW_PROMOTE_ENABLED:
+            return False
+        seasons = int(getattr(prospect, 'prospect_seasons', 0) or 0)
+        return seasons >= max(1, PROSPECT_DEVELOPMENT_WINDOW) - 1
+
+    def _cutToMakeRoomForProspect(self, team, prospect, brain, coach, prospectValue: float):
+        """Cut the weakest incumbent at this prospect's position so he can be
+        promoted on his final window. Returns the freed slot, or None.
+
+        Option 2 of the last chance (docs/TRADING_PLAN.md §4). Three gates, and
+        each one is load-bearing:
+
+          1. ⚠️ THE COMPARISON IS AGAINST THE INCUMBENT, NOT A FREE AGENT. The club
+             is choosing between two players it can actually have. A free agent is
+             irrelevant here — it is not giving up a roster spot to sign one.
+          2. The prospect must genuinely beat him, by the same margin a cut-for-
+             upgrade needs anywhere else (`FO_CUT_UPGRADE_MARGIN`). Losing a prospect
+             is bad; cutting a better player to keep him is worse.
+          3. ⚠️ THE FEE MUST BE AFFORDABLE, AND A CLUB THAT CANNOT PAY CANNOT CUT.
+             Not a debt — see CUT_FEE_RATE. A club that cannot afford it falls back
+             to letting him walk (or, once trading ships, to selling him).
+
+        A walk-year or retiring incumbent is skipped: he vacates on his own, and
+        paying to cut a player who is leaving anyway is pure waste.
+        """
+        from constants import FO_CUT_UPGRADE_MARGIN
+        posSlots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
+        slots = posSlots.get(getattr(getattr(prospect, 'position', None), 'value', 0), [])
+        worstSlot, worstPlayer, worstValue = None, None, None
+        for slot in slots:
+            incumbent = team.rosterDict.get(slot)
+            if incumbent is None:
+                return slot                 # already free; nothing to pay for
+            if getattr(incumbent, 'willRetire', False):
+                continue                    # vacates on its own
+            if (getattr(incumbent, 'termRemaining', 0) or 0) <= 1:
+                continue                    # walk-year: he is leaving anyway
+            # ⚠️ Not a prospect this club promoted minutes ago in the loop above. Trading
+            # one just-promoted prospect for another is the churn this rule exists to
+            # stop, and it costs a cut fee to end up with the same number of rookies.
+            from managers.playerManager import wasPromotedThisOffseason
+            if wasPromotedThisOffseason(
+                    incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
+                continue
+            value = brain.decisionValue(incumbent, coach=coach, team=team)
+            if worstValue is None or value < worstValue:
+                worstSlot, worstPlayer, worstValue = slot, incumbent, value
+        if worstPlayer is None:
+            return None
+        if prospectValue - worstValue < FO_CUT_UPGRADE_MARGIN:
+            return None                     # not enough of an upgrade to pay for
+        from managers.frontOfficeBrain import cutFeeFor
+        fee = cutFeeFor(worstPlayer)
+        if not self._chargeCutFee(team, fee):
+            logger.info(f"{team.name} cannot afford the {fee}F cut fee to keep "
+                        f"{prospect.name} — he walks")
+            return None
+
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+        self._recordOffseasonEvent('cut', player=worstPlayer, team=team,
+                                   detail=f"released to promote {prospect.name} ({fee}F)")
+        self.playerManager.releasePlayerToFreeAgency(worstPlayer, team, {})
+        worstPlayer.teamResignCount = 0
+        leagueHighlights.insert(0, {'event': {'text':
+            f'{team.name} released {worstPlayer.name} to promote {prospect.name} '
+            f'before his development window closed'}})
+        logger.info(f"Last window: {team.name} cut {worstPlayer.name} ({fee}F) to "
+                    f"promote {prospect.name}")
+        return worstSlot
+
+    def _chargeCutFee(self, team, fee: int) -> bool:
+        """Debit a team's Treasury for a cut. False (and nothing charged) if it
+        cannot cover it — ⚠️ the fee is never allowed to go negative into a debt,
+        because a broke club with a debt line has UNLIMITED roster churn, which is
+        the opposite of what the fee is for."""
+        if fee <= 0:
+            return True
+        try:
+            from database.connection import get_session
+            from managers.facilitiesManager import getTreasury, setTreasury
+        except Exception:
+            return True             # facilities economy unavailable — do not block the sim
+        teamId = getattr(team, 'id', None)
+        if teamId is None:
+            return True
+        session = get_session()
+        try:
+            balance = getTreasury(session, teamId)
+            if balance < fee:
+                return False
+            setTreasury(session, teamId, balance - fee)
+            session.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not charge cut fee to {team.name}: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            session.close()
+
     def _promoteProspectsAutonomously(self, team) -> list:
         """Promote this team's prospects when the GM rates them over the market.
 
@@ -7717,18 +8453,35 @@ class SeasonManager:
         while True:
             best, bestSlot, bestValue = None, None, 0.0
             for prospect in prospects:
+                lastChance = self._isFinalProspectWindow(prospect)
                 try:
                     slot = self.playerManager._findOpenSlotForPosition(
                         team, prospect.position.value)
                 except Exception:
                     slot = None
-                if not slot:
-                    continue        # no hole at his position — nothing to win
                 value = brain.decisionValue(prospect, coach=coach)
-                replacement = brain.bestReplacementValue(
-                    prospect, coach=coach, pickDepth=pickDepth)
-                if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
-                    continue        # free agency offers better — leave him down
+                if not slot:
+                    # ⚠️ NO OPEN SLOT USED TO MEAN NO PROMOTION AT ANY QUALITY, which on
+                    # the final window loses a 99-potential quarterback for nothing
+                    # because the club's QB slot happened to be occupied. On his last
+                    # window the club gets to CUT to make room — a real, priced decision
+                    # (the cut fee) rather than watching him walk. Every earlier window
+                    # keeps the old behaviour: there is a next year, so leave him down.
+                    if not lastChance:
+                        continue
+                    slot = self._cutToMakeRoomForProspect(team, prospect, brain, coach, value)
+                    if not slot:
+                        continue
+                elif not lastChance:
+                    replacement = brain.bestReplacementValue(
+                        prospect, coach=coach, pickDepth=pickDepth)
+                    if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
+                        continue    # free agency offers better — leave him down
+                # ⚠️ On the LAST window the bar above is skipped entirely. It prices him
+                # against the free agent this club could sign instead, and that is not
+                # the alternative any more: `_advanceProspectWindow` runs moments from
+                # now and releases him for nothing, so the choice is the prospect or an
+                # empty slot rating 50. Better-than-nothing beats better-than-a-free-agent.
                 if value > bestValue:
                     best, bestSlot, bestValue = prospect, slot, value
             if best is None:
@@ -7747,6 +8500,12 @@ class SeasonManager:
                 best.termRemaining = best.term
             except Exception:
                 best.termRemaining = 1
+            # ⚠️ Promoting is a commitment for the season. Without this he can be cut
+            # again before a snap is played — by the FA draft's upgrade cut, by a trade
+            # needing room, or by the very next turn of this same loop making room for
+            # another prospect.
+            from managers.playerManager import stampPromotion
+            stampPromotion(best, getattr(self.currentSeason, 'seasonNumber', 0))
             promotions.append({
                 'id': getattr(best, 'id', None),
                 'name': best.name,
@@ -7889,7 +8648,8 @@ class SeasonManager:
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
-                              rating=None, tier=None, session=None) -> None:
+                              rating=None, tier=None, session=None,
+                              tradeId=None) -> None:
         """Persist one offseason transaction/announcement for the Season Recap.
         Best-effort + idempotent per (season, eventType, playerId|teamId) so an
         offseason resume/restart never duplicates or breaks the offseason.
@@ -7923,12 +8683,18 @@ class SeasonManager:
             try:
                 q = s.query(SeasonRecapEvent).filter_by(season=season, event_type=eventType)
                 q = q.filter_by(player_id=playerId) if playerId is not None else q.filter_by(team_id=teamId)
+                # ⚠️ A TWO-SIDED TRADE DOES NOT FIT (season, event_type, player|team). Both
+                # sides are 'trade' rows in the same season, so without the trade id the
+                # dedupe above silently drops half of every swap.
+                if tradeId is not None:
+                    q = q.filter_by(trade_id=tradeId)
                 if q.first():
                     return  # already recorded (resume/restart safety)
                 s.add(SeasonRecapEvent(
                     season=season, event_type=eventType, team_id=teamId, team_abbr=teamAbbr,
                     team_name=teamName, player_id=playerId, player_name=playerName,
                     position=position, rating=rating, tier=tier, detail=detail,
+                    trade_id=tradeId,
                 ))
                 if ownSession:
                     s.commit()
@@ -8410,29 +9176,15 @@ class SeasonManager:
         self._recyclePlayerName(player.name)
     
     def _recyclePlayerName(self, name: str) -> None:
-        """Convert retired player name to legacy variant and add to unused names"""
-        # Name progression: Base -> Jr. -> III -> IV -> V -> VI -> VII -> VIII -> IX -> X -> XI
-        if name.endswith('Jr.'):
-            name = name.replace('Jr.', 'III')
-        elif name.endswith('IV'):
-            name = name.replace('IV', 'V')
-        elif name.endswith('VIII'):
-            name = name.replace('VIII', 'IX')
-        elif name.endswith('IX'):
-            name = name.replace('IX', 'X')
-        elif name.endswith('III'):
-            name = name.replace('III', 'IV')
-        elif name.endswith('V') or name.endswith('X'):
-            name += 'I'
-        else:
-            name += ' Jr.'
+        """Advance a retiree's name one rung and hold it for reuse.
 
-        # Hold the recycled variant out of the usable pool for a few seasons so a
-        # familiar name doesn't reappear the very next season.
-        from constants import NAME_REUSE_DELAY_SEASONS
+        ⚠️ DELEGATES — the ladder has ONE definition, in `playerManager`, because the
+        free-agent retirement path lives there and could not reach this one. Two copies
+        is how a rung gets added to one and not the other.
+        """
         currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 0) or 0
-        self.playerManager.addPendingName(name, currentSeasonNum + NAME_REUSE_DELAY_SEASONS)
-    
+        self.playerManager.recycleRetiredName(name, currentSeasonNum)
+
     # app_setting key holding the last season whose Front Office open block ran.
     FRONT_OFFICE_MARKER_KEY = 'front_office_open_season'
 
@@ -8710,6 +9462,25 @@ class SeasonManager:
         phase resume skip work that already mutated DB state (e.g. front-
         office contract decrements, training stat development).
         """
+        # ⚠️ PERSIST THE PLAYERS BEFORE THE MARKER. The marker makes a restart SKIP the step,
+        # so it may only be written once the step's effects are in the database — and the
+        # offseason steps mutate players in memory only (contract decrements, expirations,
+        # retirements, trades), with the one full save not coming until `_saveSeasonState`
+        # after the whole offseason. Measured on production, season 6, mid-offseason: all
+        # 2 retirements and all 35 expired contracts were still on their old teams in the
+        # database behind a completed `frontoffice_decisions`, so any deploy in that window
+        # would have reloaded pre-offseason rosters and skipped the step that changes them.
+        # A failed save still marks the step: leaving it unmarked is WORSE, because a later
+        # step's successful save would write these changes anyway and a restart would then
+        # apply them twice (contracts decremented twice).
+        try:
+            import time as _time
+            _t0 = _time.monotonic()
+            self.playerManager.savePlayerData()
+            logger.info(f"Offseason step '{step}': players saved in {_time.monotonic() - _t0:.1f}s")
+        except Exception as e:
+            logger.error(f"Offseason step '{step}': player save failed, a restart before the "
+                         f"end-of-offseason save will lose this step's changes: {e}")
         if not hasattr(self, '_offseasonCompletedSteps') or self._offseasonCompletedSteps is None:
             self._offseasonCompletedSteps = set()
         self._offseasonCompletedSteps.add(step)

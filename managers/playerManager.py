@@ -38,6 +38,53 @@ def _perfRating(player, attr: str) -> Optional[int]:
     return value if value > 0 else None
 
 
+def stampPromotion(player, season) -> None:
+    """Mark that this prospect was promoted onto a roster in THIS offseason.
+
+    ⚠️ A PROMOTION IS A COMMITMENT, AND NOTHING RECORDED IT. Reported live: a team
+    drafted a prospect, promoted him, and cut him again — all inside one offseason. The
+    FA draft already carries the right rule for its own signings (`_draftFilledSlots`,
+    "a slot filled during this draft is off limits"), but that set is stamped only when
+    a FREE AGENT is signed, so a promoted prospect walked straight past it. The cut then
+    cost the club the pick, the prospect and a fee to end up back where it started.
+
+    ⚠️ THE SEASON IS ENOUGH HERE, unlike the trade stamp next door, which needs the
+    phase as well because trades happen in-season AND in the offseason and the offseason
+    runs under the number of the season it follows. Every promotion path is offseason-only
+    (`_promoteProspectsAutonomously` from `_handleOffseason`, and the prospect branch of
+    `_attemptRosterFill` from the FA draft), so a matching season number can only mean
+    this offseason. Once play starts the number has moved on and the man is cuttable,
+    which is exactly the rule: promoted in the offseason, he starts the season there.
+
+    ⚠️ IN-MEMORY, and a restart clears it — the same trade-off `stampTradeAcquisition`
+    documents. It fails permissive: the worst case is one legal-looking cut, not a lost
+    player.
+    """
+    try:
+        player._promotedInSeason = int(season or 0)
+    except Exception:
+        pass
+
+
+def wasPromotedThisOffseason(player, season) -> bool:
+    """Was this player promoted off the prospect list in the offseason now running?
+
+    The single predicate behind every cut path, so "promoted, therefore not cuttable"
+    cannot be enforced in one place and forgotten in the next — the FA-draft upgrade cut,
+    the GM's cut-for-upgrade sweep, the cut that makes room for ANOTHER prospect, and the
+    cut that makes room for a trade are four separate deciders that all reach a roster.
+    """
+    if player is None:
+        return False
+    stamped = getattr(player, '_promotedInSeason', None)
+    if stamped is None:
+        return False
+    try:
+        return int(stamped) == int(season or 0)
+    except (TypeError, ValueError):
+        return False
+
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -412,6 +459,7 @@ class PlayerManager:
             player.freeAgentYears = db_player.free_agent_years
             # Prospect pipeline state
             player.is_prospect = bool(getattr(db_player, 'is_prospect', False))
+            player.lateBloomPending = int(getattr(db_player, 'late_bloom_pending', 0) or 0)
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
@@ -603,31 +651,50 @@ class PlayerManager:
         if prospectCount > 0:
             logger.info(f"Restored {prospectCount} prospects to team pipelines")
 
-        # Upcoming rookies used to sit out here — visible for scouting, on no
-        # roster and deliberately kept OUT of the FA pool, because the rookie
-        # draft was the one thing that cleared the flag (drafted -> prospect,
-        # undrafted -> free agent). With the draft gone that door is closed, so
-        # a DB carrying a rookie class would strand those players forever:
-        # never rostered, never signable, invisible to the sim but still taking
-        # up space in the pool. Release them into free agency instead, which is
-        # exactly what the draft did with everyone it didn't take.
-        # Self-healing and idempotent — once drained the loop finds nobody.
+        # ⚠️ UPCOMING ROOKIES MUST NOT BE ROSTERED OR POOLED. They are the season's
+        # draft class: visible and scoutable all season, on no roster, and deliberately
+        # kept OUT of the FA pool, because the rookie draft is the one thing that clears
+        # the flag (drafted -> prospect, undrafted -> free agent).
+        #
+        # ⚠️ THIS BLOCK RELEASED THEM INTO FREE AGENCY ON EVERY LOAD while the draft was
+        # gone. That was correct then and is a CLASS-DESTROYING BUG now: the class is
+        # generated at season start and drafted in the offseason, so a release-on-load
+        # would empty it on the very next restart and the draft would find nothing to
+        # pick. The release survives, gated, for the one case that still needs it — a
+        # database carrying a class with the draft switched OFF, where those players
+        # would otherwise be stranded forever: never rostered, never signable, invisible
+        # to the sim but still taking up space. Self-healing and idempotent.
+        from constants import rookieDraftEnabled
         upcomingCount = 0
-        for player in self.activePlayers:
-            if getattr(player, 'is_upcoming_rookie', False):
-                player.is_upcoming_rookie = False
-                player.is_undrafted = True
-                player.freeAgentYears = 0
-                player.team = None      # picked up as a free agent just below
-                upcomingCount += 1
-        if upcomingCount > 0:
-            logger.info(f"Released {upcomingCount} upcoming rookie(s) into the FA "
-                        f"pool — the rookie draft that used to place them is gone")
+        if not rookieDraftEnabled():
+            for player in self.activePlayers:
+                if getattr(player, 'is_upcoming_rookie', False):
+                    player.is_upcoming_rookie = False
+                    player.is_undrafted = True
+                    player.freeAgentYears = 0
+                    player.team = None      # picked up as a free agent just below
+                    upcomingCount += 1
+            if upcomingCount > 0:
+                logger.info(f"Released {upcomingCount} upcoming rookie(s) into the FA "
+                            f"pool — the rookie draft is off, so nothing would ever "
+                            f"have placed them")
+        else:
+            held = sum(1 for p in self.activePlayers
+                       if getattr(p, 'is_upcoming_rookie', False))
+            if held:
+                logger.info(f"Holding {held} upcoming rookie(s) out of rosters and the "
+                            f"FA pool for the draft")
 
         faCount = 0
         for player in self.activePlayers:
             # Prospects are handled above; don't try to roster them
             if getattr(player, 'is_prospect', False):
+                continue
+            # ⚠️ And neither are upcoming rookies, who are pre-draft. Without this the
+            # loop below would see `team = 'Upcoming Rookie'`, fail to resolve it to a
+            # club, and fall through into the free-agent branch — which is the same
+            # class destruction by a quieter route.
+            if getattr(player, 'is_upcoming_rookie', False):
                 continue
             if not hasattr(player, 'team') or player.team is None:
                 # Player has no team — mark as free agent
@@ -975,6 +1042,36 @@ class PlayerManager:
             return False
         return (getattr(player, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT
 
+    def expectedPlayerTerm(self, player) -> float:
+        """The MEAN term `_getPlayerTerm` would hand this player, without rolling.
+
+        ⚠️ A VALUATION CANNOT CALL `_getPlayerTerm` — it rolls a `randint`, so pricing the
+        same player twice would give two answers and a club could talk itself into or out
+        of a trade on a dice throw. This is the expectation of that same distribution, and
+        it lives next to it so the two cannot drift apart.
+
+        Used to price a walk-year player the club INTENDS TO RE-SIGN. He is not a rental:
+        the club holds the right to keep him, so what a buyer is really acquiring is the
+        contract that would follow, not the few weeks left on this one.
+        """
+        tier = player.playerTier
+        seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
+        if seasonsPlayed == 0:
+            if tier in (FloosPlayer.PlayerTier.TierS, FloosPlayer.PlayerTier.TierA):
+                return 3.0
+            return 1.0 if tier == FloosPlayer.PlayerTier.TierD else 2.0
+        if tier == FloosPlayer.PlayerTier.TierS:
+            base, floor = 5.0, 3           # randint(4, 6)
+        elif tier == FloosPlayer.PlayerTier.TierA:
+            base, floor = 3.5, 2           # randint(3, 4)
+        elif tier == FloosPlayer.PlayerTier.TierD:
+            base, floor = 1.0, 1
+        else:
+            base, floor = 2.0, 1           # randint(1, 3)
+        longevity = getattr(getattr(player, 'attributes', None), 'longevity', 6) or 6
+        remaining = max(1, longevity - seasonsPlayed + 1)
+        return float(max(floor, min(base, remaining)))
+
     def _getPlayerTerm(self, player) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
@@ -997,13 +1094,23 @@ class PlayerManager:
             return 2  # B / C
 
         # Veteran: roll by tier, then clamp to expected career runway.
-        # Star (S/A) deals are SHORT (2-3, was 4-6 / 3-4) so a player cycles through
-        # their ~2 contracts (re-sign-once retention limit) in ~4-5 years rather than
-        # a decade — keeps talent circulating for parity. See PARITY_PROSPECT_PLAN.md P5.
+        # ⚠️ STAR DEALS ARE LONG AGAIN (S 4-6 / A 3-4), restored 2026-09-15.
+        # They were cut to 2-3 to feed a retention ratchet — first the salary cap
+        # (built, then SCRATCHED, code removed in c8e1ec7), then the re-sign-once
+        # limit the comment here blamed. `RESIGN_ONCE_ENABLED` has been False since
+        # 2026-08-13, because at a limit of 1 a career-long one-club player was
+        # impossible. So BOTH mechanisms these short deals existed to feed are gone,
+        # and the deals were never revisited: measured on prod, NO player in the
+        # league held a contract longer than 3 seasons, and a 96-rated star sat on a
+        # 2-year deal. Same class as ROOKIE_DRAFT_ENABLED — a rule outliving the
+        # system it served. See docs/TRADING_PLAN.md §8.
+        # ⚠️ The first-contract branch above is deliberately NOT restored: a rookie
+        # deal is a prove-it deal whatever the tier, which is why it was 3 before
+        # this rule ever existed.
         if tier == FloosPlayer.PlayerTier.TierS:
-            base = randint(2, 3)
+            base = randint(4, 6)
         elif tier == FloosPlayer.PlayerTier.TierA:
-            base = randint(2, 3)
+            base = randint(3, 4)
         elif tier == FloosPlayer.PlayerTier.TierD:
             base = 1
         else:
@@ -1022,7 +1129,7 @@ class PlayerManager:
         # the dead-cap risk for hall-of-fame trajectory players); TierA
         # holds at 2 years; lower tiers fall to the runway floor of 1.
         if tier == FloosPlayer.PlayerTier.TierS:
-            floor = 2
+            floor = 3
         elif tier == FloosPlayer.PlayerTier.TierA:
             floor = 2
         else:
@@ -1682,6 +1789,7 @@ class PlayerManager:
                     db_player.free_agent_years = player.freeAgentYears
                     db_player.service_time = player.serviceTime.name if hasattr(player, 'serviceTime') else None
                     db_player.is_prospect = bool(getattr(player, 'is_prospect', False))
+                    db_player.late_bloom_pending = int(getattr(player, 'lateBloomPending', 0) or 0)
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
@@ -2144,6 +2252,40 @@ class PlayerManager:
             logger.info(f"Saved {len(self.unusedNames)} unused names to data/unusedNames.json")
         except Exception as e:
             logger.error(f"Failed to save unused names: {e}")
+
+    # The generational ladder. Base -> Jr. -> III -> IV -> V -> ... -> XI.
+    def recycleRetiredName(self, name: str, currentSeason: int) -> str:
+        """Advance a retiree's name one rung and hold it for reuse.
+
+        ⚠️ THE SINGLE DEFINITION OF THE LADDER. It lived in `seasonManager` and was
+        called from the two ROSTERED retirement paths only, so a free agent who retired
+        took his name out of the league permanently — `retirePlayer` never recycled.
+        Measured over 49 simulated seasons: **1,014 free-agent retirements burned a name
+        against 676 released back** from rostered ones, a net loss of ~7 names a season
+        that drains the pool on a long-running league and then fails SILENTLY —
+        `createPlayer` returns None, `ensurePositionSupply` swallows it, and teams end up
+        without a tight end. Observed exactly that on a 49-season database: 26 TEs
+        rostered against 32 needed and an empty pool.
+
+        Returns the recycled variant so a caller can log it.
+        """
+        if name.endswith('Jr.'):
+            name = name.replace('Jr.', 'III')
+        elif name.endswith('IV'):
+            name = name.replace('IV', 'V')
+        elif name.endswith('VIII'):
+            name = name.replace('VIII', 'IX')
+        elif name.endswith('IX'):
+            name = name.replace('IX', 'X')
+        elif name.endswith('III'):
+            name = name.replace('III', 'IV')
+        elif name.endswith('V') or name.endswith('X'):
+            name += 'I'
+        else:
+            name += ' Jr.'
+        from constants import NAME_REUSE_DELAY_SEASONS
+        self.addPendingName(name, int(currentSeason or 0) + NAME_REUSE_DELAY_SEASONS)
+        return name
 
     def addPendingName(self, name: str, availableSeason: int) -> None:
         """Hold a recycled retiree name out of the usable pool until availableSeason.
@@ -3633,6 +3775,45 @@ class PlayerManager:
                         'event': {'text': f'{player.name} has retired from football'}
                     })
         
+        # ⚠️ THE NAME COMES BACK, AND *HOW* DEPENDS ON WHETHER HE EVER PLAYED. This path
+        # is the one retirement route that never recycled at all — free agents are the bulk
+        # of retirements on a mature league, and measured over 49 simulated seasons **1,014
+        # free-agent retirements burned a name against 676 released back** from rostered
+        # ones, ~7 lost a season until the pool hits zero and roster slots start going
+        # unfilled.
+        #
+        # ⚠️ BUT A MAN WHO NEVER PLAYED MUST NOT MINT A JUNIOR. The ladder says a footballer
+        # came before; a free agent who sat in the pool until he retired had no career for a
+        # son to follow, so inventing "X Jr." invents a father nobody saw. His BASE name
+        # goes straight back, immediately available — the same rule, and the same reasoning,
+        # as `_removeFromPool` uses for a culled player.
+        #
+        # ⚠️ `seasonsPlayed` CANNOT ANSWER THIS. `_handlePlayerSeasonProgression` increments
+        # it for every active non-prospect INCLUDING an unsigned free agent, so a washout
+        # accrues a "season" for every year he sits there — the exact trap that made the
+        # cull's first predicate remove nobody. `_playersWithARecord` asks for a real mark
+        # (a game line, a season with games played, or a card somebody owns) and is the ONE
+        # definition of that question; it is batched here rather than queried per player,
+        # and it fails CLOSED, which errs toward the ladder.
+        if retirements:
+            played = self._playersWithARecord([p.id for p in retirements
+                                               if getattr(p, 'id', None) is not None])
+            laddered = based = 0
+            for player in retirements:
+                name = getattr(player, 'name', None)
+                if not name:
+                    continue
+                if getattr(player, 'id', None) in played:
+                    self.recycleRetiredName(name, currentSeason)
+                    laddered += 1
+                else:
+                    if name not in self.unusedNames:
+                        self.unusedNames.append(name)
+                    based += 1
+            logger.info(f"Free-agent names returned: {laddered} advanced the ladder "
+                        f"(they played), {based} went straight back as the base name "
+                        f"(never rostered)")
+
         logger.info(f"Free agent retirements: {len(retirements)} players retired")
     
     def _generateReplacementPlayers(self, currentSeason: int) -> None:
@@ -3873,6 +4054,7 @@ class PlayerManager:
         nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
 
         generated = {}
+        failed = {}
         newPlayers = []
         for pos, count in deficits.items():
             for _ in range(count):
@@ -3880,6 +4062,15 @@ class PlayerManager:
                 mentalSeed = int(mentalSeeds.pop()) if mentalSeeds else meanPlayerSkill
                 newPlayer = self.createPlayer(pos, physicalSeed, mentalSeed)
                 if not newPlayer:
+                    # ⚠️ DO NOT SWALLOW THIS. `createPlayer` returns None when the name
+                    # pool is dry, and a bare `continue` meant the floor reported what it
+                    # MANAGED to make and never what it FAILED to — measured on a
+                    # 49-season database, `generated {'TE': 1}` against a deficit of 11 TE
+                    # and 5 K, logged as a success. The FA draft then had nobody to sign,
+                    # six teams finished without a tight end, and their games could not be
+                    # played at all. A supply floor that cannot meet its floor is the one
+                    # thing this method must never be quiet about.
+                    failed[pos.name] = failed.get(pos.name, 0) + 1
                     continue
                 newPlayer.id = nextPlayerId
                 nextPlayerId += 1
@@ -3911,6 +4102,16 @@ class PlayerManager:
                 f"Roster supply top-up: generated {generated} "
                 f"(supply was {{ {', '.join(f'{k.name}:{v}' for k, v in supply.items())} }}, "
                 f"{numTeams} teams, buffer {buffer})"
+            )
+        if failed:
+            # ⚠️ ERROR, not warning. Every roster slot the league cannot fill becomes a
+            # team that cannot field a side, and every game it is scheduled for is lost.
+            logger.error(
+                f"ROSTER SUPPLY FLOOR COULD NOT BE MET: short by {failed} "
+                f"(deficit was {{ {', '.join(f'{k.name}:{v}' for k, v in deficits.items())} }}). "
+                f"createPlayer returned nothing — the name pool is almost certainly "
+                f"exhausted. Teams at these positions will have empty roster slots and "
+                f"their games will fail to simulate."
             )
         return generated
 
@@ -4072,6 +4273,92 @@ class PlayerManager:
 
     # ── Prospect Pipeline: rookie class generation + draft ──────────────
 
+    def rookieClassSize(self) -> int:
+        """How many prospects this season's class holds — ONE PER CLUB, counted.
+
+        ⚠️ NOT `ROOKIE_DRAFT_CLASS_SIZE`, WHICH IS A 24-TEAM-ERA CONSTANT. The league
+        grew to 32 and that number did not, so a restored draft reading it would have
+        left eight clubs with nothing to pick. `computeShareUnit` already paid for
+        exactly this lesson — its `numTeams` defaulted to 24 and made every facility
+        33% too expensive after the league grew — so the count comes from the live team
+        list and the constant survives only as a floor for a league with no teams
+        loaded yet.
+        """
+        from constants import ROOKIE_DRAFT_CLASS_SIZE
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = list(getattr(teamManager, 'teams', None) or [])
+            if teams:
+                return len(teams)
+        except Exception:
+            pass
+        return int(ROOKIE_DRAFT_CLASS_SIZE)
+
+    def _generateRookieClass(self, currentSeason: int) -> List:
+        """Generate this season's rookie class — one prospect per club.
+
+        Returns the new rookies (not yet added to freeAgents or activePlayers).
+        Position distribution matches roster shape: QB/RB/TE/K weighted 1x, WR 2x,
+        because teams start two of them.
+
+        ⚠️ THE GENERATED SEED IS TRUE SKILL, NOT THE DEBUT RATING. A prospect enters
+        `PROSPECT_ENTRY_DISCOUNT` (11) points BELOW his true skill and develops up into
+        it — `constants.py` states the intent verbatim: "a future 5-star looks like a
+        solid 3-4-star as a rookie". That gap IS the feature. Skipping the discount
+        would mint a class of finished players and there would be nothing to scout,
+        nothing to develop, and no reason for two clubs to disagree about a pick.
+
+        Sized at one round on purpose. Over 2,000 simulated classes at the live
+        generation constants, a class of 32 yields a headliner who debuts at 83 with
+        true skill 94 and potential 99, and 2.6 genuine future 5-stars. Doubling the
+        class moves the best POTENTIAL not at all (it is capped at 99) and buys only
+        also-rans — and those also-rans are the whole inflation cost the cull exists
+        to hold back.
+        """
+        import numpy as np
+        from random import randint
+        import random
+        from constants import (GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
+                               PROSPECT_ENTRY_DISCOUNT, LATE_BLOOM_ENABLED,
+                               LATE_BLOOM_CHANCE, LATE_BLOOM_MIN, LATE_BLOOM_MAX)
+
+        numRookies = self.rookieClassSize()
+        physicalSeeds = np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
+                                                 numRookies), 60, 100).tolist()
+        mentalSeeds = np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
+                                               numRookies), 60, 100).tolist()
+
+        weightedPosList = []
+        for pos, weight in ((FloosPlayer.Position.QB, 1),
+                            (FloosPlayer.Position.RB, 1),
+                            (FloosPlayer.Position.WR, 2),
+                            (FloosPlayer.Position.TE, 1),
+                            (FloosPlayer.Position.K, 1)):
+            weightedPosList.extend([pos] * weight)
+
+        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
+        rookies = []
+        for i in range(numRookies):
+            pos = weightedPosList[randint(0, len(weightedPosList) - 1)]
+            player = self.createPlayer(pos, int(physicalSeeds[i]), int(mentalSeeds[i]))
+            if not player:
+                continue
+            player.id = nextPlayerId
+            nextPlayerId += 1
+            player.seasonsPlayed = 0
+            player.team = 'Upcoming Rookie'
+            player.applyEntryDiscount(PROSPECT_ENTRY_DISCOUNT)
+            # ⚠️ ROLLED HERE, APPLIED LATER. The amount is stored on the player and does
+            # NOT touch `potentialX`, so `computeCeilingRating` — and therefore every
+            # team's scouted band — sees an ordinary prospect. It is applied during a
+            # development season, after the draft. See `constants.LATE_BLOOM_*`.
+            if LATE_BLOOM_ENABLED and random.random() < LATE_BLOOM_CHANCE:
+                player.lateBloomPending = randint(LATE_BLOOM_MIN, LATE_BLOOM_MAX)
+            rookies.append(player)
+        logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
+        return rookies
+
+
 
     def parityStarFraction(self) -> float:
         """Fraction of the non-retired pool at 4-5-star (rating >= 84). Used to
@@ -4192,6 +4479,427 @@ class PlayerManager:
         """True if the team can hold another prospect at this position."""
         from constants import PROSPECT_SLOT_CAP_PER_POSITION
         return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
+
+    def findPickBuyer(self, skipper, available, candidateTeams, season,
+                      slotByTeamId=None):
+        """Somebody who CAN use this selection, and will pay next year's pick for it.
+
+        ⚠️ A SKIPPED PICK IS A DESTROYED ASSET, AND THE CLUB COULD NOT HAVE SEEN IT COMING
+        (owner, 2026-09-15: "the issue probably comes up when teams only have prospect
+        spots for 1 or two positions but there's no prospects left at those positions,
+        which teams won't be able to predict ahead of time. ideally, teams should be able
+        to trade their pick in the moment if they cant pick anyone, or get some kind of
+        compensation"). ⚠️ **MEASURED, AND IT IS EXACTLY THAT CASE**: over six seasons the
+        skip fired twice, **both `no_eligible_rookies` and ZERO `pipeline_full`** — the
+        `PROSPECT_SLOT_CAP_PER_POSITION` ceiling never binds, so nobody is skipping through
+        a choice they made. They are skipping because the board emptied at the one or two
+        positions they had room for, which is knowable only when they are on the clock.
+
+        ⚠️ ONLY `current_owner_id` MOVES, ON A ROW THAT ALREADY EXISTS. The right to select
+        HERE is the order position rather than a row, and this season's rows are already
+        stamped used by `_applyPickOwnership` — so the trade is "you pick in my slot, I take
+        your pick next year", which needs no new row and cannot collide with
+        `_ensureDraftPicks` (one row per club per season, and next season's already exists).
+
+        ⚠️ THE BUYER MUST STILL OWN ITS OWN NEXT-SEASON PICK. A club that already traded it
+        has nothing to pay with, and taking a pick it merely holds would let a club launder
+        a third party's pick through a slot nobody could use.
+
+        ⚠️ `candidateTeams` IS THE LEAGUE, NOT THE DRAFT ORDER. The order is a list of
+        OWNERS — a club that sold its own pick does not appear in it at all, and that is
+        precisely a club that might want back into this draft. Passing the order would
+        exclude the most motivated buyers and silently shrink the market to whoever already
+        had a selection.
+
+        ⚠️ AND THE BUYER HAS TO COME OUT AHEAD, WHICH MOSTLY IT DOES NOT (owner,
+        2026-09-15: *"the buying club may be buying a worse pick than what theyd get with
+        the pick they gave up. I imagine most of the time when this happens its towards the
+        end of the draft"*). Exactly so, and it is structural rather than incidental: a
+        board only empties at a club's open positions once most of the class is gone, so
+        these slots are late by construction — and a late slot is worth **less than any
+        future pick** (slot 24 prices at 5.6 against 9.8 for a mid pick a year out; slot 28
+        at 0.2). Unpriced, this would have swapped a real asset for a dead one and called
+        it compensation.
+
+        ⚠️ VALUED ON THE PLAYER ACTUALLY THERE, NOT ON THE SLOT'S EXPECTATION. `pickValue`
+        prices a slot by what the class USUALLY yields there, which is near zero at the
+        back — but this board emptied unevenly, and the specific man still sitting on it at
+        a position this club has room for may be worth a good deal more than slot 30
+        implies. What the buyer is being offered is that player, so that is what it prices.
+        """
+        from database.connection import get_session
+        from database.models import DraftPick
+        from floosball_player import Position
+
+        skipperId = getattr(skipper, 'id', None)
+        candidates = []
+        for team in candidateTeams:
+            tid = getattr(team, 'id', None)
+            if tid is None or tid == skipperId:
+                continue
+            openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
+                                             Position.TE, Position.K)
+                             if self.hasOpenProspectSlot(team, pos)]
+            eligible = [r for r in available if r.position in openPositions]
+            if eligible:
+                candidates.append((team, eligible))
+        if not candidates:
+            self.lastPickShopOutcome = 'no_buyer'
+            return None, None
+
+        session = get_session()
+        try:
+            owns = {r.original_team_id for r in session.query(DraftPick).filter_by(
+                season=int(season) + 1, round_number=1).all()
+                if r.current_owner_id == r.original_team_id and not r.used}
+        except Exception as e:
+            logger.warning(f"Could not read next season's picks: {e}")
+            owns = set()
+        finally:
+            session.close()
+
+        candidates = [(t, e) for t, e in candidates if getattr(t, 'id', None) in owns]
+        if not candidates:
+            self.lastPickShopOutcome = 'nobody_could_pay'
+            return None, None
+
+        import trading
+        from managers.frontOfficeBrain import FrontOfficeBrain, positionValue
+        brain = getattr(self, '_draftBrain', None) or FrontOfficeBrain(self)
+        slotByTeamId = slotByTeamId or {}
+
+        def bestFor(team, eligible):
+            coach = getattr(team, 'coach', None)
+            try:
+                return max(eligible,
+                           key=lambda r: brain.decisionValue(r, coach=coach, team=team))
+            except Exception:
+                return max(eligible, key=lambda r: float(getattr(r, 'playerRating', 0) or 0))
+
+        def worthIt(team, eligible):
+            """(does this beat their own next-season pick, by how much)."""
+            best = bestFor(team, eligible)
+            try:
+                skill = float(brain._ceilingRating(best, team))
+            except Exception:
+                skill = float(getattr(best, 'playerRating', 0) or 0)
+            try:
+                posW = positionValue(best)
+            except Exception:
+                posW = trading.averagePositionWeight()
+            gain = trading.prospectValue(
+                skill, 0, rookieTerm=trading.rookieTermForSkill(skill), positionWeight=posW)
+            # What they give up: their own pick a year out, which regresses toward the
+            # middle of the draft because nobody knows where they finish.
+            cost = trading.pickValue(
+                slotByTeamId.get(getattr(team, 'id', None), 16), 1)
+            return gain - cost, gain, cost
+
+        priced, refused = [], []
+        for team, eligible in candidates:
+            try:
+                margin, gain, cost = worthIt(team, eligible)
+            except Exception:
+                continue
+            if margin > 0:
+                priced.append((margin, team, eligible))
+            else:
+                refused.append((team, gain, cost, bestFor(team, eligible)))
+        if not priced:
+            # ⚠️ "Nobody wanted it" and "nobody could use it" are DIFFERENT outcomes and a
+            # single skip line cannot tell them apart — one says the board is empty, the
+            # other says the slot is genuinely worth less than a future pick. Recorded so
+            # the split is measurable rather than inferred.
+            self.lastPickShopOutcome = ('refused_on_price' if refused else 'no_buyer')
+            # ⚠️ WHAT THE MARKET SAID IT WAS WORTH, kept for the forfeit payout. The slot
+            # is worth the best offer anybody would have made on it, and that offer LOST to
+            # a future pick — which is what makes paying it out provably less than selling.
+            self.lastPickShopBestPlayer = None
+            self.lastPickShopBestCost = 0.0
+            if refused:
+                best = max(refused, key=lambda r: r[1])
+                self.lastPickShopBestPlayer = best[3]
+                self.lastPickShopBestCost = best[2]
+                logger.info(f"Rookie draft: {len(refused)} club(s) could use the slot but "
+                            f"none would pay — best offer was worth {best[1]:.1f} "
+                            f"against a future pick's {best[2]:.1f}")
+            return None, None
+        self.lastPickShopOutcome = 'traded'
+        # ⚠️ WHOEVER GAINS MOST, not whoever merely clears — the same rule the trade market
+        # settles an auction by. Ranking on the rookie's raw rating instead would make
+        # every club value the class identically and the choice arbitrary.
+        margin, team, eligible = max(priced, key=lambda x: x[0])
+        return team, eligible
+
+    def forfeitPayoutFor(self, skipper, available) -> int:
+        """Floobits owed to a club whose draft slot nobody would buy.
+
+        ⚠️ NO NEW EXCHANGE RATE. `cutFeeFor` already converts "seasons of control x surplus
+        over replacement" into Floobits at `CUT_FEE_RATE`, and that is the same quantity
+        `playerValue` is built from — so the slot is paid at the rate the league already
+        uses for control destroyed, with nothing invented.
+
+        ⚠️ PRICED ON THE PLAYER THE BEST INTERESTED CLUB WOULD HAVE TAKEN — not on the slot
+        number, and NOT on the best man left on the board. Two different traps:
+
+          * the SLOT expects a replacement-level player this late and pays **0F at slot
+            30**, i.e. cosmetic exactly where it is owed;
+          * the BEST ON THE BOARD may be someone nobody can use. Measured, an 88 sitting
+            unusable paid **3,150F against a sale worth ~705F** — so passing outpaid
+            selling **4.5x** and a club would want to be unable to pick. That inversion is
+            the whole exploit, and it is why the payout follows the MARKET's read: the best
+            offer anyone would have made, which by construction LOST to a future pick.
+
+        ⚠️ AND IT IS CAPPED BELOW THE SALE ANYWAY (`FORFEIT_PAYOUT_RATE`). The market read
+        is an offer in value units and the cap is in Floobits, so the two are not the same
+        arithmetic — belt and braces on the one property that must hold.
+
+        ⚠️ FLOORED AT ZERO, like the cut fee. A board holding nothing above replacement is
+        worth nothing, and this must never become a way to EARN by passing.
+        """
+        from constants import (REPLACEMENT_RATING, CUT_FEE_RATE, FORFEIT_PAYOUT_RATE,
+                               FORFEIT_PAYOUT_ENABLED)
+        import trading
+        if not FORFEIT_PAYOUT_ENABLED:
+            return 0
+        best = getattr(self, 'lastPickShopBestPlayer', None)
+        if best is None:
+            # Nobody in the league could have used any of it — there is no market read,
+            # and a slot nobody can use is worth nothing.
+            return 0
+        skill = float(getattr(best, 'playerRating', 0) or 0)
+        surplus = max(0.0, skill - REPLACEMENT_RATING)
+        if surplus <= 0:
+            return 0
+        term = trading.rookieTermForSkill(skill)
+        payout = term * surplus * CUT_FEE_RATE
+        # The consolation must be worth less than the sale that did not happen.
+        cost = float(getattr(self, 'lastPickShopBestCost', 0.0) or 0.0)
+        if cost > 0:
+            saleInF = cost / max(0.01, trading.averagePositionWeight()) * CUT_FEE_RATE
+            payout = min(payout, saleInF * FORFEIT_PAYOUT_RATE)
+        return int(round(max(0.0, payout)))
+
+    def payForfeitedSlot(self, skipper, amount: int) -> bool:
+        """Credit the club's Treasury. Best-effort: the draft must not die on the economy."""
+        if amount <= 0:
+            return False
+        try:
+            from database.connection import get_session
+            from managers.facilitiesManager import addTreasury
+        except Exception:
+            return False            # facilities economy unavailable — do not block the draft
+        teamId = getattr(skipper, 'id', None)
+        if teamId is None:
+            return False
+        session = get_session()
+        try:
+            addTreasury(session, teamId, int(amount))
+            session.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not pay forfeited slot: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            session.close()
+
+    def handOverNextSeasonPick(self, buyer, skipper, season) -> bool:
+        """Move the buyer's next-season pick to the club that could not use this one."""
+        from database.connection import get_session
+        from database.models import DraftPick
+        session = get_session()
+        try:
+            row = session.query(DraftPick).filter_by(
+                season=int(season) + 1, round_number=1,
+                original_team_id=getattr(buyer, 'id', None)).first()
+            if row is None or row.current_owner_id != row.original_team_id:
+                return False
+            row.current_owner_id = getattr(skipper, 'id', None)
+            session.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not hand over next season's pick: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            session.close()
+
+    def rookieDraftPickGenerator(self, rookies: List, draftOrder: List,
+                                 leagueHighlights: list = None, brain=None,
+                                 season: int = None, leagueTeams: List = None):
+        """The rookie draft — yields one event at a time for live broadcasting,
+        mirroring `freeAgencyPickGenerator`.
+
+        Yields dicts keyed on 'type': 'on_clock', 'pick', 'skip', 'complete'. Roster
+        mutations happen in place as each pick is yielded, so backend state is always
+        current and a mid-draft crash leaves a consistent league. `seasonManager` drives
+        it with per-pick broadcasts and timing delays.
+
+        ⚠️ NO FAN BALLOT. The old version took a per-team ranked ballot and picked the
+        fan's man when he was available. The autonomous front office is the decider
+        everywhere else and `_promoteProspectsAutonomously` is the pattern for replacing
+        a ballot-driven decision with a brain-driven one.
+
+        ⚠️ EACH CLUB DRAFTS OFF ITS OWN BOARD, WHICH IS THE POINT OF THE WHOLE FEATURE.
+        The old scorer was `(playerRating, -prospectsHere)` — raw current rating, so
+        every club ranked the class identically and the draft was a queue. A prospect's
+        value is his PROJECTION, and three multiplicative terms sit on the ceiling gap:
+        the credit, the GM's `playerDevelopment` lean, and its scouting vision. A weak
+        front office sees a headline prospect as exactly what he is today; an elite one
+        sees seven points of upside on the same player — and it is right to, because it
+        will actually realise more of the ceiling.
+
+        ⚠️ AND THE ENTRY DISCOUNT IS WHY RAW RATING IS ESPECIALLY WRONG HERE. A prospect
+        debuts `PROSPECT_ENTRY_DISCOUNT` (11) points below his true skill, so pricing
+        him at today's number undervalues every prospect in the class by about that
+        much and ranks them by how little they were discounted.
+        """
+        from floosball_player import Position
+        picks = []
+        available = list(rookies)
+        if brain is None:
+            from managers.frontOfficeBrain import FrontOfficeBrain
+            brain = FrontOfficeBrain(self)
+        self._draftBrain = brain
+        # A club's own draft position, used to price the future pick it would give up.
+        slotByTeamId = {}
+        for i, t in enumerate(draftOrder):
+            slotByTeamId.setdefault(getattr(t, 'id', None), i + 1)
+
+        for onTheClock in draftOrder:
+            if not available:
+                break
+            team = onTheClock
+            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+
+            openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
+                                             Position.TE, Position.K)
+                             if self.hasOpenProspectSlot(team, pos)]
+            eligible = [r for r in available if r.position in openPositions]
+            if not eligible:
+                reason = 'pipeline_full' if not openPositions else 'no_eligible_rookies'
+                # ⚠️ TRADE THE SLOT RATHER THAN BURN IT. A skipped pick is an asset
+                # destroyed, and the club could not have foreseen it — measured, every
+                # skip is `no_eligible_rookies`, i.e. the board emptied at the one or two
+                # positions it had room for, which is knowable only on the clock. See
+                # `findPickBuyer`.
+                buyer, buyerEligible = (None, None)
+                if season is not None:
+                    try:
+                        buyer, buyerEligible = self.findPickBuyer(
+                            team, available, leagueTeams or draftOrder, season,
+                            slotByTeamId=slotByTeamId)
+                    except Exception as e:
+                        logger.warning(f"Rookie draft: could not shop the pick: {e}")
+                if buyer is not None and self.handOverNextSeasonPick(buyer, team, season):
+                    logger.info(f"Rookie draft: {team.name} could not use its pick — "
+                                f"traded the slot to {buyer.name} for their S{int(season)+1} pick")
+                    if leagueHighlights is not None:
+                        leagueHighlights.insert(0, {'event': {'text':
+                            f"{team.name} traded their draft slot to {buyer.name} "
+                            f"for a Season {int(season) + 1} pick"}})
+                    yield {'type': 'pick_traded', 'team': team.name, 'teamAbbr': teamAbbr,
+                           'to': buyer.name,
+                           'toAbbr': getattr(buyer, 'abbr', buyer.name[:3].upper()),
+                           'forSeason': int(season) + 1, 'reason': reason}
+                    team = buyer
+                    teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+                    eligible = buyerEligible
+                else:
+                    why = getattr(self, 'lastPickShopOutcome', 'no_buyer')
+                    # ⚠️ PAID, NOT SIMPLY LOST. Nobody would give a future pick for this
+                    # slot — correctly, it is worth less than one — but that does not make
+                    # it worth NOTHING, and the club did nothing to deserve losing it.
+                    payout = self.forfeitPayoutFor(team, available)
+                    paid = self.payForfeitedSlot(team, payout) if payout > 0 else False
+                    logger.info(f"Rookie draft: {team.name} "
+                                + ("skipped (all prospect slots full)"
+                                   if reason == 'pipeline_full'
+                                   else "passed (nobody at an open position)")
+                                + f" [shop: {why}]"
+                                + (f" compensated {payout}F" if paid else ""))
+                    if paid and leagueHighlights is not None:
+                        leagueHighlights.insert(0, {'event': {'text':
+                            f"{team.name} could not use their draft slot and received "
+                            f"{payout:,}F in compensation"}})
+                    yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
+                           'reason': reason, 'payout': payout if paid else 0}
+                    continue
+
+            yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
+
+            coach = getattr(team, 'coach', None)
+
+            def boardValue(rookie):
+                try:
+                    return brain.decisionValue(rookie, coach=coach, team=team)
+                except Exception:
+                    return float(getattr(rookie, 'playerRating', 0) or 0)
+
+            # Tie-break toward a position this club is thin at, so a pipeline does not
+            # stack three quarterbacks because they happened to score alike.
+            pick = max(eligible, key=lambda r: (
+                boardValue(r), -self.countTeamProspectsAtPosition(team, r.position)))
+            available.remove(pick)
+
+            pick.is_prospect = True
+            pick.is_upcoming_rookie = False
+            pick.drafting_team_id = team.id
+            pick.prospect_seasons = 0
+            pick.team = 'Prospect'
+            if not hasattr(team, 'prospects') or team.prospects is None:
+                team.prospects = []
+            team.prospects.append(pick)
+            if pick not in self.activePlayers:
+                self.activePlayers.append(pick)
+            self.addToPositionList(pick)
+            # Assign the number now so a promoted prospect never shows #0.
+            team.assignPlayerNumber(pick)
+
+            pickRecord = {
+                "teamId": team.id, "teamName": team.name, "teamAbbr": teamAbbr,
+                "playerId": pick.id, "playerName": pick.name,
+                "position": pick.position.name,
+                "rating": round(pick.playerRating, 1),
+                "tier": pick.playerTier.name,
+            }
+            picks.append(pickRecord)
+
+            if leagueHighlights is not None:
+                leagueHighlights.insert(0, {'event': {'text':
+                    f"{team.name} drafted {pick.name} "
+                    f"({pick.position.name}, {pick.playerTier.name})"}})
+
+            yield {'type': 'pick', **pickRecord}
+
+        # ⚠️ EVERYONE LEFT GOES TO FREE AGENCY, NOT BACK INTO LIMBO. The draft is the
+        # ONE thing that clears `is_upcoming_rookie`; a rookie left holding the flag is
+        # stranded forever — never rostered, never signable, invisible to the sim but
+        # still taking up space in the pool.
+        undrafted = []
+        for rookie in available:
+            rookie.is_upcoming_rookie = False
+            rookie.is_undrafted = True
+            rookie.team = 'Free Agent'
+            rookie.freeAgentYears = 0
+            if rookie not in self.freeAgents:
+                self.freeAgents.append(rookie)
+            if rookie not in self.activePlayers:
+                self.activePlayers.append(rookie)
+            self.addToPositionList(rookie)
+            undrafted.append(rookie.id)
+
+        self.sortPlayersByPosition()
+        logger.info(f"Rookie draft complete: {len(picks)} drafted, "
+                    f"{len(undrafted)} undrafted to FA")
+        yield {'type': 'complete', 'picks': picks, 'undrafted': undrafted}
 
 
 
@@ -4366,6 +5074,197 @@ class PlayerManager:
         logger.info(f"Freeze legacy dev-arc (dryRun={dryRun}): {frozen} players, {attrsChanged} attrs")
         return {"frozen": frozen, "attrsChanged": attrsChanged}
 
+    def cullUnsignedPool(self, seasonNumber: int) -> dict:
+        """Remove players who NEVER REACHED A ROSTER and have sat unsigned past a grace
+        window. Returns a summary dict.
+
+        The draft adds one intake class a season against a fixed 192 roster spots and a
+        replacement need near 19, leaving roughly 13 a season with nowhere to go. That
+        surplus is not harmless: growing the candidate population raises the bar through
+        pure selection pressure, with no change to how players are generated —
+        resampling the live rating distribution, a pool of 400 puts 63% of rosters at
+        four stars against today's 35%. Every team ending up with four-star players is
+        the one outcome this feature must not produce.
+
+        ⚠️ IT MUST EXCLUDE `is_prospect`, `drafting_team_id` AND `is_upcoming_rookie`.
+        Every one of them carries `seasonsPlayed == 0` BY DEFINITION, so the naive
+        predicate deletes the class it has just drafted — and the class it is about to.
+
+        ⚠️ REMOVAL, NOT RETIREMENT, AND ONLY FOR THIS POPULATION. A never-rostered
+        player has no game rows, no season rows and no cards (`generateSeasonTemplates`
+        requires a real teamId), so there is nothing of his to orphan. Anyone who has
+        PLAYED keeps his record — today's free agents hold 2,782 game-stat rows and 253
+        user-owned cards between them, and hard-removing one of those would tear a card
+        out of somebody's collection. Never played -> remove. Played -> retire.
+
+        ⚠️ AND "NEVER PLAYED" IS ASKED OF THE RECORD ITSELF, NOT OF `seasonsPlayed`.
+        The plan specified `seasonsPlayed == 0`, and that field cannot answer this
+        question: `_handlePlayerSeasonProgression` increments it for EVERY active player
+        who is not a prospect — INCLUDING AN UNSIGNED FREE AGENT WHO NEVER TOOK A SNAP.
+        So a washout released into the pool reads `seasonsPlayed == 1` after sitting
+        there for one season, and the predicate excludes him forever. Measured over nine
+        simulated seasons, the never-played set was never anything but that year's fresh
+        washouts, NOTHING ever cleared the two-season grace window, and the cull removed
+        exactly ZERO players while the four-star share climbed 23% -> 39%. The cull was
+        inert and looked identical to a healthy pool.
+
+        ⚠️ THE RECORD TEST IS ALSO THE SAFETY TEST, which is why it is worth the query.
+        "He is eligible" and "removing him destroys nothing" are then the SAME condition
+        and cannot drift apart — a proxy field can go stale against the rows it stands
+        for, and this one did.
+
+        ⚠️ AND THE NAME COMES BACK AS THE BASE, WITH NO Jr. `_recyclePlayerName` always
+        advances the ladder, and a rung is earned precisely BECAUSE the holder is gone —
+        minting a Junior for a man who never played invents a father nobody ever saw,
+        which is the exact fault that left 39 orphaned variants on the season-1
+        production database. It also skips the `NAME_REUSE_DELAY_SEASONS` hold: that
+        hold exists so a FAMILIAR name does not reappear, and nobody is familiar with a
+        player who never played a down.
+        """
+        from constants import (CULL_ENABLED, CULL_MIN_POOL_SEASONS,
+                               CULL_RATING_FRACTION_OF_MEAN)
+        if not CULL_ENABLED:
+            return {"removed": [], "bar": None}
+
+        # The bar is relative to the league's OWN mean, so it cannot go stale when the
+        # rating curve moves. Measured over ROSTERED players — the standard the pool is
+        # failing to meet is the standard of a player who actually has a job.
+        teamManager = self.serviceContainer.getService('team_manager')
+        rostered = []
+        for team in getattr(teamManager, 'teams', None) or []:
+            for p in (getattr(team, 'rosterDict', None) or {}).values():
+                if p is not None:
+                    rostered.append(float(getattr(p, 'playerRating', 0) or 0))
+        if len(rostered) < 10:
+            logger.info("Cull skipped — not enough rostered players to set a bar")
+            return {"removed": [], "bar": None}
+        bar = (sum(rostered) / len(rostered)) * CULL_RATING_FRACTION_OF_MEAN
+
+        removed = []
+        candidates = []
+        # ⚠️ COUNTED, NOT JUST FILTERED. "0 removed" is indistinguishable between "the
+        # pool is healthy" and "the predicate matches nothing", and those need opposite
+        # responses — the cull sat inert for four seasons looking exactly like the first.
+        seen = {'pooled': 0, 'pastGrace': 0, 'underBar': 0, 'neverPlayed': 0}
+        for player in list(self.freeAgents):
+            if getattr(player, 'is_prospect', False) or getattr(player, 'drafting_team_id', None):
+                continue                                    # in somebody's pipeline
+            if getattr(player, 'is_upcoming_rookie', False):
+                continue                                    # this season's draft class
+            seen['pooled'] += 1
+            if (getattr(player, 'freeAgentYears', 0) or 0) < CULL_MIN_POOL_SEASONS:
+                continue                                    # still inside the grace window
+            seen['pastGrace'] += 1
+            if float(getattr(player, 'playerRating', 0) or 0) >= bar:
+                continue                                    # good enough to keep waiting
+            seen['underBar'] += 1
+            candidates.append(player)
+
+        # ⚠️ ONE BATCHED QUESTION, NOT N+1. The record test runs over the whole shortlist
+        # in three queries rather than three per player; the pool reaches ~150 in a
+        # mature league and this runs inside the offseason's hot path.
+        hasRecord = self._playersWithARecord([p.id for p in candidates if getattr(p, 'id', None)])
+        for player in candidates:
+            if getattr(player, 'id', None) in hasRecord:
+                continue                                    # he has a record; he retires
+            seen['neverPlayed'] += 1
+            removed.append({
+                "playerId": getattr(player, 'id', None),
+                "name": player.name,
+                "position": player.position.name,
+                "rating": round(getattr(player, 'playerRating', 0), 1),
+            })
+            self._removeUnsignedPlayer(player)
+
+        logger.info(f"Cull: bar {bar:.1f}; pool {seen['pooled']}, past the "
+                    f"{CULL_MIN_POOL_SEASONS}-season grace window {seen['pastGrace']}, "
+                    f"under the bar {seen['underBar']}, no record {seen['neverPlayed']} "
+                    f"-> removed {len(removed)}")
+        return {"removed": removed, "bar": round(bar, 1), "considered": seen}
+
+    @staticmethod
+    def _playersWithARecord(playerIds: list) -> set:
+        """Of these players, which ones have left a MARK anybody could miss?
+
+        A game line, a season line, or a card somebody owns. Those are exactly the three
+        things the plan names as making hard removal unsafe, so asking for them directly
+        means the eligibility test and the safety test are one test — a player is
+        removable precisely BECAUSE there is nothing of his to orphan.
+
+        ⚠️ FAIL CLOSED. If the database cannot be reached, every candidate is reported as
+        having a record and nothing is culled. An inflated pool is a balance problem; a
+        card torn out of somebody's collection is not recoverable.
+        """
+        if not playerIds:
+            return set()
+        try:
+            from database.connection import get_session
+            from database.models import (GamePlayerStats, PlayerSeasonStats,
+                                         CardTemplate, UserCard)
+        except Exception:
+            return set(playerIds)
+        session = get_session()
+        try:
+            marked = set()
+            byGame = {row[0] for row in session.query(GamePlayerStats.player_id).filter(
+                GamePlayerStats.player_id.in_(playerIds)).distinct()}
+            marked |= byGame
+            # ⚠️ A SEASON ROW IS NOT EVIDENCE OF PLAYING. `_handlePlayerSeasonProgression`
+            # archives a stat line for EVERY active non-prospect at season end, including
+            # an unsigned free agent who never took a snap — so a washout collects a
+            # zero-filled row for every year he sits in the pool. Measured: with a bare
+            # "has a season row" test, 100% of cull candidates read as having a record
+            # and the cull removed nobody, which looks exactly like a healthy pool.
+            # `games_played > 0` is the part of the row that means anything.
+            bySeason = {row[0] for row in session.query(PlayerSeasonStats.player_id).filter(
+                PlayerSeasonStats.player_id.in_(playerIds),
+                PlayerSeasonStats.games_played > 0).distinct()}
+            marked |= bySeason
+            # A TEMPLATE alone is not a mark — it is mintable without anyone owning it.
+            # What must never be destroyed is a card in somebody's collection.
+            byCard = {row[0] for row in (session.query(CardTemplate.player_id)
+                      .join(UserCard, UserCard.card_template_id == CardTemplate.id)
+                      .filter(CardTemplate.player_id.in_(playerIds)).distinct())}
+            marked |= byCard
+            if marked:
+                logger.info(f"Cull: of {len(playerIds)} candidate(s), {len(marked)} hold "
+                            f"a record — {len(byGame)} game rows, {len(bySeason)} played "
+                            f"seasons, {len(byCard)} owned cards")
+            return marked
+        except Exception as e:
+            logger.warning(f"Cull: could not check records, culling nothing: {e}")
+            return set(playerIds)
+        finally:
+            session.close()
+
+    def _removeUnsignedPlayer(self, player) -> None:
+        """Hard-remove a never-rostered player and return his name to the pool AS THE
+        BASE. Safe ONLY for `seasonsPlayed == 0` — see `cullUnsignedPool`."""
+        if player in self.freeAgents:
+            self.freeAgents.remove(player)
+        if player in self.activePlayers:
+            self.activePlayers.remove(player)
+        self.removeFromPositionList(player)
+        name = getattr(player, 'name', None)
+        if name:
+            # ⚠️ STRAIGHT TO `unusedNames`, NOT through `_recyclePlayerName` and NOT
+            # through the pending hold. Base form, immediately available.
+            if name not in self.unusedNames:
+                self.unusedNames.append(name)
+        pid = getattr(player, 'id', None)
+        if pid is not None:
+            try:
+                from database.connection import get_session
+                from database.models import Player as _DBPlayer
+                session = get_session()
+                try:
+                    session.query(_DBPlayer).filter(_DBPlayer.id == pid).delete()
+                    session.commit()
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.warning(f"Could not delete culled player {pid}: {e}")
+
     def _advanceProspectWindow(self) -> dict:
         """Increment prospect_seasons on every prospect; release washouts to the FA pool.
 
@@ -4512,6 +5411,7 @@ class PlayerManager:
         # arrive. `_draftFilledSlots` is stamped whenever this function fills a slot.
         from constants import FO_DRAFT_CUT_UPGRADE_MARGIN
         filledThisDraft = getattr(team, '_draftFilledSlots', None) or set()
+        seasonNumber = self._currentSeasonNumber()
 
         def _upgradeCandidates():
             """(slot, freeAgent, 'upgrade') where the board says he clearly beats the man
@@ -4531,8 +5431,15 @@ class PlayerManager:
                 if bestVal is None:
                     continue
                 # replace the WEAKEST man at the position (WR has two slots)
+                # ⚠️ `filledThisDraft` COVERS FA SIGNINGS ONLY, so a prospect promoted
+                # into a slot — by this very function two rounds earlier, or by
+                # `_promoteProspectsAutonomously` a step before the draft — was never in
+                # it and could be cut on the spot. That is the reported draft → promote →
+                # cut, and it is the same rule as the comment above, not a new one.
                 held = [(sl, team.rosterDict.get(sl)) for sl in slots
-                        if sl not in filledThisDraft and team.rosterDict.get(sl) is not None]
+                        if sl not in filledThisDraft and team.rosterDict.get(sl) is not None
+                        and not wasPromotedThisOffseason(team.rosterDict.get(sl),
+                                                         seasonNumber)]
                 held = [(sl, p, board.get(getattr(p, 'id', None))) for sl, p in held]
                 held = [h for h in held if h[2] is not None]
                 if not held:
@@ -4767,6 +5674,11 @@ class PlayerManager:
                 promoted.termRemaining = promoted.term
             except Exception:
                 promoted.termRemaining = 1
+            # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
+            # later in this same offseason — including two rounds further into this very
+            # draft, which `_draftFilledSlots` does not prevent because that set is
+            # stamped by FA SIGNINGS only.
+            stampPromotion(promoted, self._currentSeasonNumber())
 
             freeAgencyDict.setdefault(team.name, []).append({
                 'action': 'promote', 'player': promoted.name,
@@ -4794,6 +5706,20 @@ class PlayerManager:
         # Check if roster is now complete
         remaining = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k') if team.rosterDict.get(k) is None]
         return len(remaining) == 0
+
+    def _currentSeasonNumber(self) -> int:
+        """The season the sim is on, or 0 if it cannot be read.
+
+        0 is the safe answer: `wasPromotedThisOffseason` compares against the live
+        season, so an unreadable number simply leaves the player cuttable rather than
+        freezing every roster in the league.
+        """
+        try:
+            sm = self.serviceContainer.getService('season_manager')
+            season = getattr(sm, 'currentSeason', None) if sm else None
+            return int(getattr(season, 'seasonNumber', 0) or 0)
+        except Exception:
+            return 0
 
     def releasePlayerToFreeAgency(self, player, team, freeAgentLists: dict) -> None:
         """Release a rostered player to the free agent pool (GM Mode cut)."""

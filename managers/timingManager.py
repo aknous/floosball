@@ -57,6 +57,27 @@ class TimingMode(Enum):
     TURBO_SILENT = "turbo-silent"      # Sequential delays between games/weeks, no in-game delays, no broadcasting
     FAST_WEEKLY = "fast-weekly"        # FAST games (no delays, no broadcast), 30s pause between weeks
 
+def firstGameDateFor(seasonStart) -> datetime.date:
+    """Day 0 of a season's schedule: the Monday on or after its anchor, in Eastern.
+
+    ⚠️ THE ONE DEFINITION. `seasonStart` is a naive UTC stamp, so `seasonStart.date()` asks
+    what day it is in LONDON — which made the anchor's hour load-bearing and DST-unstable.
+    That read happened to work while the anchor was 04:00 ET Monday (08:00/09:00 UTC, Monday
+    either way) and broke the moment it moved: **19:00 ET Sunday is 23:00 UTC Sunday in EDT
+    and 00:00 UTC Monday in EST.**
+
+    ⚠️ IT HAS ALREADY BITTEN TWICE. `seasonManager.getWeekStartTime` used the naive read and
+    was fixed; `cardManager._shopCycleStartDate` used it too and was NOT, so every shop cycle
+    landed a full day early — day 1's pack opens still counted on day 2 and the shop reported
+    "Cycle limit reached (5 of 5)" from the first hour of the second game day. It is a
+    SEASONAL fault: correct all winter, wrong from March to November, which is the worst
+    shape a bug can have. Anything converting a season anchor to a game day calls this.
+    """
+    offset = 4 if _isEdtDate(seasonStart.date()) else 5
+    etDate = (seasonStart - datetime.timedelta(hours=offset)).date()
+    return etDate + datetime.timedelta(days=(0 - etDate.weekday()) % 7)
+
+
 class TimingManager:
     """Manages timing and delays for different simulation modes"""
     

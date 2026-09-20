@@ -346,8 +346,17 @@ class TeamManager:
         teams_with_rosters = 0
         for team in self.teams:
             if team.id in team_players:
-                # Clear existing roster
-                team.rosterDict = {}
+                # ⚠️ EVERY SLOT KEY, ALWAYS PRESENT — VACANT IS `None`, NOT MISSING.
+                # `Team.__init__` establishes that contract and the whole codebase reads
+                # it: `floosball_team` uses `.get()`, the roster loops skip `None`, and the
+                # engine indexes it DIRECTLY (`self.offense.rosterDict['qb']`). Rebuilding
+                # from `{}` and only adding slots that HAVE a player broke it, so a team
+                # with a vacancy had no key at all and every game it played raised
+                # `KeyError: 'qb'` out of `passPlay`, swallowed by `_simulateGame`'s except.
+                # Measured on the owner's development database, mid-offseason with holes
+                # still open: 92 failed games in the first two seconds of a boot.
+                team.rosterDict = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None,
+                                   'te': None, 'k': None}
                 team.playerCap = 0
                 team.playerNumbersList = []
                 
@@ -389,8 +398,12 @@ class TeamManager:
                             continue
                     else:
                         # Single slot positions (qb, rb, te, k)
-                        # Only use first player at this position
-                        if pos_key in team.rosterDict:
+                        # Only use first player at this position.
+                        # ⚠️ `.get(...) is not None`, NEVER `in` — with the slots now
+                        # pre-seeded the key is ALWAYS present, so an `in` test is true
+                        # before anyone is assigned and would leave every single-slot
+                        # position empty. The two changes have to land together.
+                        if team.rosterDict.get(pos_key) is not None:
                             continue
                         roster_key = pos_key
                     

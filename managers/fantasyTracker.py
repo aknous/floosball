@@ -1611,6 +1611,7 @@ class FantasyTracker:
         # soon as picks land in pick_em_picks.
         try:
             from database.models import PickEmPick
+            from managers.cardEffects import picksWereSubmittedManually
             pickemUserPicks = None
             for eq in userEquipped:
                 ec = eq.user_card.card_template.effect_config or {}
@@ -1620,7 +1621,7 @@ class FantasyTracker:
                     pickemUserPicks = session.query(PickEmPick).filter_by(
                         user_id=userId, season=season, week=currentWeek,
                     ).all()
-                hasManualSubmit = any(not p.is_auto for p in pickemUserPicks)
+                hasManualSubmit = picksWereSubmittedManually(pickemUserPicks)
                 liveStreakConditionsMet[eq.id] = hasManualSubmit
                 if hasManualSubmit:
                     streakCounts[eq.id] = getattr(eq, 'streak_count', 0) + 1

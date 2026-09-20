@@ -867,3 +867,780 @@ consistent with the ruling (the threshold measures the roster, not the effort), 
 correct, but it should be a known property rather than a surprise. The same applies more
 strongly if the threshold is made league-relative: another club improving could drop you
 under it.
+
+---
+
+# Addendum 7 — sizing the tax against the real economy
+
+_2026-09-14. Picking the threshold and rate now that the Treasury's other claim is measured._
+
+## The share unit is ~5,485, not the 300 floor
+
+`computeShareUnit` = last season's capped faucet ÷ 32. Measured: season 4 → **6,299**,
+season 5 → **5,485**. So a season of upkeep by facility level is **[0, 27, 82, 247, 631,
+2194]**, and a club's whole-roster upkeep runs **164 to 2,632** (median 369).
+
+That matters because an earlier read of this at the 300 floor made the facility economy look
+trivial next to Treasury balances. It is not. At the real unit it binds.
+
+## ⚠️ Three clubs are ALREADY insolvent on upkeep alone, before any tax exists
+
+| club | treasury | season upkeep | short by |
+|---|---:|---:|---:|
+| **Pinecones** | 200F | 383F | **−183F** |
+| Jetskis | 200F | 273F | −73F |
+| Phones | 295F | 328F | −33F |
+
+**The league's best team is broke.** Pinecones carry 48% title odds and 25.6 forecast wins,
+and they cannot cover their own buildings this offseason. They will lose a facility level
+whether or not a competitive-balance tax is ever built.
+
+## Which means the tax's PAYMENT limb is inert for its own target
+
+Modelled at threshold 495 across four rates:
+
+| rate (shares/excess pt) | Pinecones owes | Residents owes | Broads owes |
+|---|---:|---:|---:|
+| 0.002 | 165F | 77F | 55F |
+| 0.005 | 411F | 192F | 137F |
+| 0.01 | 823F | 384F | 274F |
+| 0.02 | 1,646F | 768F | 548F |
+
+_(spare after upkeep: Pinecones **−183F**, Residents 2,404F, Broads 7,532F)_
+
+⚠️ **Pinecones cannot pay 165F any more than they can pay 1,646F.** The rate is irrelevant to
+the club the tax exists for. Every rate produces the same outcome for them: decay, then —
+once the consecutive cap bites — a forced trade.
+
+**So the tax does not collect money from the clubs it targets. It converts financial
+pressure into ROSTER pressure.** That is the whole point and it is worth stating plainly,
+because the facility economy was already going to take Pinecones' buildings; what it could
+never do is make them give up the 96-rated receiver. Only the tax reaches the roster.
+
+## The THRESHOLD is the real dial; the rate only reaches solvent clubs
+
+At rate 0.01:
+
+| threshold | clubs over | can pay | must decay | who cannot pay |
+|---:|---:|---:|---:|---|
+| 485 | 12 | 8 | **4** | Curd, Exoticos, Phones, Pinecones |
+| 490 | 7 | 6 | 1 | Pinecones |
+| **495** | **3** | **2** | **1** | Pinecones |
+| 500 | 2 | 1 | 1 | Pinecones |
+
+⚠️ **485 is a league-wide shock** — a third of the league over the line and four clubs pushed
+into decay at once, including Curd (2nd-best team, 48F spare) and Phones (already insolvent).
+495 isolates the one club that is actually running away with the league.
+
+## Recommended values
+
+**Threshold: league-relative at `mean + 1 standard deviation`.** Measured, Σ rating has
+mean **480** and sd **15.0**, so mean + 1sd = **495** — the column that behaves best above,
+arrived at by a rule rather than by picking a number. This also settles open question 14: a
+fixed 495 drifts the moment `LEAGUE_COMPRESSION_MEAN`, the rating curve, or the returning
+draft moves the distribution, and all three are live. A relative threshold self-normalizes,
+exactly as the anomaly threshold already does.
+
+**Rate: 0.01 shares per excess rating point.** At that rate a *solvent* club over the line
+pays 274–384F — about one level-3 facility's annual upkeep. Noticeable, not ruinous, and it
+gives the payment limb real work to do in the middle of the table where clubs can actually
+pay. Below 0.005 it is not worth collecting; above 0.02 it starts pushing solvent clubs into
+decay, which is the 485 failure in a different costume.
+
+## ⚠️ Two consequences to decide
+
+**Facility decay is self-limiting, and that is mostly good.** Losing a level lowers next
+season's upkeep, so a club shrinks until its buildings fit its income. That makes the ladder
+shorter in practice than the raw level counts suggested — but it also means a club could
+shrink to a minimal footprint and then pay the tax forever from a tiny base. The consecutive
+cap is what stops that, which is a second reason to keep it low (2).
+
+**Three clubs being already insolvent is a finding about the ECONOMY, not the tax**, and it
+lands this offseason either way. Worth deciding on its own merits: is a club with 9
+favourites and the league's best roster supposed to be unable to afford a level-3 locker
+room? The Treasury correlates +0.39 with favourites and −0.01 with winning, so on the
+current design a great team with a small fanbase simply goes broke. That is defensible
+(fan-funded clubs), but it is not a rule anybody chose.
+
+## Revised open questions
+
+23. **Is the threshold `mean + 1sd`, or a fixed number reviewed each season?** Relative
+    self-normalizes against three live sources of drift; fixed is legible to fans.
+24. **Should the tax be charged BEFORE or AFTER upkeep in the waterfall?** (Open question 16,
+    now sharper: at these numbers the order decides whether Pinecones lose a facility to the
+    tax or to the buildings, and the decay counter only advances for one of those.)
+25. **Is the already-insolvent trio a bug or the design?** It fires this offseason regardless.
+
+---
+
+# Addendum 8 — the tax, settled
+
+_2026-09-14. **Owner rulings: drop the rate escalator; the consecutive counter drives the
+forced trade.** Consolidates every settled decision, since the seven addenda above are
+conversation order rather than design order._
+
+## ⚠️ The ruling fixes a hole, it does not just simplify
+
+The counter now tracks **consecutive seasons OVER THE THRESHOLD**, not consecutive seasons
+of facility decay. That distinction is load-bearing:
+
+**Under a decay counter, the one club the tax exists for could never be reached.** Broads
+sit at Σ500 with 7,532F of spare and **1 expiring player, 0 forced walks** — they pay the
+274F every season without blinking and never decay, so a decay counter never advances and no
+forced trade ever fires. Counting seasons *over the line* reaches the solvent club and the
+insolvent one alike.
+
+## The mechanism
+
+At season end, in the facilities waterfall:
+
+1. **Over the line?** `excess = Σ rating − threshold`, charged at
+   `excess × RATE × shareUnit`. Marginal only — the roster up to the threshold is free.
+2. **Can pay** → paid from the Treasury, roster untouched.
+3. **Cannot pay** → a facility decays a level (the existing upkeep-shortfall path, no new
+   penalty code).
+4. **Counter** increments for being over, *whether or not it paid*.
+5. **Counter reaches the cap** → a **forced trade that must clear the threshold**.
+6. **Counter resets** on being back under the line — never on making a trade, so a token
+   swap buys nothing.
+
+| parameter | value | basis |
+|---|---|---|
+| threshold | league **mean + 1 sd** | measured mean 480, sd 15.0 → 495; self-normalizes against compression, rating-curve and draft drift |
+| rate | **0.01** shares / excess point | a solvent club pays ~one level-3 facility's upkeep |
+| counter cap | **2** | at 3 the forced trade slips past the window the forecast cares about |
+
+## How it plays, on the two real cases
+
+**Broads** — long contracts, so the re-sign limit cannot touch them. This is the tax's actual target.
+
+| season | Σ | over | owed | counter | outcome |
+|---:|---:|---:|---:|---:|---|
+| 6 | 500 | 5 | 274F | 1 | pays, roster intact |
+| 7 | 500 | 5 | 274F | 2 | ⚠️ forced trade: WR 78 → Beans for WR 73 |
+| 8+ | 495 | — | 0 | 0 | under the line |
+
+**548F total over five seasons, and one trade that actually moved a roster.** The money was
+never the point.
+
+**Pinecones** — the re-sign limit reaches them first and far harder.
+
+| season | Σ | over | owed | counter | outcome |
+|---:|---:|---:|---:|---|---|
+| 6 | 510 | 15 | 823F | 1 | cannot pay (−183F spare) → facility decays |
+| 7 | **452** | — | 0 | 0 | under the line, counter resets |
+
+⚠️ **Five of their six players are on walk years and the limit is 2 re-signs**, so they are
+forced to lose three, and they pick last in a thin FA pool (backfilling at 63 / 61 / 62).
+**Σ 510 → 452**, which is 43 under the threshold and below the league mean of 480. The tax
+fires exactly once, for money they do not have, and never again.
+
+## ⚠️ The re-sign limit is already the primary soft cap
+
+Measured league-wide: **89 of 192 players (46%) are on walk years**, median 3 expiring per
+club, and **18 of 32 clubs must let someone walk**. That is a heavy annual erosion which
+nobody has been counting as a balance mechanism, and it is doing most of the work.
+
+So the tax's honest job is **narrow and specific: the club that escaped the re-sign limit by
+signing its stars long.** It is not a general parity lever — the re-sign limit already is
+one. Sizing it as though it were the main dial is how it ends up at a threshold like 485,
+which pushes a third of the league into decay at once.
+
+## Everything settled so far
+
+| # | decision |
+|---:|---|
+| 1 | In-season trades are the priority; offseason trades are a separate, larger feature |
+| 2 | Trades close at week 22 — the first week of the final game day, already `GM_ACTIVE_WEEK` |
+| 3 | In-season trades are position-for-position (six locked slots, no bench) |
+| 4 | A trade is legal only if both rosters are complete when it settles |
+| 5 | Prospect/rookie draft returns, **without fan ballots**; 32/season, first season possibly 3 rounds |
+| 6 | Trade assets: picks, prospects, Treasury Floobits |
+| 7 | Culling starts only once the draft is back; hard removal scoped to `seasonsPlayed == 0`; a culled name returns as the **base**, no Jr. |
+| 8 | Tax base is **Σ player rating**, not `cap_hit` (13-20 is too coarse a range) |
+| 9 | Tax is **marginal** — only the excess over the threshold |
+| 10 | **Flat rate, no escalator** (owner, this addendum) |
+| 11 | Unpayable → facility decay, reusing the existing upkeep-shortfall path |
+| 12 | Counter on **consecutive seasons over the line** drives the forced trade (owner, this addendum) |
+| 13 | Counter resets on getting back **under the threshold**, never on trading |
+| 14 | A forced trade must **clear** the threshold; measured, always possible with zero overshoot |
+| 15 | GMs **discount** a signing near the line, never refuse one (`_SOFT_APPEAL_PENALTY`'s shape, not the removed cap's budget gate) |
+
+## Still open
+
+26. **Counter cap of 2 — confirm?** It is the only parameter with no measurement behind it,
+    only the observation that 3 pushes the forced trade past the window that matters.
+27. **Tax charged before or after upkeep** in the waterfall — decides whether an insolvent
+    club loses a facility to the tax or to its buildings.
+28. **Three clubs are already insolvent on upkeep alone** (Pinecones, Jetskis, Phones), with
+    no tax in existence. That fires this offseason and wants deciding on its own merits.
+29. **The 3-round opener** still lands in the one window (seasons 6-8) where retirement
+    outflow is still small.
+
+---
+
+# Addendum 9 — the owner is right about the draft, and it changes what the tax is for
+
+_2026-09-14. Owner: "it's not rising substantially now, but it will when we re-introduce the
+prospect draft." Tested; confirmed; and it invalidates the threshold recommendation in
+addendum 7._
+
+## Today the league is NOT inflating
+
+`player_rating_history` holds the real series. Rostered players only:
+
+| season | mean | 4★+ (≥84) | 5★ (≥92) |
+|---:|---:|---:|---:|
+| 1 | 78.9 | 25% | 4% |
+| 2 | 79.5 | 32% | 5% |
+| 3 | 79.9 | 34% | 5% |
+| 4 | 80.3 | 34% | 5% |
+| 5 | 80.4 | 36% | 6% |
+| 6 | 80.0 | 34% | 5% |
+
+It rose while the league was young and has been **flat for three seasons** at ~34% 4★+. The
+FA pool sits at 66.8 against a rostered 80.0, so the system is *sorting*, not inflating.
+
+## ⚠️ But the draft breaks that, and the mechanism is selection pressure
+
+192 roster spots are fixed. Grow the candidate population and the best 192 are simply better
+— nothing about generation has to change. Modelled by resampling the SAME empirical rating
+distribution at larger N, which isolates selection pressure from every other effect:
+
+| population | rostered mean | 4★+ | 5★ | cut line |
+|---:|---:|---:|---:|---:|
+| 224 (today) | 80.5 | 35% | 5% | 69 |
+| 300 | 83.0 | 48% | 7% | 76 |
+| 400 | 85.0 | **63%** | 10% | 78 |
+| 500 | 86.5 | **78%** | 12% | 81 |
+
+At 32 intake a season against ~19 replacement need, the surplus is ~13/season:
+
+| season | no cull | 4★+ | cull 13/yr | 4★+ | 3-round opener, no cull | 4★+ |
+|---:|---:|---:|---:|---:|---:|---:|
+| 6 | 218 | 34% | 218 | 35% | 314 | **50%** |
+| 10 | 270 | 43% | 218 | 34% | 366 | 58% |
+| 14 | 322 | 50% | 218 | 34% | 418 | 66% |
+| 20 | 400 | **63%** | 218 | **34%** | 496 | **78%** |
+
+⚠️ **The 3-round opener alone takes the league from 34% to ~50% four-star in a single
+offseason.** It is the riskiest decision in this plan, and it is riskiest immediately.
+
+✅ **And a cull at the surplus rate holds the league exactly flat at 34% indefinitely.** The
+cull is not hygiene. It is the entire defense against the thing the owner is worried about,
+and it has to ship WITH the draft, not after it.
+
+## ⚠️ This invalidates the relative threshold, and the tax's purpose
+
+Addendum 7 recommended a threshold at league **mean + 1 sd**. Against this concern that is
+exactly wrong.
+
+**A relative threshold is a RANK rule.** It catches the top ~3 clubs whatever the league's
+level — if every roster drifts to Σ520 the threshold drifts with it and nobody is ever over
+it. It cannot, by construction, prevent everyone ending up with four-star players.
+
+So the two concerns need different tools, and they were being conflated:
+
+| concern | the right lever | what the tax does |
+|---|---|---|
+| **level** — everyone ends up with stars | the **cull** (and a FIXED threshold, if a tax is used at all) | nothing, if relative |
+| **rank** — one club stockpiles for years | the **re-sign limit**, mostly | reaches the club that signed long |
+
+## And on the rank concern, the tax buys about one season
+
+Persistence is real — wins correlate **+0.818** S4→S5, the top-4 repeat count has gone 0, 1,
+1, **3**, and Pinecones have been top-4 in three of five seasons with two titles. So the
+re-sign limit is not a complete answer.
+
+But modelled forward, it catches even the long-contract club **on a lag**:
+
+| | Broads |
+|---|---|
+| end S6 | 1 expiring → re-sign, Σ500, still over |
+| end S7 | **4 expiring**, keep 2, lose 78 and 75 → **Σ477, under the line** |
+
+⚠️ So against Broads — the single club the tax uniquely reaches — the forced trade would fire
+at the end of S7 and the re-sign limit would have corrected them at the end of S7 anyway.
+**The tax buys one season, on one club, worth 5 rating points.** That is a lot of machinery
+(threshold, rate, waterfall ordering, decay ladder, counter, forced-trade engine) for that
+return.
+
+## Recommendation
+
+**Build the cull; treat the tax as optional and decide it later.** The cull is load-bearing
+against the owner's actual concern and nothing else addresses it. The tax addresses a
+narrower problem that the re-sign limit already handles within a season, and its relative
+threshold addresses the main concern not at all.
+
+If a tax is built anyway, it should use a **fixed** threshold so that it bites more clubs as
+the league rises — that is the only form that does anything about the level.
+
+## Revised open questions
+
+30. **Does the tax survive at all**, given it buys ~one season on one club and the cull does
+    the heavy lifting?
+31. **If yes: fixed threshold, not relative.** What number, and reviewed how often?
+32. **Is the 3-round opener worth 50% four-star in one offseason?** A 1-round opener with the
+    cull running from day one keeps the league flat.
+
+---
+
+# Addendum 10 — trading does not need the draft
+
+_2026-09-14. Owner: the 3-round opener was only ever a means — the point is to give teams a
+stock of assets so TRADING can exist. Reconsidered on that basis._
+
+## The opener is a very expensive way to buy assets
+
+96 players lands the league at **~50% four-star in one offseason** (addendum 9). That is a
+permanent change to what a star means, bought to enable a feature that does not actually
+require it.
+
+## ⚠️ The FA draft order is ALREADY a scarce, per-team, tradeable asset
+
+With the rookie draft off, **the FA pool is the draft** — `ensurePositionSupply` is the only
+intake, so every new player in the league appears there. And it is genuinely scarce:
+
+> **26 players. 32 teams. Worst-first.**
+>
+> An early pick takes a 77. A late pick takes a 61 — or nothing at all, and the draft falls
+> through to `generateLastResortFreeAgent`.
+
+Six teams get no one. That is not a token asset; it is the difference between filling a hole
+with a 74 TE and filling it with a generated replacement.
+
+So the asset stock the owner wants **already exists**, unowned and untradeable, in
+`currentSeason.freeAgencyOrder`. Making those order positions first-class and tradeable
+costs **zero new players, zero prospects, no rookie draft, and no cull**.
+
+## ✅ And an in-season FA pick has exactly the right uncertainty
+
+The order is worst-first **by final record**, which is not known until the season ends. So
+mid-season:
+
+- a contender's own pick is late and cheap — it should be selling it,
+- a struggling club's is early and dear — it should be holding it,
+- and both are *guessing*, because the order firms up as the table does.
+
+That is a real trade market falling out of existing machinery, and it is the buyer/seller
+dynamic this whole document has been looking for. Nothing had to be built to create it.
+
+## Revised sequencing
+
+**1. Ship trading now, with no draft at all.** Assets: players (position-for-position),
+**FA draft position**, and **Treasury Floobits**. Population unchanged, no cull required, no
+inflation risk, nothing to tune.
+
+**2. Add the rookie draft later if it is wanted for its own sake** — at **1 round (32)**, with
+the cull shipping alongside it, adding prospects as a second asset class.
+
+**3. Leave the tax out for now.** Addendum 9 measured it at roughly one season of earlier
+correction on one club; with no draft there is no inflation for it to fight either.
+
+## What is given up
+
+Prospects as tradeable bodies — "I traded for their prospect" has a flavour that a pick does
+not. That is a real want, but it is the one version that costs population, and it can be
+added in step 2 without redoing step 1.
+
+⚠️ And one caveat on the FA pick as an asset: **it is only as valuable as the pool is deep.**
+26 players across 32 teams makes an early pick precious; a pool of 60 would make it routine.
+So pick value and pool size are the same dial, which is a reason to keep the supply trickle
+tight rather than generous — and a second, independent reason not to open the faucet.
+
+## Revised open questions
+
+33. **Does trading ship on FA picks + Treasury alone**, deferring the draft entirely?
+34. **If the draft does return, is 1 round enough** to add prospects without the inflation?
+35. **How many seasons out can a pick be traded?** Two is enough to matter and bounds how far
+    a club can mortgage itself.
+
+---
+
+# Addendum 11 — the prospect draft, at one round
+
+_2026-09-14. Owner: the draft comes back regardless of the trading case — a bottom-feeder
+landing a huge prospect is a dimension fans get excited about. Agreed, and the payload is
+already built. The only question left is the round count._
+
+## ✅ The "huge prospect" is a designed, calibrated feature with no draft to express it
+
+`constants.py` states the intent verbatim:
+
+> *"Rookies/prospects DEBUT this many attribute points below their true skill and develop up
+> into it over their early seasons. **A future 5-star looks like a solid 3-4-star as a
+> rookie.**"*
+
+The three-tier model is live and the columns are populated: `GEN_TRUESKILL_MEAN` 78,
+`GEN_TRUESKILL_STD` 10, `POTENTIAL_HEADROOM` 15, `PROSPECT_ENTRY_DISCOUNT` 11. Measured on
+the current 224 players, potential sits **+6.1 above current skill on average, +25 at the
+top, with 48 players carrying 10 or more points of headroom.**
+
+So this is not a feature to design. It is a feature that has been sitting unused since
+`68e5608` removed the only thing that could show it to anyone. An FA pick cannot do it: a
+free agent is a known quantity with a rating on the card, and there is no story in signing a
+74.
+
+## What a single round actually delivers (2,000 simulated classes)
+
+The class's best prospect:
+
+| | |
+|---|---|
+| debuts at | **83** — a 3-4 star on the day he is drafted |
+| true skill | **94** |
+| potential | **99** |
+| classes containing a true 5-star (trueSkill ≥ 92) | **2.6 per class** |
+
+And the **worst team picks first**, so he is theirs. The story fires every season, and the
+scarcity is right — two or three genuine future stars in a class of 32, not a handful.
+
+## ⚠️ Three rounds does NOT produce a bigger headliner
+
+This is the argument for one round, and it is not a compromise:
+
+| class size | best trueSkill | best potential | true 5-stars in class |
+|---:|---:|---:|---:|
+| **32** | 98.7 | **99.0** | 2.6 |
+| 64 | 101.3 | **99.0** | 5.1 |
+| 96 | 103.0 | **99.0** | 7.8 |
+
+**Potential is capped at 99 in all three**, and true skill above 99 is unreachable anyway. A
+single round already produces the maximum headliner in essentially every class.
+
+So three rounds buys **64 additional also-rans and no extra story** — and those 64 are the
+entire inflation cost (addendum 9: ~50% four-star in one offseason). The thing the opener was
+for is delivered in full by round one.
+
+## The shape
+
+- **1 round, 32 prospects, worst-first.** Every club gets a pick; the bottom feeder gets the
+  headliner.
+- **The cull ships alongside**, removing the ~13/season who never reach a roster — which
+  holds the population flat and the four-star share at 34% indefinitely.
+- **No fan ballots** (owner, settled earlier).
+- Prospects become the second tradeable asset class, alongside FA picks and Treasury.
+
+⚠️ Two implementation notes carried forward: the cull must exclude `is_prospect` /
+`drafting_team_id` or it deletes the class it just drafted, and the draft should **replace**
+the supply trickle rather than run alongside it — `ensurePositionSupply` stays as the
+per-position backstop it already is, not as a second faucet.
+
+## Revised open questions
+
+36. **Does the draft replace `ensurePositionSupply` entirely, or does the floor stay as a
+    backstop?** Both running is ~51 intake a season against ~19 replacement need.
+37. **Rookie-pick trading**: are the picks in this draft tradeable from day one, or only the
+    prospects once drafted? Picks are free; prospects cost a body.
+
+---
+
+# Addendum 12 — draft intake, prospect visibility, development wiring
+
+_2026-09-14. Owner: the draft replaces the trickle; prospects generate at week 22 and appear
+in the player tables behind a prospect filter; and confirm facility level + coach player-dev
+are still wired into prospect growth._
+
+## 1. The draft replaces the supply trickle — settled
+
+`ensurePositionSupply` stays as the **per-position backstop it already is** (it only fires
+when a position is genuinely short), not as a second faucet. Intake is the draft: 32/season
+against ~19 replacement need, with the cull removing the ~13 surplus.
+
+## 2. Week 22 is a good home for class generation
+
+`GM_ACTIVE_WEEK` (22) already hosts the Front Office open block — the retirement roll, FA
+retirements, the supply top-up, the HoF ballot seed — and that block is **already
+once-per-season idempotent**, gated `>= week` plus the persisted
+`front_office_open_season` marker so a restart or deploy at or after week 22 cannot re-run
+it. Class generation drops into an existing restart-safe slot rather than needing its own.
+
+⚠️ It must sit **after** the retirement roll in that block, for the same reason the HoF
+ballot does: the class is sized against the holes retirement is about to open.
+
+## 3. ✅ The backend prospect filter ALREADY EXISTS
+
+`GET /api/players?status=prospects` is live (`api/main.py`, alongside `fa` / `retired` /
+`hof` / `followed`) and filters on `is_prospect`. Like the prospect columns and the promotion
+machinery, it survived `68e5608` — the draft was removed, its scaffolding was not.
+
+⚠️ **The frontend is the gap.** `/players` redirects to `/stats`, and the Stats page is
+position-keyed tables with no status filter, so there is no existing status-filtered player
+list to hang a Prospects tab on. That is real frontend work — and it is the only piece of
+this request that is not already built.
+
+## 4. ✅ Development wiring is intact, verified link by link
+
+| link | where | state |
+|---|---|---|
+| coach dev read | `seasonManager` step 7: `team.coach.playerDevelopment` | ✓ |
+| facility dev read | `team.facilityEffect('dev_bonus')` | ✓ **new facilities system**, not the old market tier |
+| prospects included | explicit second loop over `team.prospects` | ✓ |
+| consumed | `PlayerDevelopment.apply_offseason_training(coachDevRating, fundingDevBonus)` | ✓ |
+| combined | `devBias = (coachDevRating − 60)/10 + facilityBonus` | ✓ |
+| ceiling | `developAttribute(current, trueSkill, potential, ctx)` climbs toward **trueSkill** | ✓ |
+| washout | `_advanceProspectWindow()` releases past `PROSPECT_DEVELOPMENT_WINDOW` | ✓ |
+
+The development docstring states the prospect case outright: devBias *"accelerates a RISING
+player's climb (and **skews prospect booms**) but does NOT slow the aging decline."*
+
+**Magnitudes.** Training Facility `dev_bonus` by level is `[0, 0.4, 0.8, 1.2, 1.6, 2.0]`;
+coach contributes `(playerDevelopment − 60)/10`, so 60→0, 80→+2, 100→+4. Combined devBias
+spans **0 to +6** — a real spread between a max-facility club with an elite developer and a
+neglected one, and it lands hardest on exactly the population that is still rising.
+
+⚠️ One property worth knowing: the fractional facility bonus is **resolved to an integer
+probabilistically** each offseason, so a level-1 Training Facility gives +1 devBias 40% of
+the time rather than a guaranteed fraction. That keeps devBias integral but makes a single
+prospect's growth noisy season to season; it is the AVERAGE over a pipeline that reflects the
+facility.
+
+## Build list for the draft, as it now stands
+
+| item | state |
+|---|---|
+| prospect columns, `team.prospects` load path | ✓ exists |
+| autonomous promotion (`_promoteProspectsAutonomously`) | ✓ exists, already ballot-free |
+| development wiring (coach + facility → trueSkill climb) | ✓ exists, verified |
+| washout window | ✓ exists |
+| `GET /api/players?status=prospects` | ✓ exists |
+| class generation at week 22 | build (revert of `68e5608`, minus the ballot) |
+| the draft itself, worst-first, 1 round | build (same revert) |
+| the cull (~13/season, `seasonsPlayed == 0`, excludes prospects) | build |
+| Prospects view in the frontend | build — no status-filtered player list exists to extend |
+
+---
+
+# Addendum 13 — prospect surfaces (correcting addendum 12)
+
+_2026-09-14. Owner: team pages need a spot showing that team's prospects._
+
+## ⚠️ Correction to addendum 12
+
+Addendum 12 said *"there is no existing status-filtered player list to hang a Prospects tab
+on. That is real frontend work."* **That is wrong.** The Stats page has exactly such a list,
+and the prospects facet is already typed into its response.
+
+## Both backends are complete, and richer than needed
+
+**`GET /api/players?status=prospects`** — live.
+
+**The Stats players endpoint** — `_PLAYER_STATUSES` already contains `'prospects'`, the facet
+counter already counts it, and the status filter already maps it. Nothing to add.
+
+**`GET /api/teams/{team_id}/prospects`** — live, and built for exactly this UI. Per prospect
+it returns `name`, `position`, `rating`, `tier`, `prospectSeasons`, `seasonsRemaining`,
+`draftSeason`, `isUndrafted`, and a **`ratingHistory` series batched in one query so the UI
+can draw a development sparkline without N fetches**. Plus `slotCapPerPosition`,
+`developmentWindow` and `promotionThreshold` on the envelope.
+
+All three survived `68e5608` along with the columns, the promotion logic and the development
+wiring. The draft was excised; its surfaces were not.
+
+## What is actually left to build
+
+| surface | work |
+|---|---|
+| **Stats page prospects filter** | **one line** — add `{ key: 'prospects', label: 'Prospects' }` to `STATUSES` in `StatsPage.tsx`. The chip renders its count from `facets.prospects`, which is already in `StatsPlayersResponse`. |
+| **Team page prospects block** | a `SectionHead label="Prospects"` block under **Squad**, after the existing Roster block (`TeamPage.tsx:1375`), consuming `/api/teams/{id}/prospects`. Optionally a `railSections` entry beside Overview / Squad / Record / Front office. |
+
+Neither needs a backend change. The team-page block is the only piece with any real design in
+it, and the payload was shaped for it — rating, tier, seasons remaining in the window, and the
+sparkline series.
+
+⚠️ Both surfaces render **empty until the draft ships**, since prospects are the only thing
+that populates them and there are currently zero. Worth building them WITH the draft rather
+than before it, or they ship as blank panels.
+
+## Updated build list
+
+| item | state |
+|---|---|
+| prospect columns, `team.prospects` load path | ✓ exists |
+| autonomous promotion, ballot-free | ✓ exists |
+| development wiring (coach + facility → trueSkill) | ✓ exists, verified |
+| washout window | ✓ exists |
+| `GET /api/players?status=prospects` | ✓ exists |
+| stats endpoint prospects facet + filter | ✓ exists |
+| `GET /api/teams/{id}/prospects` (with sparkline series) | ✓ exists |
+| class generation at week 22 | build |
+| the draft itself, worst-first, 1 round | build |
+| the cull | build |
+| Stats page prospects chip | build — one line |
+| Team page prospects block | build — frontend only |
+
+---
+
+# Addendum 14 — owner rulings, 2026-09-14
+
+## ✅ Season stats stay with the player — already the behaviour
+
+`playerManager` line ~1952 does `db_season_stats.team_id = playerTeamId` on **every save**,
+and saves run at every week and season boundary. So a season line already follows the player
+to whatever club he is on now. **No work.**
+
+For the record, since the alternatives were unclear: the schema holds **one row per player
+per season with one `team_id`**, so the only real question was which club a split season is
+attributed to — the one he ends with (this, the status quo), the one he started with, or two
+rows (a schema change). The single visible consequence is `/api/stats/leaders`, which prints
+the club beside a leaderboard row, so after a trade it shows the new club next to stats
+partly earned elsewhere.
+
+⚠️ That is already the established convention: `/api/history/records` reports a **career**
+record against the player's CURRENT club, and CLAUDE.md states it is *"deliberately NOT a
+claim about where the record was set"*. Same rule, same reasoning.
+
+## ✅ Fan sentiment does NOT follow a traded player
+
+Ratings are gated to a club's own fans (`_requireOwnClub`), so a traded player would
+otherwise arrive carrying ratings from supporters who are no longer his.
+
+⚠️ Note the gate is on **writing** only — `sentimentTilt` aggregates every rating a player
+holds — so "does not follow" means the rows are **cleared on the trade**, not merely ignored.
+Live impact today is nil (no player has reached even the old quorum), but the rule should
+ship with the trade rather than be retrofitted.
+
+## ✅ Trades are visible: league news + a new transactions page
+
+Two surfaces, and the machinery for both partly exists.
+
+**League news** — `league_news.publish()` is the one publisher, and a trade is exactly the
+shape it takes. ⚠️ It is **keyword-only and camelCase**, and a snake_case typo has already
+caused two incidents, one of them a production outage; `test_publish_kwargs.py` sweeps call
+sites statically, so a new publisher is covered the moment it is written.
+
+**A central transactions page** — new. `SeasonRecapEvent` is already the durable
+per-season transaction log (`rookie_pick | fa_pick | cut | resign | promotion | retirement |
+hof_induction | coach_fire | coach_hire`) and a `trade` type joins it naturally. ⚠️ **Its
+idempotency key is `(season, event_type, player_id|team_id)` — one player, one club — which a
+two-sided trade does not fit.** It needs a trade id, or the resume-safety dedupe silently
+drops half of a swap.
+
+## ✅ Rookie picks are tradeable
+
+Horizon still open. Two seasons out is enough to matter and bounds the mortgage.
+
+## ✅ No tax, for now
+
+Dropped on the measurements in addendum 9 — roughly one season of earlier correction on one
+club, and a relative threshold that does nothing about league-wide level. The re-sign limit
+(89 of 192 players on walk years, 18 of 32 clubs forced to let someone walk) is the primary
+soft cap, and the cull is what holds the level.
+
+## ⚠️ Cards: a mid-season trade mints a NEW card; the old one is untouched
+
+Owner: *new cards can be minted when a player is traded mid-season, but a card someone holds
+of that player from his previous team does not change.*
+
+This is compatible with the start-of-season rule settled a moment earlier — that rule governs
+**who** gets cards (rostered players), and a trade does not change whether he is rostered,
+only where. But it is a real build, with consequences worth naming up front:
+
+- ⚠️ **Templates mint once per season and never re-mint** — `generateSeasonTemplates` returns
+  early on `countBySeason > 0`. A mid-season mint needs its own path; it cannot ride the
+  season-start one.
+- ✅ **It fixes the themed-pack drift.** `card_templates.team_id` is frozen at mint, so today
+  a traded player would linger in his old club's team pack all season. A new card carrying
+  the new `team_id` puts him in the right pack, and the old card keeps the old one — which is
+  correct, because that card depicts him as he was.
+- ⚠️ **Two scoreable cards of one player then exist in a season.** They are position-locked to
+  the same slot, so a holder of both can field at most two of him (slot + FLEX), and only if
+  the two carry **different** effects — the no-duplicate rule is per `effectName`. Bounded,
+  but it is a genuinely new state and should be a deliberate choice rather than a discovery.
+- ⚠️ **`_assignEffects` plans effects per bucket**, dealing least-used first so every effect is
+  covered. A mid-season mint arrives outside that plan and needs to either slot into it or
+  draw fresh, or it quietly skews the season's effect coverage.
+
+## Updated open questions
+
+1. **Pick horizon** — how many seasons out can a rookie pick be traded?
+2. **Cull bar fraction** — what fraction of the league mean, chosen on judgement then measured.
+3. **Mid-season mint effects** — does the new card draw from the bucket plan or fresh?
+4. **Transactions page scope** — trades only, or the full `SeasonRecapEvent` log (cuts,
+   re-signs, promotions, retirements, coach moves) with trades as one kind?
+5. ⚠️ **Three clubs are insolvent on upkeep alone** (Pinecones 200F vs 383F, Jetskis, Phones)
+   with no tax in existence. Independent of all of the above, and it fires **this offseason**.
+
+---
+
+# Addendum 15 — insolvency is fine; the waterfall's spending is not
+
+_2026-09-14. Owner: the insolvent clubs are fine, they just decay their facilities. Agreed on
+the principle. But modelling what actually happens surfaced a defect worth deciding on before
+it fires for the first time this offseason._
+
+## Modelled against the real rows
+
+Running `resolveSeasonEnd` with each club's live facilities, treasury and the real share unit:
+
+| club | treasury | owed | levels lost |
+|---|---:|---:|---:|
+| **Pinecones** | 200F | 383F | **4** |
+| Jetskis | 200F | 273F | 2 |
+| Phones | 295F | 328F | 1 |
+
+⚠️ **Pinecones lose four levels in one offseason, and their 200F saves nothing.**
+
+## Why: the waterfall pays into a facility it cannot save
+
+`resolveSeasonEnd` sorts `key=lambda x: -x['level']` — *"Highest-level facilities are
+protected first (most investment at stake)"* — and pays each facility's full shortfall from
+the pot in turn. With 200F against Pinecones' bill:
+
+| facility | needs | paid | outcome |
+|---|---:|---:|---|
+| locker_room lv3 | 247 | **200** | short → **decays anyway** |
+| training lv2 | 82 | 0 | decays |
+| recovery lv1 | 27 | 0 | decays |
+| scouting lv1 | 27 | 0 | decays |
+
+The whole pot goes into a bill it cannot complete, the facility decays regardless, and the
+three cheaper ones — **136F for all of them, comfortably affordable** — get nothing.
+
+⚠️ **And the partial payment is not banked.** `prepareSeasonStart` resets every facility's
+`upkeep_funded` to 0 at season start, so the 200F is simply gone. It did not protect the
+level-3 facility, and it did not carry forward.
+
+Spending the same 200F cheapest-first instead:
+
+| | levels lost | spent | facilities kept |
+|---|---:|---:|---:|
+| current (highest-level first) | **4** | 200F | 0 |
+| skip what you cannot finish | **1** | 136F | 3 |
+
+## The implementation defeats its own stated intent
+
+The rule exists to *protect* investment. Paying 200 of a 247 bill protects nothing — it is
+strictly worse than every alternative, including doing nothing at all. The ordering is
+defensible (a level-3 facility cost more to build, so trying to save it first is reasonable);
+what is not defensible is **spending into a shortfall it cannot close.**
+
+The minimal fix keeps the ordering and adds one test: pay a facility only if the pot can
+cover its shortfall **in full**; otherwise skip it and move down the list. Highest-level
+facilities are still tried first, so the stated intent survives — a club that can afford its
+crown jewel still saves it, and one that cannot stops burning the treasury on it.
+
+⚠️ This is live for three clubs **this offseason** and will recur for any club whose Treasury
+falls short, which the facilities economy guarantees will happen — upkeep at level 5 is
+2,194F a season against a league median Treasury of 1,896F.
+
+## Open
+
+6. ~~Change the waterfall to skip what it cannot finish?~~ — **SETTLED and BUILT** (owner,
+   2026-09-14: *"that's too hard, lets make that change. ideally it should calculate the most
+   efficient use of funds if there's a shortfall"*).
+
+   Implemented as an **exact subset choice**, not a skip-and-continue: value = the cost to
+   rebuild the level at risk (`upgradeCostFloobits(level - 1)`), so a level-3 building
+   outranks a level-1 in real Floobits rather than by counting levels. ⚠️ **Greedy by value
+   density is not optimal on a knapsack** — but a club holds ~5 facilities, so all `2**n`
+   subsets are enumerable and the answer is exact. Level order survives as the tie-break, so
+   "most investment protected first" still decides between sets of equal value.
+
+   Measured against the live rows: **Pinecones 4 levels → 1** (136F spent, 64F left, where
+   before 200F bought nothing), Jetskis 2 → 1, Phones 1 → 1 but now paying efficiently.
+
+   Regression: `test_facility_shortfall.py` (7 tests), verified by restoring the sequential
+   waterfall and watching 2 fail. The load-bearing assertion is that **no partial payment is
+   ever made at any pot size** — part of a bill is worth exactly zero, because
+   `prepareSeasonStart` resets `upkeep_funded` each season.

@@ -543,12 +543,13 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     userWeeklyPickemPoints = 0
     try:
         from database.models import PickEmPick
+        from managers.cardEffects import picksWereSubmittedManually
         weekPicks = session.query(PickEmPick).filter_by(
             user_id=userId, season=season, week=week,
         ).all()
         hasLiveData = bool(weekPicks) and any(p.correct is not None for p in weekPicks)
         if hasLiveData:
-            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+            userManualPickSubmittedThisWeek = picksWereSubmittedManually(weekPicks)
             for p in weekPicks:
                 if p.correct is True:
                     userWeeklyPickemCorrect += 1
@@ -572,7 +573,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                     weeksByNum.setdefault(p.week, []).append(p)
                 manualWeeks = sum(
                     1 for wk_picks in weeksByNum.values()
-                    if any(not p.is_auto for p in wk_picks)
+                    if picksWereSubmittedManually(wk_picks)
                 )
                 userManualPickSubmittedThisWeek = manualWeeks >= max(1, len(weeksByNum) // 2)
 
