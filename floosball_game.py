@@ -64,6 +64,7 @@ from constants import (
     MOMENTUM_PUNT,
     WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
     TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS, LEAD_THREAT_TD_YARDS,
+    LEAD_THREAT_FG_MIN_PROB, LEAD_ANSWER_MIN_SECONDS,
     EP_IMMINENCE_MIN_FIELD_POS, EP_IMMINENCE_POSITIONS, EP_IMMINENCE_WEIGHTS)
 
 # Import TimingManager for game-level timing control
@@ -2661,6 +2662,18 @@ class Game:
         if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
             if not self._leadIsAboutToEvaporate(defScore - offScore):
                 return
+            # ⚠️ AND THE TIME SAVED HAS TO BE USABLE. The exception above buys a
+            # possession to win in regulation; below this floor there is no possession to
+            # buy, so the timeout is spent on nothing — and it still hands the offense the
+            # clock. Measured before this gate existed, the rule fired at the same 74%
+            # rate at 0:15 as at 1:50: the clock played no part in the decision at all.
+            #
+            # ⚠️ LEADING ONLY, deliberately. A trailing defense is right to burn timeouts
+            # at 0:15 — it loses otherwise, so a slim chance beats none. The leader is
+            # spending the clock that is protecting its own lead, so it needs the answer
+            # to be real.
+            if secs < LEAD_ANSWER_MIN_SECONDS:
+                return
         deficit = offScore - defScore
         # Don't waste timeouts in an unwinnable game
         defScoreDiff = defScore - offScore  # negative when trailing
@@ -2778,7 +2791,21 @@ class Game:
             maxFg = self._chargedKickerMaxFg(kicker)
         else:
             maxFg = kicker.maxFgDistance - self.gameRules.fgSnapDistance
-        return self.yardsToEndzone <= maxFg
+        if self.yardsToEndzone > maxFg:
+            return False
+        # ⚠️ IN RANGE IS NOT THE SAME AS A THREAT, and reading only the range is what made
+        # this rule help the offense. `maxFgDistance` is the kicker's LIMIT — a kick he
+        # would frequently miss — and stopping the clock there returns ~18 yards of field
+        # position, which against `fgMakeProbability` is worth +0.54 of a made kick at
+        # 0.42, +0.27 at 0.69 and ~0.00 by 0.90. So the defense spent a timeout to convert
+        # a coin flip into a gimme. Reported as the leader stopping the clock while the
+        # offense was not safely in range; measured, 17% of kick-limb fires were on kicks
+        # under 60%, the worst a 38% try from 45 out.
+        #
+        # The bar is where the curve flattens, so the seconds handed back are worth less
+        # than the seconds saved. Read through `_estimateFgProbability`, the single source
+        # of truth, so a crosswind correctly makes the same kick less of a threat.
+        return self._estimateFgProbability() >= LEAD_THREAT_FG_MIN_PROB
 
     def fgMakeProbability(self, kicker, fgDist) -> float:
         """Pre-pressure FG make probability. THE single source of truth, shared by

@@ -19,20 +19,31 @@ import floosball_game as fg
 
 
 class Team:
-    def __init__(self, name, maxFg=55):
+    def __init__(self, name, maxFg=55, accuracy=80):
         self.name = name
         self.coach = None
-        self.rosterDict = {'k': Kicker(maxFg)}
+        self.rosterDict = {'k': Kicker(maxFg, accuracy)}
+
+
+class Attrs:
+    def __init__(self, accuracy):
+        self.accuracy = accuracy
 
 
 class Kicker:
-    def __init__(self, maxFg):
+    def __init__(self, maxFg, accuracy=80):
         self.maxFgDistance = maxFg
+        self.attributes = Attrs(accuracy)
+        self.gameAttributes = None
+        self.gameStatsDict = {'kicking': {}}
 
 
 class Rules:
     timeoutClockThreshold = 120
     fgSnapDistance = 17
+    fieldGoalPoints = 3
+    touchdownPoints = 6
+    extraPointPoints = 1
 
 
 class StubGame:
@@ -42,11 +53,13 @@ class StubGame:
     _isGarbageTime = fg.Game._isGarbageTime
     _coachClockIQ = fg.Game._coachClockIQ
     _maxPossession = fg.Game._maxPossession
+    fgMakeProbability = fg.Game.fgMakeProbability
+    _estimateFgProbability = fg.Game._estimateFgProbability
 
     def __init__(self, *, quarter=4, secs=50, defScore=17, offScore=14,
-                 yardsToEndzone=30, timeouts=3, maxFg=55):
-        self.homeTeam = Team('DEFENSE', maxFg)      # home = defense
-        self.awayTeam = Team('OFFENSE', maxFg)
+                 yardsToEndzone=30, timeouts=3, maxFg=55, accuracy=80):
+        self.homeTeam = Team('DEFENSE', maxFg, accuracy)   # home = defense
+        self.awayTeam = Team('OFFENSE', maxFg, accuracy)
         self.offensiveTeam = self.awayTeam
         self.defensiveTeam = self.homeTeam
         self.currentQuarter = quarter
@@ -78,6 +91,9 @@ class StubGame:
 
     def formatTime(self, s):
         return f"0:{s:02d}"
+
+    def wx(self, key):
+        return 1.0
 
 
 def calls(**kw):
@@ -141,10 +157,55 @@ r = calls(defScore=14, offScore=17, yardsToEndzone=30, secs=50)
 expect(f"trailing defense still stops the clock as before ({r:.0%})", r > 0.4)
 
 # ── range is read off the kicker, not a constant ───────────────────────────
-short = calls(defScore=17, offScore=14, yardsToEndzone=45, secs=50, maxFg=45)
-long_ = calls(defScore=17, offScore=14, yardsToEndzone=45, secs=50, maxFg=62)
-expect(f"a weak-legged kicker is not yet a threat at 45 out ({short:.0%})", short == 0)
-expect(f"a big leg at the same spot is ({long_:.0%})", long_ > 0.4)
+short = calls(defScore=17, offScore=14, yardsToEndzone=32, secs=50, maxFg=45, accuracy=74)
+long_ = calls(defScore=17, offScore=14, yardsToEndzone=32, secs=50, maxFg=62, accuracy=90)
+expect(f"a weak-legged kicker is out of range at 32 out ({short:.0%})", short == 0)
+expect(f"a big leg at the same spot is a real threat ({long_:.0%})", long_ > 0.4)
+
+
+# ── IN RANGE IS NOT A THREAT ───────────────────────────────────────────────
+# `maxFgDistance` is the kicker's LIMIT, not the distance he converts from, and reading
+# only the range is what made this rule help the offense: stopping the clock returns ~18
+# yards of field position, worth +0.54 of a made kick at 0.42 and +0.27 at 0.69. So the
+# defense spent a timeout to turn a coin flip into a gimme. Reported as the leader
+# stopping the clock while the offense was not safely in range.
+#
+# Bite check: restore `return self.yardsToEndzone <= maxFg` and these three fail.
+r = calls(defScore=17, offScore=14, yardsToEndzone=44, secs=50, maxFg=62, accuracy=90)
+expect(f"a 61-yard try at 42% is not the expected end of the drive ({r:.0%})", r == 0)
+
+r = calls(defScore=17, offScore=14, yardsToEndzone=38, secs=50, maxFg=55, accuracy=80)
+expect(f"nor a 55-yarder at 54%, right at the leg's limit ({r:.0%})", r == 0)
+
+r = calls(defScore=17, offScore=14, yardsToEndzone=20, secs=50, maxFg=55, accuracy=80)
+expect(f"a 37-yarder at 94% is, and the clock is nearly free to give back ({r:.0%})",
+       r > 0.4)
+
+# The touchdown limb does NOT consult the kick at all — inside 10 yards the score is one
+# snap away whoever is kicking, so a hopeless kicker must not make the threat go away.
+r = calls(defScore=17, offScore=14, yardsToEndzone=3, secs=50, maxFg=40, accuracy=60)
+expect(f"on the 3 with a poor kicker: still a touchdown threat ({r:.0%})", r > 0.4)
+
+
+# ── THERE MUST BE TIME TO USE WHAT THE TIMEOUT SAVES ───────────────────────
+# The exception exists to buy a possession to win in regulation. Nothing checked that a
+# possession was still possible: measured over a 432-state sweep the rule fired at the
+# same 74% rate at 0:15 as at 1:50, so the clock played no part in the decision. Reported
+# as the leader stopping the clock at 0:20 and getting the ball back with nothing to do.
+#
+# Bite check: delete the LEAD_ANSWER_MIN_SECONDS gate and the first two fail.
+for secs in (15, 20, 25):
+    r = calls(defScore=17, offScore=14, yardsToEndzone=3, secs=secs)
+    expect(f"up 3, they are on the 3, but only 0:{secs} left — no answer to save for "
+           f"({r:.0%})", r == 0)
+
+r = calls(defScore=17, offScore=14, yardsToEndzone=3, secs=45)
+expect(f"0:45 is enough for them to score and us to reply ({r:.0%})", r > 0.4)
+
+# ⚠️ ASYMMETRIC ON PURPOSE. A TRAILING defense at 0:15 loses if it does nothing, so a
+# slim chance beats none; the leader is spending the clock that protects its own lead.
+r = calls(defScore=14, offScore=17, yardsToEndzone=30, secs=15)
+expect(f"a TRAILING defense still spends timeouts at 0:15 ({r:.0%})", r > 0.4)
 
 print("\nPASS — the leader stops the clock exactly when the clock stops helping it."
       if not fails else f"\n{len(fails)} FAILED")
