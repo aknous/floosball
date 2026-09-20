@@ -2201,7 +2201,8 @@ class SeasonManager:
                             user_id=userId, season=season, week=week,
                         ).all()
                         if weekPicks:
-                            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+                            from managers.cardEffects import picksWereSubmittedManually
+                            userManualPickSubmittedThisWeek = picksWereSubmittedManually(weekPicks)
                             for p in weekPicks:
                                 if p.correct is True:
                                     userWeeklyPickemCorrect += 1
