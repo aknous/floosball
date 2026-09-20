@@ -911,6 +911,22 @@ def flairOf(player) -> float:
     return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
 
 
+def _depthClosing(passType) -> float:
+    """Separation a defender takes back while the ball is in the air, in openness points.
+
+    ONE definition, because it is subtracted in `calculateReceiverOpenness` (the catch is
+    contested at the arrival gap) and added back in `selectPassTarget` (the QB reads the
+    break, before any of it happens). Two copies would drift and the QB would silently
+    become clairvoyant, or blind, about the closing. Zero at the short tier and for any
+    route with no depth (a screen, a checkdown with no PassType).
+    """
+    from constants import PASS_DEPTH_MEANS as _PDM, PASS_DEPTH_SEPARATION_K as _K
+    name = getattr(passType, 'name', None)
+    if name not in _PDM:
+        return 0.0
+    return _K * max(0.0, _PDM[name] - _PDM['short'])
+
+
 def _rnd(value) -> int:
     """Unbiased round to int, replacing int() on every random yardage draw.
 
@@ -4243,6 +4259,7 @@ class Game:
         weights = self._applyGameplanMods(weights)
         weights = self._applyWeatherMods(weights)
         weights = self._applyAwakenedMods(weights)
+        weights = self._applyFieldDepthGate(weights)
         weights = self._applyDriveClockMods(weights, coach)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
@@ -4812,6 +4829,53 @@ class Game:
         weights['deep'] = weights.get('deep', 0) * deep
         weights['long'] = weights.get('long', 0) * (1 + (deep - 1) * 0.6)
         weights['short'] = weights.get('short', 0) * (1 + (1 - deep) * 0.35)
+        return weights
+
+    def _applyFieldDepthGate(self, weights: dict) -> dict:
+        """You cannot run a route the field has no room for.
+
+        ⚠️ NOTHING IN THE CHAIN HAD A FIELD-POSITION TERM ON DEPTH — the only reads of
+        `yardsToEndzone` against a pass tier anywhere were the chess-clock strike and
+        darts, both format branches. So the table's depth shape applied whole from the
+        offense's own 1 to the opponent's 3, and measured, 5% of deep throws had LESS
+        FIELD AHEAD THAN THE TIER'S 27 AIR YARDS, five of them from inside the 5. They
+        completed at the normal rate and the yardage model quietly clamped the gain, so
+        the tier was fiction rather than a visible error.
+
+        ⚠️ THE TABLE HAD THE CONSTRAINT INVERTED, which is what this replaces. It forbade
+        deep on SHORT YARDAGE — where the NFL throws deep 7.6% of the time, because a
+        defense squatting on the sticks is exactly when the shot is available — and
+        permitted it from the opponent's 1. Real football's hard limit is yards to the
+        ENDZONE, not yards to go: NFL deep runs 10.7% beyond the 27 and 3.3% inside it,
+        and is flat at 7-11% across every down and distance. Keeping the rule here rather
+        than in the rows means it is stated once, and the rows describe an open field.
+
+        ⚠️ THE LIMIT IS THE SHALLOW EDGE OF THE TIER'S BAND, NOT ITS MEAN. A tier mean is
+        the CENTRE of a spread of real routes, so a `long` call from the 15 is an ordinary
+        throw into the end zone — and gating it at the 17-yard mean is what the NFL data
+        refuses: long runs 18.3% of throws from the 11-15 and 27.7% from the 16-20,
+        ABOVE its 15.2% league average, because that is where a 17-yard route scores.
+        Measured, gating on the mean cost the long game 15.4% -> 12.1% of throws. The edge
+        is the midpoint to the tier below — the same cut used to bin the NFL air yards, so
+        the gate and the yardstick agree by construction. Deep's edge lands at 22, which
+        is where NFL deep actually reappears (0.0% inside the 20, 11.1% at 21-25).
+
+        ⚠️ SCALED, NOT ZEROED, and the residual is the real 3.3% deep inside 27: some
+        routes in the band still fit where the average one does not. Zeroing put a cliff
+        mid-red-zone that no defense would have to respect.
+        """
+        yte = getattr(self, 'yardsToEndzone', None)
+        if not yte:
+            return weights
+        from constants import PASS_DEPTH_MEANS as _PDM, FIELD_DEPTH_GATE_FLOOR as _FLOOR
+        order = ['short', 'medium', 'long', 'deep']
+        for i, tier in enumerate(order):
+            if tier not in ('long', 'deep'):
+                continue
+            need = (_PDM[tier] + _PDM[order[i - 1]]) / 2.0     # shallow edge of the band
+            if yte < need:
+                # linear from full weight at the edge down to the floor with no field left
+                weights[tier] = weights.get(tier, 0) * (_FLOOR + (1 - _FLOOR) * (yte / need))
         return weights
 
     def _applyAwakenedMods(self, weights: dict) -> dict:
@@ -18039,6 +18103,14 @@ class Play():
         Route quality is dynamic per play — affected by game pressure,
         defensive coverage intensity, receiver mental state, and natural variance.
         Disciplined receivers are more consistent; frustrated or pressured ones slip.
+
+        ⚠️ THIS IS SEPARATION AT THE BREAK, NOT AT THE CATCH, and it carries no depth term
+        on purpose. The defender closes while the ball is in the air, which happens AFTER
+        the QB has read the field — so that decay belongs to the contest, and is applied
+        once in `calculateCatchProbability` via `_depthClosing`. Subtracting it here
+        instead makes the quarterback clairvoyant about a defender who has not closed yet:
+        measured, deep retention fell 72% -> 53%, undoing what PASS_CALLED_DEPTH_READ_BONUS
+        exists to fix. Reading this value is reading what the QB sees.
         """
         baseRouteRunning = receiver.gameAttributes.routeRunning
 
@@ -18079,6 +18151,8 @@ class Play():
         meanOpenness += getattr(self, '_passConceptOpennessBonus', 0.0)
         meanOpenness += getattr(self, '_rpoOpennessBonus', 0.0)   # RPO throw into a vacated box
         meanOpenness += getattr(self, '_trickOpennessBonus', 0.0)  # flea flicker: receiver open deep
+        # Separation decays over the ball's flight, and flight time scales with air yards,
+        # so a deeper route arrives with less of it. Zero at the short tier by construction.
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -18281,6 +18355,24 @@ class Play():
         actually slow mature offenses, instead of being zeroed out whenever the
         receiver is open.
         """
+        # ⚠️ THE CATCH IS CONTESTED AT THE ARRIVAL GAP, NOT THE GAP AT THE BREAK. A
+        # defender closes for as long as the ball is in the air and flight time scales
+        # with air yards, so the separation a receiver had when the QB decided is not the
+        # separation he has when it gets there. `calculateReceiverOpenness` deliberately
+        # carries no depth term (that is the read's view, taken before any of this), so
+        # the decay is applied HERE, once, to both openness inputs — the completion side
+        # (`coverageDisruption`, `contestPenalty`) and the pick side (`openGap`,
+        # `proximity`) must contest the same gap or they describe different plays.
+        # ⚠️ Applying it in `calculateReceiverOpenness` instead was tried and reverted: it
+        # reaches the QB's read through `selectPassTarget` and took deep retention 72% ->
+        # 53%. Adding it back for the read was worse — it couples every caller to having
+        # come through that one function, and a hand-built target list then reads as
+        # wildly open. One subtraction, at the contest.
+        _closing = _depthClosing(passType)
+        receiverOpenness = max(0.0, receiverOpenness - _closing)
+        if receiverActualOpenness is not None:
+            receiverActualOpenness = max(0.0, receiverActualOpenness - _closing)
+
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
