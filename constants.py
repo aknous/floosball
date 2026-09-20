@@ -211,7 +211,7 @@ LEAGUE_COVERAGE_BASELINE = 80
 # coverage term is what keeps the offense-vs-defense balance league-relative here.
 # Tuned on paired young-league (fresh) + mature (prod S12 resume) sims to hold
 # completion ~66-67% at BOTH ends.
-PASS_COVERAGE_DISRUPTION_K = 15      # x tier x (1-openness) x (coverage/100) -> contact loss
+PASS_COVERAGE_DISRUPTION_K = float(_os.environ.get('FLOOS_COV_K', '55'))   # x tier x (1-openness) x (coverage/100) -> contact loss
 PASS_COVERAGE_BASELINE_SLOPE = 1.9   # symmetric contact loss/gain per coverage point off the mean
 
 # Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
@@ -1349,7 +1349,9 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # long 0.80 -> 0.65 and deep 0.65 -> 0.43 were fitted so each tier's yards per attempt
 # lands on the NFL's. PASS_TIER_DISRUPTION barely moves completion (coverage rarely binds
 # in that formula) and is left as it was.
-PASS_TYPE_DIFFICULTY = {'short': 1.00, 'medium': 0.92, 'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
+PASS_TYPE_DIFFICULTY = {'short': 1.00,
+                        'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.875')),
+                        'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
 PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75, 'long': 1.00, 'deep': 1.15, 'hailMary': 1.30}
 
 # ---- Separation decays with route depth (Play.calculateReceiverOpenness) ----
@@ -1397,6 +1399,23 @@ PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75, 'long': 1.00, 'deep': 1.1
 # footing as SACK_BASE_RATE — a curve parameter, not the realized rate.
 PASS_DEPTH_SEPARATION_K = float(_os.environ.get('FLOOS_DEPTH_SEP_K', '0.90'))
 
+# ---- Contact: can the receiver get his hands on it? (Play.calculateCatchProbability) ----
+# A logistic in throw quality, replacing a piecewise form whose slope fell from 1.6 to 0.45
+# at exactly tq 70 — where 76% of throws land, since short averages 79 and medium 70.6. The
+# corner flattened the model precisely where it was used most and left those two tiers 3.8
+# contact points apart against a real 14.6-point completion gap.
+# ⚠️ TUNE THE CENTRE AND STEEPNESS AGAINST THE TIER SPREAD, NOT THE LEAGUE MEAN — the same
+# trap `SACK_PROB_CAP` documents. Raising the ceiling or dropping the centre lifts every
+# tier together and says nothing about whether a medium throw is harder than a short one,
+# which is the thing that was wrong.
+PASS_CONTACT_CEILING = float(_os.environ.get('FLOOS_CONTACT_CEIL', '99.0'))
+PASS_CONTACT_CENTER = float(_os.environ.get('FLOOS_CONTACT_MID', '36.0'))
+PASS_CONTACT_STEEPNESS = float(_os.environ.get('FLOOS_CONTACT_K', '0.050'))
+# Reach helps most on a ball that is badly placed; these are the ends of the old 0.05 /
+# 0.4 / 0.7 band ladder, now ramped continuously by how errant the throw is.
+PASS_REACH_WEIGHT_SHARP = 0.05
+PASS_REACH_WEIGHT_ERRANT = 0.70
+
 # Share of a depth tier's weight that survives with NO field left at all
 # (Game._applyFieldDepthGate). Not zero, because a tier mean is the centre of a band and
 # the shallow end of `deep` still fits from the 20 — the NFL throws deep 3.3% of the time
@@ -1436,15 +1455,15 @@ YAC_TIER_CAPS = {
     'long':   {'pass': 6, 'bFail': 12, 'house': 14},
     'deep':   {'pass': 6, 'bFail': 15, 'house': 14},
 }
-YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '22'))
-YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '45'))
+YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '32'))
+YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '55'))
 YAC_GATE_A_FAIL_CAP = int(_os.environ.get('FLOOS_YAC_FAILCAP', '3'))
 # throwQuality -> YAC multiplier. Average league throw quality is ~66.6, so the
 # 60-79 band is the one that matters most for league-wide YAC.
 YAC_THROW_MULT = {
     'elite': float(_os.environ.get('FLOOS_YACM_ELITE', '1.0')),   # >= 80
-    'good': float(_os.environ.get('FLOOS_YACM_GOOD', '0.75')),    # 60-79
-    'poor': float(_os.environ.get('FLOOS_YACM_POOR', '0.45')),    # 40-59
+    'good': float(_os.environ.get('FLOOS_YACM_GOOD', '0.95')),    # 60-79
+    'poor': float(_os.environ.get('FLOOS_YACM_POOR', '0.65')),    # 40-59
     'bad': float(_os.environ.get('FLOOS_YACM_BAD', '0.20')),      # < 40
 }
 # 1st-down run weight -- the single biggest lever on the league pass/run split

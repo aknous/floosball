@@ -57,7 +57,13 @@ from scenario import _makeTeam                                           # noqa:
 FT.Team.getAverages = lambda self, season=None: None
 PT, PassType = FG.PlayType, FG.PassType
 FIELDS = ['game', 'team', 'down', 'ytg', 'yte', 'qtr', 'qsecs', 'scoreDiff', 'offTo', 'defTo',
-          'kind', 'called', 'thrown', 'scramble', 'sack', 'complete', 'intercepted', 'yards']
+          'kind', 'called', 'thrown', 'scramble', 'sack', 'complete', 'intercepted', 'yards',
+          # the pass model's own inputs, so a completion or a pick can be explained rather
+          # than only counted. `open` is the ACTUAL gap the QB threw into (not perceived)
+          # BEFORE `_depthClosing` is applied inside calculateCatchProbability; `bestOpen`
+          # is the most open man on the field, so the two together measure how much the
+          # read's take-the-open-man rule is doing.
+          'openN', 'throwQ', 'nTgt', 'bestOpen']
 
 
 def harvest(games: int, seed: int = 20260914):
@@ -102,6 +108,11 @@ def harvest(games: int, seed: int = 20260914):
                    complete=int(bool(getattr(p, 'isPassCompletion', False))),
                    intercepted=int(bool(getattr(p, 'isInterception', False))),
                    yards=getattr(p, 'yardage', 0))
+        ins = ((getattr(p, 'insights', {}) or {}).get('pass') or {})
+        tgts = ins.get('targets') or []
+        pre.update(openN=ins.get('rcvActualOpenness', ''), throwQ=ins.get('throwQuality', ''),
+                   nTgt=len(tgts),
+                   bestOpen=(max((t.get('openness', 0) for t in tgts), default='')))
         rows.append(pre)
 
     FG.Game.playCaller = hooked
@@ -294,6 +305,9 @@ def load(path):
             row = {k: (int(v) if k in ints and v not in ('', None) else v) for k, v in rec.items()}
             for k in ('yte', 'qsecs', 'scoreDiff', 'yards'):
                 row[k] = float(row[k] or 0)
+            for k in ('openN', 'throwQ', 'nTgt', 'bestOpen'):   # absent on an NFL row
+                if k in row:
+                    row[k] = float(row[k]) if row[k] not in ('', None) else None
             out.append(row)
     return out
 

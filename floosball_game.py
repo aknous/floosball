@@ -18376,16 +18376,25 @@ class Play():
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
-        # Top-end lightly compressed so elite throws aren't quite automatic.
-        if throwQuality >= 70:
-            baseContact = 85 + (throwQuality - 70) * 0.45  # 85-99
-            reachFactor = receiverReach * 0.05
-        elif throwQuality >= 50:
-            baseContact = 53 + (throwQuality - 50) * 1.6   # 53-85
-            reachFactor = (receiverReach - 60) * 0.4
-        else:
-            baseContact = 10 + throwQuality * 0.85         # 10-52
-            reachFactor = (receiverReach - 60) * 0.7
+        # ⚠️ THIS WAS PIECEWISE WITH A SLOPE DISCONTINUITY WHERE MOST THROWS LIVE. The old
+        # form ran `85 + (tq-70)*0.45` above 70, `53 + (tq-50)*1.6` between 50 and 70 and
+        # `10 + tq*0.85` below — so sensitivity to throw quality collapsed from 1.6 to 0.45
+        # at exactly 70, and measured, SHORT throws average tq 79 and MEDIUM 70.6, i.e.
+        # 76% of all passes sat on that plateau. The two tiers came out 3.8 contact points
+        # apart while real football separates their completion rates by 14.6 points, which
+        # is most of why medium completed 71.7% against the NFL's 59.3%.
+        # A logistic is the same S the piecewise form was approximating, without the corner:
+        # monotonic, saturating (a perfect ball is nearly always reachable, never certain),
+        # and still responsive at the top where the old one had gone flat.
+        from constants import (PASS_CONTACT_CEILING as _CC, PASS_CONTACT_CENTER as _CMID,
+                               PASS_CONTACT_STEEPNESS as _CK, PASS_REACH_WEIGHT_SHARP,
+                               PASS_REACH_WEIGHT_ERRANT)
+        baseContact = _CC / (1.0 + math.exp(-_CK * (throwQuality - _CMID)))
+        # Reach matters MOST on a badly placed ball — that was the intent of the old bands
+        # (0.05 / 0.4 / 0.7 as quality fell) and it survives as a ramp rather than a step.
+        _reachW = PASS_REACH_WEIGHT_SHARP + (PASS_REACH_WEIGHT_ERRANT - PASS_REACH_WEIGHT_SHARP) \
+            * max(0.0, min(1.0, (100.0 - throwQuality) / 100.0))
+        reachFactor = (receiverReach - 60) * _reachW
 
         # Tier-scaled coverage disruption: short throws are quick-release, so
         # defenders have little time to make a play; deep throws give DBs more
@@ -19309,12 +19318,26 @@ class Play():
                     _wxFootPass = self.game.wx('footing')
                     if passYards < self.yardsToEndzone:
                         # Bad throws can't be caught in stride — limits all YAC.
-                        from constants import YAC_THROW_MULT as _YTM
-                        if throwQuality >= 80:
+                        # ⚠️ JUDGED AGAINST WHAT THIS TIER NORMALLY THROWS, NOT ABSOLUTELY.
+                        # `PASS_TYPE_DIFFICULTY` has already multiplied throwQuality DOWN
+                        # for being a deep ball, so reading the result as "badly thrown"
+                        # charges for depth a second time. Measured, a deep throw averages
+                        # tq 32.6 and fell in the `bad` bucket (0.20) on essentially every
+                        # snap — yet a deep catch is where real YAC is HIGHEST, because the
+                        # receiver is past the defense: NFL yards after catch run 4.04 /
+                        # 3.26 / 4.13 / 5.69 by tier, flat to RISING with depth, while the
+                        # sim ran 2.31 / 1.44 / 0.89 / -0.18, collapsing. Dividing the
+                        # difficulty back out recovers the thing this multiplier is
+                        # actually for: was this ball put where the receiver could run
+                        # with it, FOR A THROW OF THIS KIND.
+                        from constants import YAC_THROW_MULT as _YTM, PASS_TYPE_DIFFICULTY as _PTD
+                        _tierDiff = _PTD.get(getattr(self.passType, 'name', None), 0.85) or 1.0
+                        _placement = throwQuality / _tierDiff
+                        if _placement >= 80:
                             throwYacMult = _YTM['elite']
-                        elif throwQuality >= 60:
+                        elif _placement >= 60:
                             throwYacMult = _YTM['good']
-                        elif throwQuality >= 40:
+                        elif _placement >= 40:
                             throwYacMult = _YTM['poor']
                         else:
                             throwYacMult = _YTM['bad']
