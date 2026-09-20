@@ -820,10 +820,20 @@ passPlayBook = {
                             'rb': None
                         }
                     },
+                    # ⚠️ wr1 IS THE LONG ROUTE, and was `medium` from this play's first
+                    # commit (460fe8b) — the only play in the whole book with no route at
+                    # its own pool's tier. It sits in the `long` pool and declares a long
+                    # dropback, so it was STRICTLY DOMINATED: `rushDifferential` charges
+                    # `(dropback - 1) * 2`, i.e. +6 against a medium play's +2, so it paid
+                    # four points of extra sack exposure to throw the medium pool's routes.
+                    # At 1 of 7 long plays it also made a called long come out `medium`
+                    # unconditionally — roughly half of the measured 29% long downgrade.
+                    # wr1 fills the pool's one gap: Play5 and Play19 are an identical
+                    # wr2-long-plus-TE-checkdown pair and nothing was the wr1 mirror.
                     'Play20': {
                         'dropback': QbDropback.long,
                         'targets': {
-                            'wr1': PassType.medium,
+                            'wr1': PassType.long,
                             'wr2': None,
                             'te': PassType.medium,
                             'rb': None
