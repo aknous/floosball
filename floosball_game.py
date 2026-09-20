@@ -19434,14 +19434,17 @@ class Play():
                         from constants import YAC_TIER_CAPS as _YTC
                         def _tc(name):
                             t = _YTC[name]
-                            return {'gateAFail': _YFC, 'gateAPass': t['pass'],
+                            return {'gateAFail': t.get('failCap', _YFC),
+                                    'fallForward': t.get('fallForward', 1.0),
+                                    'gateAPass': t['pass'],
                                     'gateBFail': t['bFail'], 'housecallMean': t['house']}
                         yacCaps = {
                             PassType.short:    _tc('short'),
                             PassType.medium:   _tc('medium'),
                             PassType.long:     _tc('long'),
                             PassType.deep:     _tc('deep'),
-                            PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
+                            PassType.hailMary: {'gateAFail': 2, 'fallForward': 1.0, 'gateAPass': 5,
+                                'gateBFail': 10, 'housecallMean': 10},
                         }
                         caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
 
@@ -19463,12 +19466,24 @@ class Play():
                         gateBChance = max(6, min(35, 20 + (rcvSpeed - openFieldDef) * 0.9))
 
                         def _capYac(gain, hardCap):
-                            gain = int(gain * throwYacMult)
+                            # ⚠️ `_rnd`, NEVER `int`. This is the documented truncation
+                            # defect surviving in the one place it could hide: every DRAW
+                            # above was converted to `_rnd`, but this MULTIPLICATION was
+                            # not, because it is not a draw. `int()` truncates toward zero,
+                            # so a 1-yard gain scaled by a 0.95 multiplier became
+                            # `int(0.95)` = 0 — and gate A's tackled-immediately draw
+                            # centres on exactly 1. Measured on live rosters, 35% of
+                            # completions gained nothing after the catch against real
+                            # football's 25%, with every larger gain shaved as well.
+                            gain = _rnd(gain * throwYacMult)
                             return max(0, min(gain, hardCap, sidelineCap, self.yardsToEndzone - passYards - yac))
 
                         if batched_randint(1, 100) > gateAChance:
                             # Tackled by covering defender — clamped 0-3 YAC
-                            yac += _capYac(max(0, _rnd(np.random.normal(1.0, 1.0))), caps['gateAFail'])
+                            # Forward progress at contact, scaled by how fast the receiver
+                            # is already travelling — see YAC_TIER_CAPS['fallForward'].
+                            yac += _capYac(max(0, _rnd(np.random.normal(caps['fallForward'], 1.0))),
+                                           caps['gateAFail'])
                         else:
                             # Slipped the tackle — clamped 2-6 YAC
                             yac += _capYac(max(2, _rnd(np.random.normal(3.2, 1.5))), caps['gateAPass'])

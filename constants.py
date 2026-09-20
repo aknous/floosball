@@ -1528,15 +1528,29 @@ PASS_DEPTH_MEANS = {
 # play could travel 10 yards through the air and still be the shorter gain. Big
 # plays should come from genuine downfield throws. Tightening the short tiers and
 # lengthening the deep air bands REDISTRIBUTES yardage rather than adding it.
+# ⚠️ `fallForward` IS THE STAGE THAT WAS NOT PER TIER, AND IT IS THE ONE THAT DOMINATES A
+# DEEP CATCH. Every other stage here has always been tier-scaled; gate A's FAIL branch — the
+# receiver tackled by the man covering him — drew `normal(1.0, 1.0)` against a flat cap for
+# every tier alike. But that branch is forward progress at contact, and progress scales with
+# how fast the receiver is already moving: a man catching a screen is nearly stationary,
+# while one catching a 27-yard go route is at full speed with the defender trailing him.
+# Measured on live rosters, 37% of deep completions gained NOTHING after the catch and deep
+# YAC came to 2.71 against real football's 5.69 — the largest single gap in the passing
+# model, and not a field-position artifact: those completions average 32.9 yards of room
+# against the NFL's 28.3, and only 10% are capped by the end zone.
 YAC_TIER_CAPS = {
     'short':  {'pass': int(_os.environ.get('FLOOS_YACC_S_P', '4')),
                'bFail': int(_os.environ.get('FLOOS_YACC_S_B', '5')),
-               'house': int(_os.environ.get('FLOOS_YACC_S_H', '7'))},
+               'house': int(_os.environ.get('FLOOS_YACC_S_H', '7')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_S', '1.0')), 'failCap': 3},
     'medium': {'pass': int(_os.environ.get('FLOOS_YACC_M_P', '6')),
                'bFail': int(_os.environ.get('FLOOS_YACC_M_B', '8')),
-               'house': int(_os.environ.get('FLOOS_YACC_M_H', '10'))},
-    'long':   {'pass': 6, 'bFail': 12, 'house': 14},
-    'deep':   {'pass': 6, 'bFail': 15, 'house': 14},
+               'house': int(_os.environ.get('FLOOS_YACC_M_H', '10')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_M', '1.5')), 'failCap': 4},
+    'long':   {'pass': 6, 'bFail': 12, 'house': 14,
+               'fallForward': float(_os.environ.get('FLOOS_YACF_L', '2.2')), 'failCap': 5},
+    'deep':   {'pass': 6, 'bFail': 15, 'house': 14,
+               'fallForward': float(_os.environ.get('FLOOS_YACF_D', '3.0')), 'failCap': 7},
 }
 YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '32'))
 YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '55'))
