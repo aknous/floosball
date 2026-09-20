@@ -1446,22 +1446,49 @@ async def get_player(player_id: int, response: Response,
             player_dict['stats'] = allSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
 
-        # Has this player ever awakened? The profile shows a badge and nothing else — no
-        # power name, no charge state — so a boolean is the whole contract. Read across
-        # ALL seasons rather than the current one: awakening is part of who a player has
-        # been, and a profile is a career page.
+        # Where is this player on the anomaly ladder THIS season?
+        #
+        # ⚠️ TWO REPORTED SYMPTOMS, ONE LINE. This asked `state == 'awakened'` across ALL
+        # seasons, on the reasoning that "awakening is part of who a player has been, and
+        # a profile is a career page". That reading cost both halves of the state:
+        #
+        #   * A CLEANSE VANISHED INSTEAD OF SHOWING. `anomalyManager` flips the row in
+        #     place (`st.state = 'cleansed'`), so the moment the Cores purged a player the
+        #     badge simply disappeared — the profile had no cleansed concept at all, and
+        #     being cleansed is the more dramatic half of the story.
+        #   * AN AWAKENING NEVER ENDED. `anomaly_state` is per-player per-SEASON, so a row
+        #     stamped 'awakened' in season N is never revisited once that season stops
+        #     ticking — and an all-seasons query lit the badge forever (owner: once the
+        #     season ends every player reverts and the profile clears).
+        #
+        # Scoping to the current season IS the reset: next season has no row, so the state
+        # reads None with nothing to migrate. It clears at the season ROLLOVER rather than
+        # at the Floos Bowl, which keeps the Reset's aftermath readable through the
+        # offseason — the purge is that season's ending, not a leftover.
         try:
             from database.connection import get_session as _gs
             from database.models import AnomalyState as _AS
+            _seasonNum = (floosball_app.seasonManager.currentSeason.seasonNumber
+                          if floosball_app.seasonManager
+                          and floosball_app.seasonManager.currentSeason else 0)
             _s = _gs()
             try:
-                player_dict.setdefault('attributes', {})['isAwakened'] = bool(
-                    _s.query(_AS.player_id).filter_by(player_id=player.id, state='awakened').first())
+                _row = _s.query(_AS.state).filter_by(
+                    player_id=player.id, season=_seasonNum).first()
+                _state = _row[0] if _row else None
             finally:
                 _s.close()
+            # Only the two terminal rungs are a profile badge. The climb (stirring /
+            # erratic / rampant) stays off it deliberately: every public anomaly surface
+            # is qualitative, and a ladder position on a profile is a progress bar.
+            _attrs = player_dict.setdefault('attributes', {})
+            _attrs['anomalyState'] = _state if _state in ('awakened', 'cleansed') else None
+            _attrs['isAwakened'] = _state == 'awakened'
         except Exception:
             # A missing table or a fresh DB must not cost the page its stats.
-            player_dict.setdefault('attributes', {})['isAwakened'] = False
+            _attrs = player_dict.setdefault('attributes', {})
+            _attrs['anomalyState'] = None
+            _attrs['isAwakened'] = False
 
         # Personality quotes — latest one for the hover tooltip,
         # full list shown on the player profile page via /quotes endpoint.
