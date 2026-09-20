@@ -63,7 +63,10 @@ FIELDS = ['game', 'team', 'down', 'ytg', 'yte', 'qtr', 'qsecs', 'scoreDiff', 'of
           # BEFORE `_depthClosing` is applied inside calculateCatchProbability; `bestOpen`
           # is the most open man on the field, so the two together measure how much the
           # read's take-the-open-man rule is doing.
-          'openN', 'throwQ', 'nTgt', 'bestOpen']
+          'openN', 'throwQ', 'nTgt', 'bestOpen',
+          # running score at the snap, so a DRIVE's outcome can be reconstructed —
+          # points alone cannot say whether a league scores often or scores big.
+          'homeScore', 'awayScore']
 
 
 def harvest(games: int, seed: int = 20260914):
@@ -112,7 +115,8 @@ def harvest(games: int, seed: int = 20260914):
         tgts = ins.get('targets') or []
         pre.update(openN=ins.get('rcvActualOpenness', ''), throwQ=ins.get('throwQuality', ''),
                    nTgt=len(tgts),
-                   bestOpen=(max((t.get('openness', 0) for t in tgts), default='')))
+                   bestOpen=(max((t.get('openness', 0) for t in tgts), default='')),
+                   homeScore=game.homeScore, awayScore=game.awayScore)
         rows.append(pre)
 
     FG.Game.playCaller = hooked
@@ -305,7 +309,7 @@ def load(path):
             row = {k: (int(v) if k in ints and v not in ('', None) else v) for k, v in rec.items()}
             for k in ('yte', 'qsecs', 'scoreDiff', 'yards'):
                 row[k] = float(row[k] or 0)
-            for k in ('openN', 'throwQ', 'nTgt', 'bestOpen'):   # absent on an NFL row
+            for k in ('openN', 'throwQ', 'nTgt', 'bestOpen', 'homeScore', 'awayScore'):
                 if k in row:
                     row[k] = float(row[k]) if row[k] not in ('', None) else None
             out.append(row)

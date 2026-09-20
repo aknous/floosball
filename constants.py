@@ -184,6 +184,23 @@ INT_BAD_READ_K = 0.175   # QB throws into coverage (actual openness × coverage)
 INT_BAD_THROW_K = 0.20   # errant ball (throw quality), gated by defender proximity
 INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 
+# ⚠️ CONTINUOUS DECAY, REPLACING TWO HARD KNEES (Play.calculateCatchProbability, 2026-09-20).
+# `openGap` was `max(0, 50 - openness)/50` and `throwGap` `max(0, 55 - throwQuality)/55`, so
+# both switched risk off COMPLETELY past those points — and the thrown population sits past
+# them: the ball goes to the most open man 88% of the time at a mean openness of 65.4, on a
+# scale `calculateReceiverOpenness` centres at 50. So the openness gate opened on 23% of
+# short and 25% of medium throws, the throw gate on 2% and 8%, and interceptions ran
+# 0.7 / 0.8 / 2.1 / 6.1 by tier against the NFL's 1.2 / 2.5 / 4.2 / 5.5 — flat where real
+# football climbs, because for most throws the model had ruled a pick out entirely.
+# `exp(-x / decay)` never reaches zero: no receiver is so open, and no ball so well placed,
+# that a defender cannot make a play on it.
+# ⚠️ CHOSEN SO A BLANKETED RECEIVER KEEPS THE RISK HE ALREADY HAD — 25 x ln2 = 36 would
+# reproduce the old half-way point exactly; the tuned values sit tighter so the added tail
+# is thin. This lengthens the tail; it does not re-level the floor. Tune against the TIER
+# SPREAD (the ratio deep:short ran 8.7x against a real 4.6x), never the league mean.
+INT_OPEN_DECAY = float(_os.environ.get('FLOOS_INT_OPEN_DECAY', '25.0'))
+INT_THROW_DECAY = float(_os.environ.get('FLOOS_INT_THROW_DECAY', '40.0'))
+
 # League coverage baseline — the value in-game pass coverage centers on (the
 # LEAGUE_COMPRESSION_MEAN target). Absolute coverage terms anchor here so they
 # don't creep as the league ages: an evolved league's compressed coverage drifts
@@ -1352,7 +1369,21 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 PASS_TYPE_DIFFICULTY = {'short': 1.00,
                         'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.875')),
                         'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
-PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75, 'long': 1.00, 'deep': 1.15, 'hailMary': 1.30}
+# ⚠️ LEFT ALONE ON PURPOSE, AND THE ATTEMPT IS WORTH RECORDING. When
+# PASS_DEPTH_SEPARATION_K dropped 0.90 -> 0.70 (to keep deep's pick rate right under the
+# new continuous gates) long came out completing 55.0% against 52.6. Raising long here
+# fixes that number and was reverted for two reasons. First it inverts the ladder — long
+# 1.30 above deep 1.22 — and disruption rising with depth is the whole claim this table
+# makes; `test_catch_model.py` refuses it. Second, and the real objection: this ladder and
+# `PASS_DEPTH_SEPARATION_K` MODEL THE SAME PHYSICAL THING, defenders converging on a
+# longer throw. Now that the separation decay exists, steepening this on top of it charges
+# depth twice — the identical error that had deep balls scored as badly thrown in the YAC
+# multiplier. The long tier's residual (completion +2.4, interceptions 3.50 against 4.2)
+# belongs to its arrival gap or its throw quality, not here.
+PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75,
+                        'long': float(_os.environ.get('FLOOS_TD_LONG', '1.00')),
+                        'deep': float(_os.environ.get('FLOOS_TD_DEEP', '1.15')),
+                        'hailMary': 1.30}
 
 # ---- Separation decays with route depth (Play.calculateReceiverOpenness) ----
 # ⚠️ A 3-YARD HITCH AND A 27-YARD POST DREW FROM THE SAME SEPARATION DISTRIBUTION.
@@ -1397,7 +1428,12 @@ PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75, 'long': 1.00, 'deep': 1.1
 # 0.90 puts deep interceptions on the matched band's 5.5%. The SHAPE (linear in air yards,
 # zero at short) comes from the mechanism; this one scale is calibrated, which is the same
 # footing as SACK_BASE_RATE — a curve parameter, not the realized rate.
-PASS_DEPTH_SEPARATION_K = float(_os.environ.get('FLOOS_DEPTH_SEP_K', '0.90'))
+PASS_DEPTH_SEPARATION_K = float(_os.environ.get('FLOOS_DEPTH_SEP_K', '0.70'))
+# ⚠️ RE-DERIVED 0.90 -> 0.70 when INT_OPEN_DECAY replaced the hard openness knee. The
+# SHAPE argument above is untouched — separation still decays linearly in air yards —
+# but this scale was calibrated against the deep pick rate THROUGH the old gate, and a
+# continuous gate reads the same arrival gap as far more risk. Left at 0.90 the deep
+# tier picked 6.85% against its matched-band 5.5%. Re-measure it whenever the gates move.
 
 # ---- Contact: can the receiver get his hands on it? (Play.calculateCatchProbability) ----
 # A logistic in throw quality, replacing a piecewise form whose slope fell from 1.6 to 0.45

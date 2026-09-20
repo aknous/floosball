@@ -50,6 +50,7 @@ from constants import (
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
+    INT_OPEN_DECAY, INT_THROW_DECAY,
     LEAGUE_COVERAGE_BASELINE, PASS_COVERAGE_DISRUPTION_K, PASS_COVERAGE_BASELINE_SLOPE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
@@ -18458,8 +18459,22 @@ class Play():
         # ~75) otherwise compounds the pick rate every season; centering on 80 keeps the INT contribution
         # league-relative so the rate holds as attributes climb. Feeds pBadRead + pBadThrow below.
         covFactor = 0.80 + (cov - 80) / 100 * 0.5
-        openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
-        throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
+        # ⚠️ THESE WERE HARD KNEES SITTING IN THE MIDDLE OF THEIR OWN DISTRIBUTIONS. They
+        # read `max(0, 50 - openness)/50` and `max(0, 55 - throwQuality)/55`, so risk
+        # switched off COMPLETELY above those points — and the thrown population lives
+        # above them. Measured: the ball goes to the most open man 88% of the time at a
+        # mean openness of 65.4, so the openness gate opened on 23% of short and 25% of
+        # medium throws and the throw gate on 2% and 8%. Interceptions came out
+        # 0.7 / 0.8 / 2.1 / 6.1 by tier against the NFL's 1.2 / 2.5 / 4.2 / 5.5 — nearly
+        # flat below the deep tier, because for three throws in four the model had already
+        # decided a pick was impossible.
+        # Continuous decay instead: risk falls smoothly with separation and with placement
+        # and never reaches zero, because no receiver is so open and no ball so perfectly
+        # placed that a defender cannot make a play on it. The decay constants are set so
+        # a BLANKETED receiver keeps roughly the risk he had before — this lengthens the
+        # tail, it does not re-level the floor.
+        openGap = math.exp(-max(0.0, intOpenness) / INT_OPEN_DECAY)      # ~0 open … 1 blanketed
+        throwGap = math.exp(-max(0.0, throwQuality) / INT_THROW_DECAY)   # ~0 sharp … 1 errant
         # Proximity: how reachable the ball is for a defender. Full effect when
         # the receiver is blanketed, fades toward zero once he's wide open
         # (≥75). The floor is tier-dependent: a short throw can be genuinely
