@@ -102,6 +102,19 @@ class TheCostModel(unittest.TestCase):
         self.assertLess(constants.NO_HUDDLE_IQ_SPREAD, 6)
 
 
+# ⚠️ DERIVED, NOT A LITERAL. This was `clock=14`, chosen when a no-huddle snap cost
+# ~6 + 5 + 2 = 13s. Adding DEAD_BALL_ADMIN_SECONDS to what a running-clock snap costs
+# pushed that boundary past 14 and the test failed — correctly, since the snap really did
+# get more expensive. The CLAIM being pinned is unchanged and is a comparison, not a
+# number: a clock where the cheap no-huddle snap fits and the full huddle does not. Sitting
+# between the two costs keeps it true whatever the components are.
+_NO_HUDDLE_COST = (constants.NO_HUDDLE_PRESNAP_SECS + constants.LAST_SNAP_LIVE_SECS
+                   + constants.FINAL_SNAP_SECS + constants.DEAD_BALL_ADMIN_SECONDS)
+_HUDDLE_COST = (constants.LAST_SNAP_HUDDLE_SECS + constants.LAST_SNAP_LIVE_SECS
+                + constants.FINAL_SNAP_SECS + constants.DEAD_BALL_ADMIN_SECONDS)
+BETWEEN_THE_TWO_COSTS = (_NO_HUDDLE_COST + _HUDDLE_COST) // 2
+
+
 class TheLastSnapHelperReadsTheTempo(unittest.TestCase):
     """⚠️ The chess-clock fix (2026-08-13) already made this helper tempo-aware in ITS
     branch, while the standard branch kept charging a flat 12s whatever the offense was
@@ -110,13 +123,13 @@ class TheLastSnapHelperReadsTheTempo(unittest.TestCase):
 
     def testItChargesTheNoHuddleCostNotTheHuddle(self):
         # No timeouts and a running clock is the branch that pays a huddle.
-        g = drill(clock=14, timeouts=0)
+        g = drill(clock=BETWEEN_THE_TWO_COSTS, timeouts=0)
         self.assertTrue(g._isNoHuddle())
         self.assertFalse(g._lastSnapBeforeBreak(),
-                         'at 14s a no-huddle snap plus the live ball still fits')
+                         'a no-huddle snap plus the live ball still fits here')
 
     def testAHuddlingOffenseStillPaysTheHuddle(self):
-        g = drill(clock=14, timeouts=0)
+        g = drill(clock=BETWEEN_THE_TWO_COSTS, timeouts=0)
         original = constants.NO_HUDDLE_ENABLED
         try:
             constants.NO_HUDDLE_ENABLED = False

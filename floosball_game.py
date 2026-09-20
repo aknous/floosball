@@ -50,7 +50,7 @@ from constants import (
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
-    INT_OPEN_DECAY, INT_THROW_DECAY,
+    INT_OPEN_DECAY, INT_THROW_DECAY, DEAD_BALL_ADMIN_SECONDS,
     LEAGUE_COVERAGE_BASELINE, PASS_COVERAGE_DISRUPTION_K, PASS_COVERAGE_BASELINE_SLOPE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
@@ -2183,8 +2183,15 @@ class Game:
         # own (much smaller) pre-snap time rather than a flat huddle.
         canStopClock = (not self.clockRunning) or timeoutsLeft > 0
         if not canStopClock:
-            secs -= (self._noHuddlePreSnapSecs() if self._isNoHuddle()
-                     else LAST_SNAP_HUDDLE_SECS)
+            # ⚠️ DEAD-BALL ADMINISTRATION COUNTS AGAINST THE PLAY COUNT TOO. The pre-snap
+            # block charges DEAD_BALL_ADMIN_SECONDS on every running-clock snap, so a snap
+            # genuinely costs that much more than its huddle. Omitting it here is the same
+            # defect this helper was fixed for once already — it used to charge the FIRST
+            # snap no pre-snap time at all — and it fails the same way: a cost model that
+            # disagrees with what a snap actually costs reports room for a play that does
+            # not fit.
+            secs -= ((self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                      else LAST_SNAP_HUDDLE_SECS) + DEAD_BALL_ADMIN_SECONDS)
             if secs <= FINAL_SNAP_SECS:
                 return 0
         plays = 0
@@ -2200,7 +2207,10 @@ class Game:
                 spikesAvailable -= 1
                 secs -= 5
             else:
-                secs -= 18
+                # Running clock between snaps, so this one pays the administration too —
+                # unlike the timeout and spike branches above, which STOP the clock and
+                # therefore cannot be charged it.
+                secs -= 18 + DEAD_BALL_ADMIN_SECONDS
         return plays
 
     def _isNoHuddle(self) -> bool:
@@ -2333,6 +2343,9 @@ class Game:
                     need = float(huddle or 0)
                 except Exception:
                     need = float(LAST_SNAP_HUDDLE_SECS)
+                # The pre-snap block charges dead-ball administration on every
+                # running-clock snap, so the budget a snap really costs includes it.
+                need += DEAD_BALL_ADMIN_SECONDS
             else:
                 need = 0.0
             return secs < need + LAST_SNAP_LIVE_SECS
@@ -2350,8 +2363,13 @@ class Game:
             # doing. Overcharging here makes the helper declare the LAST snap early, which
             # ends drives that had another play in them — the exact failure the chess-clock
             # version was fixed for, in the opposite direction.
-            need += (self._noHuddlePreSnapSecs() if self._isNoHuddle()
-                     else LAST_SNAP_HUDDLE_SECS)
+            # ⚠️ Plus the administration the pre-snap block charges on a running clock.
+            # Paid in the SAME branch as the huddle and for the same reason: if the offense
+            # can stop the clock it spends a timeout instead, and a stopped clock is charged
+            # neither. Under-stating the cost here declares the last snap LATE, which is how
+            # a half expires with the offense still thinking it had one more.
+            need += ((self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                      else LAST_SNAP_HUDDLE_SECS) + DEAD_BALL_ADMIN_SECONDS)
         return secs < need
 
     def leadEaseOffFactor(self) -> float:
@@ -2620,7 +2638,12 @@ class Game:
         # preserving the possession BUDGET, which no amount of tempo can do.
         if (self._isNoHuddle() and getattr(self.format, 'key', '') != 'chess_clock'):
             from constants import LAST_SNAP_LIVE_SECS
-            if self.gameClockSeconds > self._noHuddlePreSnapSecs() + LAST_SNAP_LIVE_SECS:
+            # ⚠️ Plus dead-ball administration: this runs just ABOVE the pre-snap block that
+            # charges it, so "does the snap still fit without a timeout" has to include it.
+            # Leave it out and the offense declines the timeout for a snap that no longer
+            # fits — the failure this safety net exists to prevent.
+            if self.gameClockSeconds > (self._noHuddlePreSnapSecs() + LAST_SNAP_LIVE_SECS
+                                        + DEAD_BALL_ADMIN_SECONDS):
                 return
         # Chess clock: the possession budget IS the offense's clock and a timeout
         # skips the huddle drain, so PRESERVING budget kicks in earlier (a wider
@@ -10180,6 +10203,28 @@ class Game:
                     # would otherwise burn the clock (may set clockRunning False).
                     self._maybeCallTimeoutToSaveSnap()
                 if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+                    # ⚠️ DEAD-BALL ADMINISTRATION — THE CLOCK THIS SIM HAS NO SYSTEM FOR.
+                    # A real game spends time between snaps that no play accounts for, and
+                    # overwhelmingly that is PENALTIES: measured over 1,424 NFL games, 11.9
+                    # flags a game at 24.8s each = 295s, 8% of the game clock. This sim has
+                    # none, so that time went into extra snaps instead — 74.5 a team-game
+                    # against the NFL's 68.5, and the surplus (6.0) matched what the penalty
+                    # clock buys (6.1) to within 2%.
+                    # ⚠️ IT IS A STAND-IN, NOT A MODEL: no flag, no yardage, no replayed
+                    # down. It exists so every downstream rate is measured against a
+                    # realistic number of snaps. Delete it the day penalties are built.
+                    # ⚠️ RUNNING CLOCK ONLY — time cannot come off a stopped clock, which is
+                    # also what real football does (a stoppage holds until the snap). That
+                    # is ~56% of snaps, so the charge is ~3.7s to average the 2.1s per snap
+                    # the measurement calls for.
+                    # ⚠️ FLAT, NOT LUMPY, ON PURPOSE. Real penalties are ~25s on 9% of
+                    # snaps; firing that would put a visible 25-second hole in the feed with
+                    # no flag to explain it, which reads as a bug. Spread thin it is
+                    # invisible and sums to the same clock.
+                    if DEAD_BALL_ADMIN_SECONDS:
+                        self.consumeGameTime(DEAD_BALL_ADMIN_SECONDS)
+                        if self.gameClockSeconds <= 0:
+                            break
                     preSnapTime = self.calculatePreSnapTime()
                     # Frames: don't AWARD a frame while the pre-snap huddle drains the clock
                     # (the snap hasn't happened yet). Deferring the award to the play's own

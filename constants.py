@@ -1429,6 +1429,46 @@ PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75,
 # zero at short) comes from the mechanism; this one scale is calibrated, which is the same
 # footing as SACK_BASE_RATE — a curve parameter, not the realized rate.
 PASS_DEPTH_SEPARATION_K = float(_os.environ.get('FLOOS_DEPTH_SEP_K', '0.70'))
+
+# ---- Dead-ball administration (Game.playGame pre-snap block) ----
+# ⚠️ THE CLOCK THIS SIM HAS NO SYSTEM FOR. A real game spends time between snaps that no
+# play accounts for, and overwhelmingly that is PENALTIES: measured over 1,424 NFL games,
+# 11.9 flags a game at 24.8s each = 295s, 8% of the game clock. Floosball has no penalties,
+# so that time went into extra SNAPS instead — 74.5 a team-game against the NFL's 68.5,
+# and the surplus (6.0 snaps) matched what the penalty clock buys (6.1) to within 2%.
+# ⚠️ THIS IS A STAND-IN, NOT A MODEL — no flag, no yardage, no replayed down. It exists so
+# that completion, yards per attempt, interception rate and scoring are all measured
+# against a realistic number of snaps rather than 13% too many. DELETE IT the day penalties
+# are built, and re-measure everything downstream.
+# ⚠️ Charged only when the game clock is RUNNING (~56% of snaps), because time cannot come
+# off a stopped clock — which is also what real football does, since a stoppage holds until
+# the snap. Hence ~3.7s per charge to average the 2.1s per snap the measurement calls for.
+# ⚠️ Do NOT reach for the huddle (`_classifyTempoIntent`'s DEFAULT_BASE) instead. Snap-to-
+# snap on a running clock already matches the NFL at ~38s; inflating it would break a
+# correct number to compensate for a missing system.
+# ⚠️ WHOLE SECONDS — `gameClockSeconds` is an integer formatted with `:02d`, so a
+# fractional charge turns the game clock into a float and breaks every clock display.
+#
+# ⚠️ 2 IS DELIBERATELY SHORT OF THE MEASURED 4, AND THAT IS A JUDGEMENT, NOT AN
+# OVERSIGHT (owner call, 2026-09-20). The penalty clock asks for ~3.7s per
+# running-clock snap, i.e. 4 on the nearest tick. At 4 the snap count lands (63.8
+# scrimmage plays a team-game against the NFL's 61.7) and SCORING GETS WORSE, falling
+# to 42.7 against real football's 45.2 — further off than the 46.3 it started at.
+# TWO ERRORS HAD BEEN CANCELLING: this charge removes snaps and DRIVES together
+# (plays per drive holds at ~6.7 across the whole sweep), so at correct volume the sim
+# gets 10.5 drives against the NFL's 11.0 and scores less for want of possessions, not
+# for want of efficiency — points per drive measures 2.03 against 2.05.
+#   runoff  scrim plays   drives   points        (500 games an arm)
+#      0        69.4       11.3     46.3
+#      2        66.7       11.0     45.3     <- here: drives and points both land
+#      4        63.8       10.5     42.7     <- volume lands, scoring does not
+#    NFL        61.7       11.0     45.2
+# ⚠️ SO THE REAL RESIDUAL IS DRIVE LENGTH: 6.7 plays a drive against 6.2. Shorten
+# those (drives ending sooner — three-and-outs, turnovers) and drives return to 11.0,
+# which puts BOTH volume and scoring right and lets this go to its measured 4. Until
+# then 2 keeps the scoring honest at the cost of leaving volume ~8% high; do not read
+# it as the penalty clock, it is 57% of it.
+DEAD_BALL_ADMIN_SECONDS = int(_os.environ.get('FLOOS_DEAD_BALL_SECS', '2'))
 # ⚠️ RE-DERIVED 0.90 -> 0.70 when INT_OPEN_DECAY replaced the hard openness knee. The
 # SHAPE argument above is untouched — separation still decays linearly in air yards —
 # but this scale was calibrated against the deep pick rate THROUGH the old gate, and a
