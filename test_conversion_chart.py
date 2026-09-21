@@ -47,7 +47,22 @@ def goRate(deficit, trials=200):
     """Share of trials the post-TD decision takes a go-rung. `deficit` is measured AFTER
     the touchdown is banked, which is the state `_chooseConversion` is handed."""
     go = 0
+    # ⚠️ SEEDING `random` IS NOT ENOUGH — `random_batch` BUFFERS DRAWS AHEAD OF TIME, so a
+    # seed set after the buffers are filled changes nothing and the result depends on
+    # whatever ran earlier in the file. Measured, that made this test fail about one run in
+    # five while the code under it was untouched. Clearing the caches forces them to refill
+    # from the freshly seeded stream, which is what makes the sampling reproducible.
     random.seed(3)
+    try:
+        import numpy as _np
+        _np.random.seed(3)          # the engine draws from BOTH streams
+    except Exception:
+        pass
+    try:
+        from random_batch import clear_all_batch_caches
+        clear_all_batch_caches()
+    except Exception:
+        pass
     for _ in range(trials):
         s.situation(quarter=4, clock=349, offense='home', offScore=0, defScore=int(deficit),
                     down=1, distance=10, ballOn=50)
