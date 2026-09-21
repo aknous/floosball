@@ -184,6 +184,32 @@ INT_BAD_READ_K = 0.175   # QB throws into coverage (actual openness × coverage)
 INT_BAD_THROW_K = 0.20   # errant ball (throw quality), gated by defender proximity
 INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 
+# ⚠️ CONTINUOUS DECAY, REPLACING TWO HARD KNEES (Play.calculateCatchProbability, 2026-09-20).
+# `openGap` was `max(0, 50 - openness)/50` and `throwGap` `max(0, 55 - throwQuality)/55`, so
+# both switched risk off COMPLETELY past those points — and the thrown population sits past
+# them: the ball goes to the most open man 88% of the time at a mean openness of 65.4, on a
+# scale `calculateReceiverOpenness` centres at 50. So the openness gate opened on 23% of
+# short and 25% of medium throws, the throw gate on 2% and 8%, and interceptions ran
+# 0.7 / 0.8 / 2.1 / 6.1 by tier against the NFL's 1.2 / 2.5 / 4.2 / 5.5 — flat where real
+# football climbs, because for most throws the model had ruled a pick out entirely.
+# `exp(-x / decay)` never reaches zero: no receiver is so open, and no ball so well placed,
+# that a defender cannot make a play on it.
+# ⚠️ CHOSEN SO A BLANKETED RECEIVER KEEPS THE RISK HE ALREADY HAD — 25 x ln2 = 36 would
+# reproduce the old half-way point exactly; the tuned values sit tighter so the added tail
+# is thin. This lengthens the tail; it does not re-level the floor. Tune against the TIER
+# SPREAD (the ratio deep:short ran 8.7x against a real 4.6x), never the league mean.
+# ⚠️ RE-MEASURED ON LIVE ROSTERS (25/40 -> 22/42). Fitted first on the synthetic pool,
+# these gave 2.81% on the real league against a 2.27% target — the third constant to
+# need this treatment, after the contact curve and the YAC gate. Trading openness decay
+# DOWN for throw decay UP also steepens the depth gradient, since the openness channel
+# is nearly depth-flat while throw quality is not.
+# ⚠️ THE GRADIENT HAS A CEILING AROUND 4.3x SHORT-TO-DEEP AGAINST REAL FOOTBALL'S 4.6x,
+# and four (open, throw) pairs across a wide range all landed there. Short stays ~0.3
+# over and deep ~0.5 over while medium and long run under; that shape is structural,
+# not a tuning miss, and pushing these two constants cannot fix it.
+INT_OPEN_DECAY = float(_os.environ.get('FLOOS_INT_OPEN_DECAY', '22.0'))
+INT_THROW_DECAY = float(_os.environ.get('FLOOS_INT_THROW_DECAY', '42.0'))
+
 # League coverage baseline — the value in-game pass coverage centers on (the
 # LEAGUE_COMPRESSION_MEAN target). Absolute coverage terms anchor here so they
 # don't creep as the league ages: an evolved league's compressed coverage drifts
@@ -211,7 +237,7 @@ LEAGUE_COVERAGE_BASELINE = 80
 # coverage term is what keeps the offense-vs-defense balance league-relative here.
 # Tuned on paired young-league (fresh) + mature (prod S12 resume) sims to hold
 # completion ~66-67% at BOTH ends.
-PASS_COVERAGE_DISRUPTION_K = 15      # x tier x (1-openness) x (coverage/100) -> contact loss
+PASS_COVERAGE_DISRUPTION_K = float(_os.environ.get('FLOOS_COV_K', '55'))   # x tier x (1-openness) x (coverage/100) -> contact loss
 PASS_COVERAGE_BASELINE_SLOPE = 1.9   # symmetric contact loss/gain per coverage point off the mean
 
 # Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
@@ -587,6 +613,66 @@ AUDIBLE_COACH_WEIGHT = 0.30
 # anyway. Measured, that takes the trap cell (bold + blind) from 6% of QBs to 26%.
 AUDIBLE_WILLINGNESS_BASE = 0.30   # a fully disciplined QB still checks sometimes
 AUDIBLE_WILLINGNESS_SWING = 0.55  # a gunslinger checks far more often
+# ⚠️ A CHECK HAS TO FIT THE SITUATION, NOT JUST THE BOX (2026-09-14). Willingness is scaled
+# down when the check lands on a call the caller's own weights argue against: a check into
+# a run on a down where the caller wanted 12% runs is taken at (0.12 / 0.5) ** exponent of
+# the usual rate. A check toward the situation's lean is never scaled. Measured against
+# NFL 2021-25: without it, audibles fired at a flat ~15% everywhere and ran 3rd & long a
+# quarter of the time.
+AUDIBLE_SITUATION_AWARE = True
+AUDIBLE_LEAN_EXPONENT = 1.0
+
+# ---- Protecting a Q4 lead (Game._protectLeadShift) ----
+# Log-odds of passing drop by SHIFT_MAX * exp(-secondsLeft / TAU) * leadScale * the
+# coach's clock-IQ scale (0.7-1.0, 0.85 for a neutral coach). Fitted to NFL 2021-25:
+# ~0.5 with 10-15 min left, ~1.3 at 5-10, ~2.5 at 2-5, 3.5-4.4 inside 2:00, on EVERY down.
+LEAD_PROTECT_SHIFT_MAX = 5.65
+LEAD_PROTECT_TAU_SECS = 330.0
+LEAD_PROTECT_LEAD_POINTS = [1, 3, 8, 16]
+LEAD_PROTECT_LEAD_SCALE = [0.8, 0.8, 0.95, 1.15]
+# ---- Chasing two scores in Q4 (the mirror) ----
+# Log-odds of passing RISE by TRAIL_SHIFT_MAX * ramp * clock-IQ band (0.7-1.0) when down
+# more than one score in Q4 outside the final 2:00; ramp runs from Q4_START at 15:00 to 1
+# at 0:00. Fitted so the league lands near the NFL's 80% pass rate there (was 63-67%).
+TRAIL_SHIFT_MAX = 1.75
+TRAIL_SHIFT_Q4_START = 0.4
+
+# ---- Normal-game 4th down (Game._fourthDownGoProbability / _fourthDownKickShare) ----
+# Go-for-it base rates from NFL 2021-25 (standard game, outside the last 5:00 of each half,
+# within two scores), smoothed: FOURTH_GO_TABLE[i][j] is the go rate at FOURTH_GO_YTG[i]
+# yards to go and FOURTH_GO_YTE[j] yards to the end zone, interpolated in both directions.
+# ⚠️ The peak for 4th & 2+ sits at the opponent's 30-45 (too far for an easy kick, too
+# close to punt) and it FALLS in the red zone, where the short field goal is the play.
+# The sim converts 4th & 1 more often than the NFL (76% vs 70%), so matching the NFL's
+# aggressiveness is, if anything, conservative for sim teams.
+FOURTH_GO_YTE = [5, 15, 25, 35, 42.5, 47.5, 53.5, 61, 68.5, 76, 85, 95]
+FOURTH_GO_YTG = [1, 2, 3, 4, 5.5, 8, 12, 18]
+FOURTH_GO_TABLE = [
+    # One fitting pass against the REALIZED go rate (the score and aggressiveness shifts
+    # inflate small base rates, since the NFL numbers already average over the score);
+    # three sparse own-end cells smoothed back in line with their neighbours.
+    [0.868, 0.851, 0.835, 0.937, 0.961, 0.926, 0.710, 0.478, 0.280, 0.170, 0.040, 0.030],  # 4th & 1
+    [0.480, 0.515, 0.441, 0.560, 0.787, 0.430, 0.195, 0.088, 0.026, 0.020, 0.005, 0.005],  # 4th & 2
+    [0.287, 0.188, 0.213, 0.483, 0.661, 0.247, 0.053, 0.033, 0.007, 0.003, 0.002, 0.000],  # 4th & 3
+    [0.139, 0.101, 0.137, 0.439, 0.506, 0.133, 0.052, 0.031, 0.014, 0.010, 0.002, 0.000],  # 4th & 4
+    [0.034, 0.006, 0.020, 0.202, 0.263, 0.063, 0.021, 0.004, 0.008, 0.006, 0.004, 0.000],  # 4th & 5-6
+    [0.012, 0.004, 0.020, 0.044, 0.092, 0.026, 0.020, 0.005, 0.005, 0.005, 0.003, 0.000],  # 4th & 7-9
+    [0.005, 0.004, 0.009, 0.030, 0.023, 0.009, 0.006, 0.005, 0.003, 0.003, 0.001, 0.002],  # 10-15
+    [0.005, 0.010, 0.010, 0.010, 0.005, 0.003, 0.002, 0.002, 0.002, 0.002, 0.002, 0.002],  # 16+
+]
+FOURTH_GO_SCORE_POINTS = [-16, -9, -4, 0, 4, 9, 16]
+FOURTH_GO_SCORE_SHIFT = [1.5, 1.2, 0.5, 0.0, -0.2, -0.6, -0.9]
+FOURTH_GO_AGGR_K = 0.8            # log-odds swing from a timid (-1) to a bold (+1) coach
+# Kick-vs-punt when not going: logistic in the kicker's make probability, centred on
+# FOURTH_KICK_MID (offset by the coach's FG threshold). Fitted through the sim's median
+# kicker to the NFL's 52-58 yard cliff.
+FOURTH_KICK_MID = 0.61
+FOURTH_KICK_SCALE = 0.043
+# The sim's median kicker's make curve (measured over the harness league), and the range
+# beyond which he cannot kick at all. Used to recover the kick share the NFL go table
+# implicitly assumes, so the go rate can be conditioned on THIS team's kicker.
+FOURTH_TYPICAL_FG_DIST = [20, 45, 50, 52, 54, 56, 58, 60]
+FOURTH_TYPICAL_FG_PROB = [0.99, 0.90, 0.79, 0.73, 0.66, 0.59, 0.50, 0.41]
 
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
@@ -1278,6 +1364,184 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
 # air yards is really a short throw -- which held league aDOT at 6.29 against a
 # real-world ~7.8 and made every completion tiny.
+# ---- Pass difficulty by depth (Play.calculateThrowQuality / calculateCatchProbability) ----
+# THROW: multiplier on the QB's throw quality for each tier (a deep ball is harder to
+# place). CATCH: how much tight coverage disrupts the catch for each tier (a deep ball
+# gives defenders longer to converge). Keyed by PassType name.
+# ⚠️ THE DEEP BALL WAS TOO GOOD, NOT JUST TOO RARE (2026-09-14). Against NFL 2021-25 by
+# air yards, sim deep throws completed 58% (NFL 33%) for 15.9 yards an attempt (NFL 11.9)
+# and long throws 66% (NFL 52%) for 12.4 (NFL 10.7), while coaches rarely called them —
+# two errors that cancelled for scoring. Calling deeper alone added 3-4 points a game, so
+# long 0.80 -> 0.65 and deep 0.65 -> 0.43 were fitted so each tier's yards per attempt
+# lands on the NFL's. PASS_TIER_DISRUPTION barely moves completion (coverage rarely binds
+# in that formula) and is left as it was.
+# ⚠️ THE LADDER IS NOT EVEN PER AIR YARD, AND MY ARGUMENT THAT IT SHOULD BE WAS WRONG.
+# `medium` was set to 0.875 on the reasoning that difficulty should fall at a constant rate
+# per air yard (the short->medium rung was running at half the slope of the two above it).
+# That is tidy and the DATA refuses it: real completion falls FASTEST in the first rung —
+# 73.9% to 59.3% over 4.9 air yards is 2.98 points a yard, against 0.77 for medium->long
+# and 1.80 for long->deep. Going from a flick to a throw the underneath defender can drive
+# on is the biggest single step in difficulty on the field; 17 to 27 yards is mostly arm.
+# So an even ladder UNDER-separates exactly where reality separates most, and medium sat at
+# 64.1% complete against 59.3 through three other levers. 0.82.
+# ⚠️ IT IS OVER-DETERMINED, WHICH IS WHY IT IS NOT JUST A FIT: the same move takes medium's
+# completion down, its yards per attempt from 7.45 to 7.14 against a 7.1 target, and its
+# interception rate UP toward 2.5 — three independent measurements, one constant.
+# ⚠️ IT COSTS ~2 POINTS OF SCORING (45.0 -> 43.5 against real football's 45.2), accepted as
+# a deliberate trade for per-tier fidelity (owner, 2026-09-20). The per-tier completion
+# error falls 1.75 -> 1.28. Medium still runs ~2.5 points high and is the one residual that
+# has resisted every lever tried.
+PASS_TYPE_DIFFICULTY = {'short': 1.00,
+                        'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.82')),
+                        'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
+# ⚠️ LEFT ALONE ON PURPOSE, AND THE ATTEMPT IS WORTH RECORDING. When
+# PASS_DEPTH_SEPARATION_K dropped 0.90 -> 0.70 (to keep deep's pick rate right under the
+# new continuous gates) long came out completing 55.0% against 52.6. Raising long here
+# fixes that number and was reverted for two reasons. First it inverts the ladder — long
+# 1.30 above deep 1.22 — and disruption rising with depth is the whole claim this table
+# makes; `test_catch_model.py` refuses it. Second, and the real objection: this ladder and
+# `PASS_DEPTH_SEPARATION_K` MODEL THE SAME PHYSICAL THING, defenders converging on a
+# longer throw. Now that the separation decay exists, steepening this on top of it charges
+# depth twice — the identical error that had deep balls scored as badly thrown in the YAC
+# multiplier. The long tier's residual (completion +2.4, interceptions 3.50 against 4.2)
+# belongs to its arrival gap or its throw quality, not here.
+# ⚠️ `short` 0.40 IS A FLOOR THE TESTS ENFORCE, and lowering it was tried and refused.
+# Short completes 71.5% against real football's 73.9 at matched depth, and dropping
+# this to 0.18 lands that exactly AND takes overall completion to 64.1 and scoring to
+# 44.0 — but it leaves coverage worth 7.1 contact points across the entire range from
+# blanketed to wide open, which `test_catch_model.py` refuses at a floor of 14. That
+# test exists because this model's recurring defect is exactly a dial going flat where
+# it is used most. The short residual stays until something other than a coverage dial
+# explains it — most likely the missing screen game, since real football's short bucket
+# includes throws at and behind the line that this sim cannot make.
+PASS_TIER_DISRUPTION = {'short': float(_os.environ.get('FLOOS_TD_SHORT', '0.40')), 'medium': 0.75,
+                        'long': float(_os.environ.get('FLOOS_TD_LONG', '1.00')),
+                        'deep': float(_os.environ.get('FLOOS_TD_DEEP', '1.15')),
+                        'hailMary': 1.30}
+
+# ---- Separation decays with route depth (Play.calculateReceiverOpenness) ----
+# ⚠️ A 3-YARD HITCH AND A 27-YARD POST DREW FROM THE SAME SEPARATION DISTRIBUTION.
+# `calculateReceiverOpenness` took only (receiver, coverage) and carried no depth term at
+# all, and `calculateCatchProbability`'s comment justified the omission — "No per-tier
+# multiplier: deep throws already pick more because their throw quality runs lower". That
+# assumption fails, because the bad-throw pick path is gated on `throwQuality < 55` and a
+# short or medium throw never reaches it: measured, interceptions ran 0.7 / 0.6 / 0.8 /
+# 2.7 by tier against the NFL's 1.0 / 2.3 / 4.0 / 6.5, i.e. essentially FLAT where real
+# football climbs steeply. The same omission sat under the other half — deep completions
+# 45.5% against 33.4% — because a receiver modelled as equally open is equally catchable.
+#
+# THE MECHANISM IS TIME, NOT TIER. A defender closes for as long as the ball is in the
+# air, and flight time scales with air yards, so separation at the catch point falls with
+# DEPTH. Hence a penalty linear in air yards over the short tier (0 at short by
+# construction, since short completions were already right at 76.5% against 74.8%) rather
+# than a per-tier table, which would assert four numbers where the mechanism gives one.
+#
+# ⚠️ IT CARRIES THE PICKS AND NOT THE COMPLETIONS, AND THAT WAS TESTED RATHER THAN ASSUMED.
+# Openness reaches interceptions through `openGap` (`max(0, 50 - openness) / 50`, steep)
+# and completions through `coverageDisruption`, which spans only `PASS_COVERAGE_DISRUPTION_K
+# x tierMult` — about 14 points of contact probability across the ENTIRE range from
+# blanketed to wide open on a deep ball. So a K sweep moves picks hard and completions
+# barely: measured over 500 games an arm, deep INT 2.0 -> 3.8 -> 6.4 across K 0 / 0.55 /
+# 1.00 while deep completion went 45.1 -> 45.3 -> 42.3 against a target of 34.6. One
+# constant was expected to land both (they ride separate expressions, so landing both would
+# have been over-determined and good evidence); it does not, so this is HALF the story and
+# the completion half is still open — the lever there is the weak coverage->catch channel,
+# not this. Do not raise K past the pick target to chase completions; it cannot get there.
+#
+# ⚠️ CALIBRATED AGAINST A MATCHED AIR-YARD BAND, NOT THE NFL'S `deep` BUCKET. This sim's
+# deep tier is a POINT at 27 air yards while the NFL's is an open-ended 22+ band whose
+# 41-yard bombs complete 27%, so the raw bucket (33.4% / 6.5%) flatters the gap. The
+# comparable NFL population is 24-30 air yards: 34.6% complete, 5.5% picked, 11.1 yards an
+# attempt. The sim already gains 12.2 an attempt there, so the deep ball's EXPECTED VALUE
+# was never the problem — its shape was.
+#
+# ⚠️ It also feeds `selectPassTarget`, which reads openness to pick the man, so making deep
+# routes less open makes the QB take the checkdown MORE often. The call -> throw transfer
+# matrix therefore MOVES when this moves, and any depth shape fitted against the old matrix
+# is stale. Re-measure the matrix before re-deriving PLAY_CALL_BASE_ROWS.
+# 0.90 puts deep interceptions on the matched band's 5.5%. The SHAPE (linear in air yards,
+# zero at short) comes from the mechanism; this one scale is calibrated, which is the same
+# footing as SACK_BASE_RATE — a curve parameter, not the realized rate.
+PASS_DEPTH_SEPARATION_K = float(_os.environ.get('FLOOS_DEPTH_SEP_K', '0.70'))
+
+# ---- Dead-ball administration (Game.playGame pre-snap block) ----
+# ⚠️ THE CLOCK THIS SIM HAS NO SYSTEM FOR. A real game spends time between snaps that no
+# play accounts for, and overwhelmingly that is PENALTIES: measured over 1,424 NFL games,
+# 11.9 flags a game at 24.8s each = 295s, 8% of the game clock. Floosball has no penalties,
+# so that time went into extra SNAPS instead — 74.5 a team-game against the NFL's 68.5,
+# and the surplus (6.0 snaps) matched what the penalty clock buys (6.1) to within 2%.
+# ⚠️ THIS IS A STAND-IN, NOT A MODEL — no flag, no yardage, no replayed down. It exists so
+# that completion, yards per attempt, interception rate and scoring are all measured
+# against a realistic number of snaps rather than 13% too many. DELETE IT the day penalties
+# are built, and re-measure everything downstream.
+# ⚠️ Charged only when the game clock is RUNNING (~56% of snaps), because time cannot come
+# off a stopped clock — which is also what real football does, since a stoppage holds until
+# the snap. Hence ~3.7s per charge to average the 2.1s per snap the measurement calls for.
+# ⚠️ Do NOT reach for the huddle (`_classifyTempoIntent`'s DEFAULT_BASE) instead. Snap-to-
+# snap on a running clock already matches the NFL at ~38s; inflating it would break a
+# correct number to compensate for a missing system.
+# ⚠️ WHOLE SECONDS — `gameClockSeconds` is an integer formatted with `:02d`, so a
+# fractional charge turns the game clock into a float and breaks every clock display.
+#
+# ⚠️ 2 IS DELIBERATELY SHORT OF THE MEASURED 4, AND THAT IS A JUDGEMENT, NOT AN
+# OVERSIGHT (owner call, 2026-09-20). The penalty clock asks for ~3.7s per
+# running-clock snap, i.e. 4 on the nearest tick. At 4 the snap count lands (63.8
+# scrimmage plays a team-game against the NFL's 61.7) and SCORING GETS WORSE, falling
+# to 42.7 against real football's 45.2 — further off than the 46.3 it started at.
+# TWO ERRORS HAD BEEN CANCELLING: this charge removes snaps and DRIVES together
+# (plays per drive holds at ~6.7 across the whole sweep), so at correct volume the sim
+# gets 10.5 drives against the NFL's 11.0 and scores less for want of possessions, not
+# for want of efficiency — points per drive measures 2.03 against 2.05.
+#   runoff  scrim plays   drives   points        (500 games an arm)
+#      0        69.4       11.3     46.3
+#      2        66.7       11.0     45.3     <- here: drives and points both land
+#      4        63.8       10.5     42.7     <- volume lands, scoring does not
+#    NFL        61.7       11.0     45.2
+# ⚠️ SO THE REAL RESIDUAL IS DRIVE LENGTH: 6.7 plays a drive against 6.2. Shorten
+# those (drives ending sooner — three-and-outs, turnovers) and drives return to 11.0,
+# which puts BOTH volume and scoring right and lets this go to its measured 4. Until
+# then 2 keeps the scoring honest at the cost of leaving volume ~8% high; do not read
+# it as the penalty clock, it is 57% of it.
+DEAD_BALL_ADMIN_SECONDS = int(_os.environ.get('FLOOS_DEAD_BALL_SECS', '2'))
+# ⚠️ RE-DERIVED 0.90 -> 0.70 when INT_OPEN_DECAY replaced the hard openness knee. The
+# SHAPE argument above is untouched — separation still decays linearly in air yards —
+# but this scale was calibrated against the deep pick rate THROUGH the old gate, and a
+# continuous gate reads the same arrival gap as far more risk. Left at 0.90 the deep
+# tier picked 6.85% against its matched-band 5.5%. Re-measure it whenever the gates move.
+
+# ---- Contact: can the receiver get his hands on it? (Play.calculateCatchProbability) ----
+# A logistic in throw quality, replacing a piecewise form whose slope fell from 1.6 to 0.45
+# at exactly tq 70 — where 76% of throws land, since short averages 79 and medium 70.6. The
+# corner flattened the model precisely where it was used most and left those two tiers 3.8
+# contact points apart against a real 14.6-point completion gap.
+# ⚠️ TUNE THE CENTRE AND STEEPNESS AGAINST THE TIER SPREAD, NOT THE LEAGUE MEAN — the same
+# trap `SACK_PROB_CAP` documents. Raising the ceiling or dropping the centre lifts every
+# tier together and says nothing about whether a medium throw is harder than a short one,
+# which is the thing that was wrong.
+PASS_CONTACT_CEILING = float(_os.environ.get('FLOOS_CONTACT_CEIL', '99.0'))
+# ⚠️ CALIBRATED ON THE LIVE LEAGUE, NOT THE SYNTHETIC POOL (36.0 -> 32.0, 2026-09-20).
+# Fitted first against `scenario._makeTeam`'s pool, where QB accuracy has a standard
+# deviation of 5.6 against the real league's 11.2 — half the spread at nearly the same
+# mean. `baseContact` is a LOGISTIC, so a wider input spread changes the AVERAGE output
+# and not merely its variance: measured, the same constants gave 65.7% completion on
+# the synthetic pool and 61.5% on the season-7 roster, overshooting the 64.2% target
+# instead of landing on it. Re-measure with `playcall_nfl_check.py --db <copy>`.
+PASS_CONTACT_CENTER = float(_os.environ.get('FLOOS_CONTACT_MID', '32.0'))
+PASS_CONTACT_STEEPNESS = float(_os.environ.get('FLOOS_CONTACT_K', '0.050'))
+# Reach helps most on a ball that is badly placed; these are the ends of the old 0.05 /
+# 0.4 / 0.7 band ladder, now ramped continuously by how errant the throw is.
+PASS_REACH_WEIGHT_SHARP = 0.05
+PASS_REACH_WEIGHT_ERRANT = 0.70
+
+# Share of a depth tier's weight that survives with NO field left at all
+# (Game._applyFieldDepthGate). Not zero, because a tier mean is the centre of a band and
+# the shallow end of `deep` still fits from the 20 — the NFL throws deep 3.3% of the time
+# inside 27 yards against 10.7% beyond it, and 0.0% inside the 20.
+FIELD_DEPTH_GATE_FLOOR = 0.15
+# Perception bonus the QB gives the route at the CALLED depth on a long or deep call (the
+# progression starts with the concept that was called). Perception only.
+PASS_CALLED_DEPTH_READ_BONUS = 15.0
+
 PASS_DEPTH_MEANS = {
     'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.35')),
     'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.25')),
@@ -1298,32 +1562,144 @@ PASS_DEPTH_MEANS = {
 # play could travel 10 yards through the air and still be the shorter gain. Big
 # plays should come from genuine downfield throws. Tightening the short tiers and
 # lengthening the deep air bands REDISTRIBUTES yardage rather than adding it.
+# ⚠️ `fallForward` IS ONLY RAISED FOR **DEEP**, AND A RISING LADDER WAS WRONG. It was first
+# set 1.0/1.5/2.2/4.2 on the reasoning that forward progress scales with how fast the
+# receiver is already moving. That reasoning is sound and the DATA is not monotonic: real
+# YAC runs 4.04 / 3.26 / 4.13 / 5.69, DIPPING at medium, because a short throw is caught in
+# space with blockers (screens, slants) while a 6-10 yard throw is caught in coverage. A
+# rising ladder therefore pushed medium and long OVER (3.97 and 4.84 against 3.26 and 4.13)
+# while only deep had ever been short. Narrowed to deep alone: per-tier error 0.59 -> 0.26,
+# and scoring recovered 43.0 -> 45.0.
+# ⚠️ `fallForward` IS THE STAGE THAT WAS NOT PER TIER, AND IT IS THE ONE THAT DOMINATES A
+# DEEP CATCH. Every other stage here has always been tier-scaled; gate A's FAIL branch — the
+# receiver tackled by the man covering him — drew `normal(1.0, 1.0)` against a flat cap for
+# every tier alike. But that branch is forward progress at contact, and progress scales with
+# how fast the receiver is already moving: a man catching a screen is nearly stationary,
+# while one catching a 27-yard go route is at full speed with the defender trailing him.
+# Measured on live rosters, 37% of deep completions gained NOTHING after the catch and deep
+# YAC came to 2.71 against real football's 5.69 — the largest single gap in the passing
+# model, and not a field-position artifact: those completions average 32.9 yards of room
+# against the NFL's 28.3, and only 10% are capped by the end zone.
 YAC_TIER_CAPS = {
     'short':  {'pass': int(_os.environ.get('FLOOS_YACC_S_P', '4')),
                'bFail': int(_os.environ.get('FLOOS_YACC_S_B', '5')),
-               'house': int(_os.environ.get('FLOOS_YACC_S_H', '7'))},
+               'house': int(_os.environ.get('FLOOS_YACC_S_H', '7')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_S', '1.0')), 'failCap': 3},
     'medium': {'pass': int(_os.environ.get('FLOOS_YACC_M_P', '6')),
                'bFail': int(_os.environ.get('FLOOS_YACC_M_B', '8')),
-               'house': int(_os.environ.get('FLOOS_YACC_M_H', '10'))},
-    'long':   {'pass': 6, 'bFail': 12, 'house': 14},
-    'deep':   {'pass': 6, 'bFail': 15, 'house': 14},
+               'house': int(_os.environ.get('FLOOS_YACC_M_H', '10')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_M', '1.0')), 'failCap': 4},
+    'long':   {'pass': 6, 'bFail': 12, 'house': 14,
+               'fallForward': float(_os.environ.get('FLOOS_YACF_L', '1.4')), 'failCap': 5},
+    # ⚠️ DEEP'S CEILINGS SHOULD EXCEED LONG'S, and they did not — `pass` and `house` were
+    # identical to the tier below. A receiver who catches at 17 yards and slips the tackler
+    # still has a safety in front of him; one who catches at 27 has broken through the
+    # coverage, which is why real YAC is HIGHEST on deep balls (5.69) rather than tapering.
+    'deep':   {'pass': int(_os.environ.get('FLOOS_YACC_D_P', '8')),
+               'bFail': int(_os.environ.get('FLOOS_YACC_D_B', '15')),
+               'house': int(_os.environ.get('FLOOS_YACC_D_H', '16')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_D', '3.8')), 'failCap': 7},
 }
-YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '22'))
-YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '45'))
+YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '32'))
+YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '55'))
 YAC_GATE_A_FAIL_CAP = int(_os.environ.get('FLOOS_YAC_FAILCAP', '3'))
 # throwQuality -> YAC multiplier. Average league throw quality is ~66.6, so the
 # 60-79 band is the one that matters most for league-wide YAC.
 YAC_THROW_MULT = {
     'elite': float(_os.environ.get('FLOOS_YACM_ELITE', '1.0')),   # >= 80
-    'good': float(_os.environ.get('FLOOS_YACM_GOOD', '0.75')),    # 60-79
-    'poor': float(_os.environ.get('FLOOS_YACM_POOR', '0.45')),    # 40-59
+    'good': float(_os.environ.get('FLOOS_YACM_GOOD', '0.95')),    # 60-79
+    'poor': float(_os.environ.get('FLOOS_YACM_POOR', '0.65')),    # 40-59
     'bad': float(_os.environ.get('FLOOS_YACM_BAD', '0.20')),      # < 40
 }
 # 1st-down run weight -- the single biggest lever on the league pass/run split
-# (most plays happen on 1st down). 50 = the balanced base; raising it cuts pass
+# (most plays happen on 1st down). 55 is fitted to the NFL's 46% 1st & 10 pass rate
+# (2026-09-14; was 50); raising it cuts pass
 # attempts, which is what makes room for longer completions without inflating
 # total yardage.
-FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '50'))
+FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '55'))
+
+# ---- Base play-call table (read by Game._getBasePlayWeights) ----
+# {row: [(maxYardsToGo, runWeight, (short, medium, long, deep)), ...]}, first matching
+# row wins. Row 1 is 1st down, row 3 is the LAST down before the final one (3rd of 4,
+# 2nd of 3, 4th of 5), row 2 is every down in between.
+#
+# ⚠️ TWO DIALS PER ROW, KEPT APART ON PURPOSE. `runWeight` (out of 100) sets run vs pass;
+# the tuple is only the SHAPE of the passing game and is rescaled to fill whatever the
+# run weight leaves. So retuning the run/pass split cannot move the depth mix and
+# vice versa — the depth rows are separately being reworked.
+#
+# ⚠️ THESE ARE WEIGHTS BEFORE EVERY MODIFIER LAYER, NOT TARGET RATES. The situational,
+# matchup, coach, gameplan and audible layers all act after this, so a row's realized
+# pass rate is not 100 - runWeight. Fit them against the REALIZED rate (see the harness
+# notes in the 2026-09-14 play-calling audit) or they will drift off the target.
+PLAY_CALL_BASE_ROWS = {
+    # ⚠️ DEPTH SHAPES ARE SOLVED, NOT FITTED (2026-09-20). Each row's tuple is the NFL's
+    # OPEN-FIELD throw mix for that same down and distance, run backwards through the
+    # measured call -> throw matrix: a called tier does not always get thrown, because
+    # `_selectPassPlay` draws a play and the QB then reads THAT PLAY'S routes, so a deep
+    # call comes out deep 73% of the time and the rest checks down. That transfer is a
+    # deliberate model, it is measurable, and it inverts (condition number 1.6), so the
+    # rows are `NFL_shape @ inv(M)` rather than a multiplier turned until the output
+    # matched. Re-measure M and re-solve if anything touches the read or the play pools.
+    #
+    # ⚠️ EVERY ROW'S PASS TOTAL IS PRESERVED TO THE DECIMAL, which is what makes this safe:
+    # pass rate is `sum(tuple) / (runWeight + sum(tuple))`, so redistributing INSIDE the
+    # tuple cannot move the down-and-distance fit those run weights were fitted for.
+    #
+    # ⚠️ WHAT THE OLD SHAPES GOT WRONG WAS THE CONCEPT, NOT THE CALIBRATION. They treated
+    # DEEP as the distance-chasing tier — 0.0 on 2nd & 1-3 and 3rd & 1-6, scaling up with
+    # yards needed. Real football is the opposite: deep is FLAT at 7-11% of throws in every
+    # bucket measured (2nd & 1 is 9.1%, 3rd & 1 is 8.5%), because a shot is a coverage
+    # question and a defense squatting on the sticks is when it is most available. LONG is
+    # the tier that chases distance (13.2% at 3rd & 1 to 21.1% at 3rd & 10) and SHORT is
+    # its mirror (61.5% down to 35.8%). Measured, the sim threw deep on 0.0% of 1-3 to go
+    # against the NFL's 7.6%, and 2.1% on 3rd down against 10.6%.
+    #
+    # ⚠️ AND A HARD ZERO IS WHY THE PREVIOUS PASS MISSED IT ENTIRELY: that correction was
+    # multiplicative (deep x2.8), and 2.8 x 0 is 0, so it was a no-op in exactly the five
+    # rows with the worst deficit. Long, never zero, landed on its target; deep stalled at
+    # 4.0% against 9.3%. Prefer absolute shapes here over multipliers for that reason.
+    #
+    # ⚠️ FIELD POSITION IS NOT IN THIS TABLE AND MUST NOT BE PUT BACK IN. These rows
+    # describe an OPEN FIELD; `Game._applyFieldDepthGate` applies the one geometric limit
+    # (a 27-yard route needs 27 yards) once, so the goal-to-go rows below carry the same
+    # shape as any other and are gated by where the ball is, not by what down it is.
+    # Fitted 2026-09-14: two passes of run-the-harness / move-each-row-by-the-log-odds-gap,
+    # after audibles learned the situation. Realized pass rate by down & distance now sits
+    # within ~1 point of NFL 2021-25 on average (was 15.5). Trailing comment = NFL target
+    # pass rate for that bucket (one-score games, not the last 2:00 of a half).
+    1: [
+        (1, 68.0, (24.5, 6.6, 13.1, 9.7)),    # 1st & goal from the 1       21%
+        (3, 66.0, (24.5, 6.6, 13.1, 9.7)),    # 1st & goal, 2-3             28%
+        (6, 64.5, (24.5, 6.6, 13.1, 9.7)),    # 1st & goal, 4-6             28%
+        (9, 64.0, (24.5, 6.6, 13.1, 9.7)),    # 1st & goal, 7-9             30%
+        (99, FIRST_DOWN_RUN_WEIGHT, (24.7, 6.7, 13.0, 9.5)),   #            46%
+    ],
+    2: [
+        (1, 78.0, (18.1, 5.0, 10.3, 8.5)),    # 2nd & 1                     22%
+        (2, 67.0, (19.6, 5.4, 10.2, 6.7)),    # 2nd & 2                     30%
+        (3, 64.0, (19.3, 6.2, 8.8, 7.6)),    # 2nd & 3                     36%
+        (6, 50.0, (26.8, 8.3, 12.6, 8.3)),    # 2nd & 4-6                   50%
+        (9, 27.0, (26.9, 9.1, 12.0, 8.0)),    # 2nd & 7-9                   70%
+        # ⚠️ 2nd & 10 runs MORE than 2nd & 7-9 in the NFL (63% vs 70% pass), and that is
+        # not a fitting artifact: it usually follows an incompletion on 1st down, and
+        # offenses balance back. Don't "smooth" it.
+        (10, 35.0, (43.1, 16.2, 20.3, 14.2)),  # 2nd & 10                    63%
+        (99, 15.0, (43.3, 15.5, 21.2, 13.8)),  # 2nd & 11+                   82%
+    ],
+    3: [
+        # ⚠️ 3rd & 1, 2 and 3 are THREE DIFFERENT PLAYS in the NFL (22% / 61% / 79% pass).
+        # The old table lumped them into one 60-run row, which made 3rd & 1 too pass-heavy
+        # and 3rd & 3 badly too run-heavy at the same time.
+        (1, 77.0, (18.5, 5.9, 9.0, 8.0)),     # 3rd & 1                     23%
+        (2, 35.0, (19.7, 7.4, 8.1, 6.2)),     # 3rd & 2                     61%
+        (3, 16.0, (18.8, 7.5, 7.6, 7.5)),     # 3rd & 3                     79%
+        (6, 6.0, (25.8, 16.2, 18.7, 14.5)),     # 3rd & 4-6                   93%
+        (9, 2.0, (25.2, 21.0, 26.2, 21.0)),    # 3rd & 7-9                   97%
+        (15, 3.0, (30.0, 11.7, 28.7, 23.0)),   # 3rd & 10-15                 96%
+        (99, 6.0, (70.8, 14.3, 29.0, 27.1)),   # 3rd & 16+ (too rare to fit) 86%
+    ],
+}
 
 # ---- Run Gate Model (three stages with carrier momentum) ----
 # A carry is three contests: the line, the second level, the open field. What
@@ -3371,6 +3747,24 @@ CONVERSION_GO_AGGRESSION     = 1.3       # master multiplier on the whole chart 
 # dampened since it's earlier and a miss has more time to hurt.
 CONVERSION_GO_Q3_DAMPEN      = 0.55
 
+# ── Conversion by win value (Game._chooseConversionByValue, standard games) ────
+# Per-possession outcome rates for the win model, [nothing, FG, TD, TD] — the two touchdown
+# entries are summed, because the conversion after a FUTURE touchdown is chosen by the
+# model itself. From the sim's own drives (~11 per team a game: ~24% end in a touchdown,
+# ~12% in a made field goal). Uses the sim's REAL two-point make rate (~70%, vs the NFL's ~48%), which is
+# why the chart comes out more aggressive than the NFL's (owner, 2026-09-14).
+CONVERSION_DRIVE_ODDS = (0.64, 0.12, 0.22, 0.02)
+CONVERSION_SECS_PER_DRIVE = 165.0     # regulation seconds per drive, both teams combined
+CONVERSION_TRAIL_SECS_PER_DRIVE = 150.0   # a trailing team's hurry-up drive, for counting the drives it can still get
+CONVERSION_CHASE_WIN_BELOW = 0.10     # below this win chance a trailing team weighs edges relative to its odds
+CONVERSION_VALUE_MIN_GAIN = 0.005     # win-chance edge below which the kick is automatic
+CONVERSION_VALUE_BASE = 0.35          # go probability at the smallest real edge ...
+CONVERSION_VALUE_GAIN_SCALE = 20.0    # ... rising 20 pts per point of win chance gained
+# Quarters where the value model decides; standard games kick before that. Q4 only
+# (owner, 2026-09-14): at a ~70% make rate the model would otherwise go for two on
+# nearly every touchdown whenever plenty of game is left.
+CONVERSION_VALUE_QUARTERS = (4,)
+
 # ── Innings: conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md) ──────
 # In the innings format a TD whose TOP conversion (the max-value 'go' rung — the 2-pt
 # when the ladder is off, the longest rung when it's on) is MADE keeps the at-bat alive
@@ -4068,7 +4462,12 @@ RETURN_BREAKAWAY_MEAN = 18       # mean EXTRA yards a breakaway adds (exponentia
                                  # field — so a breakaway rarely reaches the end zone
                                  # unless the recovery was already deep (keeps TDs rare)
 RETURN_INT_SPOT_BY_DEPTH = {     # where an INT is caught (air yards), by pass depth
-    'short': (0, 6), 'medium': (4, 14), 'long': (10, 28), 'hailMary': (15, 45),
+    # ⚠️ 'deep' WAS MISSING, so every deep pick fell through to the caller's (0, 8) default
+    # and was spotted at the line rather than 27 yards downfield — the deepest throw in the
+    # game returned the WORST field position of any interception. Harmless only while deep
+    # picks were rare; it scales with the deep INT rate.
+    'short': (0, 6), 'medium': (4, 14), 'long': (10, 28), 'deep': (18, 38),
+    'hailMary': (15, 45),
 }
 
 # ── Blocked kicks (FG / punt) ───────────────────────────────────────────────
