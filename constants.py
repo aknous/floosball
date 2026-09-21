@@ -198,8 +198,17 @@ INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 # reproduce the old half-way point exactly; the tuned values sit tighter so the added tail
 # is thin. This lengthens the tail; it does not re-level the floor. Tune against the TIER
 # SPREAD (the ratio deep:short ran 8.7x against a real 4.6x), never the league mean.
-INT_OPEN_DECAY = float(_os.environ.get('FLOOS_INT_OPEN_DECAY', '25.0'))
-INT_THROW_DECAY = float(_os.environ.get('FLOOS_INT_THROW_DECAY', '40.0'))
+# ⚠️ RE-MEASURED ON LIVE ROSTERS (25/40 -> 22/42). Fitted first on the synthetic pool,
+# these gave 2.81% on the real league against a 2.27% target — the third constant to
+# need this treatment, after the contact curve and the YAC gate. Trading openness decay
+# DOWN for throw decay UP also steepens the depth gradient, since the openness channel
+# is nearly depth-flat while throw quality is not.
+# ⚠️ THE GRADIENT HAS A CEILING AROUND 4.3x SHORT-TO-DEEP AGAINST REAL FOOTBALL'S 4.6x,
+# and four (open, throw) pairs across a wide range all landed there. Short stays ~0.3
+# over and deep ~0.5 over while medium and long run under; that shape is structural,
+# not a tuning miss, and pushing these two constants cannot fix it.
+INT_OPEN_DECAY = float(_os.environ.get('FLOOS_INT_OPEN_DECAY', '22.0'))
+INT_THROW_DECAY = float(_os.environ.get('FLOOS_INT_THROW_DECAY', '42.0'))
 
 # League coverage baseline — the value in-game pass coverage centers on (the
 # LEAGUE_COMPRESSION_MEAN target). Absolute coverage terms anchor here so they
@@ -1366,8 +1375,24 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # long 0.80 -> 0.65 and deep 0.65 -> 0.43 were fitted so each tier's yards per attempt
 # lands on the NFL's. PASS_TIER_DISRUPTION barely moves completion (coverage rarely binds
 # in that formula) and is left as it was.
+# ⚠️ THE LADDER IS NOT EVEN PER AIR YARD, AND MY ARGUMENT THAT IT SHOULD BE WAS WRONG.
+# `medium` was set to 0.875 on the reasoning that difficulty should fall at a constant rate
+# per air yard (the short->medium rung was running at half the slope of the two above it).
+# That is tidy and the DATA refuses it: real completion falls FASTEST in the first rung —
+# 73.9% to 59.3% over 4.9 air yards is 2.98 points a yard, against 0.77 for medium->long
+# and 1.80 for long->deep. Going from a flick to a throw the underneath defender can drive
+# on is the biggest single step in difficulty on the field; 17 to 27 yards is mostly arm.
+# So an even ladder UNDER-separates exactly where reality separates most, and medium sat at
+# 64.1% complete against 59.3 through three other levers. 0.82.
+# ⚠️ IT IS OVER-DETERMINED, WHICH IS WHY IT IS NOT JUST A FIT: the same move takes medium's
+# completion down, its yards per attempt from 7.45 to 7.14 against a 7.1 target, and its
+# interception rate UP toward 2.5 — three independent measurements, one constant.
+# ⚠️ IT COSTS ~2 POINTS OF SCORING (45.0 -> 43.5 against real football's 45.2), accepted as
+# a deliberate trade for per-tier fidelity (owner, 2026-09-20). The per-tier completion
+# error falls 1.75 -> 1.28. Medium still runs ~2.5 points high and is the one residual that
+# has resisted every lever tried.
 PASS_TYPE_DIFFICULTY = {'short': 1.00,
-                        'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.875')),
+                        'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.82')),
                         'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
 # ⚠️ LEFT ALONE ON PURPOSE, AND THE ATTEMPT IS WORTH RECORDING. When
 # PASS_DEPTH_SEPARATION_K dropped 0.90 -> 0.70 (to keep deep's pick rate right under the
@@ -1380,7 +1405,16 @@ PASS_TYPE_DIFFICULTY = {'short': 1.00,
 # depth twice — the identical error that had deep balls scored as badly thrown in the YAC
 # multiplier. The long tier's residual (completion +2.4, interceptions 3.50 against 4.2)
 # belongs to its arrival gap or its throw quality, not here.
-PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75,
+# ⚠️ `short` 0.40 IS A FLOOR THE TESTS ENFORCE, and lowering it was tried and refused.
+# Short completes 71.5% against real football's 73.9 at matched depth, and dropping
+# this to 0.18 lands that exactly AND takes overall completion to 64.1 and scoring to
+# 44.0 — but it leaves coverage worth 7.1 contact points across the entire range from
+# blanketed to wide open, which `test_catch_model.py` refuses at a floor of 14. That
+# test exists because this model's recurring defect is exactly a dial going flat where
+# it is used most. The short residual stays until something other than a coverage dial
+# explains it — most likely the missing screen game, since real football's short bucket
+# includes throws at and behind the line that this sim cannot make.
+PASS_TIER_DISRUPTION = {'short': float(_os.environ.get('FLOOS_TD_SHORT', '0.40')), 'medium': 0.75,
                         'long': float(_os.environ.get('FLOOS_TD_LONG', '1.00')),
                         'deep': float(_os.environ.get('FLOOS_TD_DEEP', '1.15')),
                         'hailMary': 1.30}
@@ -1549,8 +1583,14 @@ YAC_TIER_CAPS = {
                'fallForward': float(_os.environ.get('FLOOS_YACF_M', '1.5')), 'failCap': 4},
     'long':   {'pass': 6, 'bFail': 12, 'house': 14,
                'fallForward': float(_os.environ.get('FLOOS_YACF_L', '2.2')), 'failCap': 5},
-    'deep':   {'pass': 6, 'bFail': 15, 'house': 14,
-               'fallForward': float(_os.environ.get('FLOOS_YACF_D', '3.0')), 'failCap': 7},
+    # ⚠️ DEEP'S CEILINGS SHOULD EXCEED LONG'S, and they did not — `pass` and `house` were
+    # identical to the tier below. A receiver who catches at 17 yards and slips the tackler
+    # still has a safety in front of him; one who catches at 27 has broken through the
+    # coverage, which is why real YAC is HIGHEST on deep balls (5.69) rather than tapering.
+    'deep':   {'pass': int(_os.environ.get('FLOOS_YACC_D_P', '9')),
+               'bFail': int(_os.environ.get('FLOOS_YACC_D_B', '15')),
+               'house': int(_os.environ.get('FLOOS_YACC_D_H', '18')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_D', '4.2')), 'failCap': 7},
 }
 YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '32'))
 YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '55'))
