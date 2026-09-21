@@ -33,6 +33,12 @@ def _stubKneel(self):
 Play.runPlay = _stubRunPlay
 Play.passPlay = _stubPassPlay
 Play.kneel = _stubKneel
+# The normal-game go-for-it now runs through the regular play path (so a 4th & short can
+# sneak); stub that path too, since these teams are stubs with no ratings to weigh.
+Game._computePlayWeights = lambda self, scoreDiff, coach: {}
+def _stubWeightedPlay(self, weights, targetSideline=False):
+    self.play.playType = PlayType.Run
+Game._executeWeightedPlay = _stubWeightedPlay
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

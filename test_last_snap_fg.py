@@ -44,11 +44,16 @@ logging.disable(logging.CRITICAL)
 import managers  # noqa: F401  — breaks the floosball_game circular import
 import floosball_game as fg
 from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
-                       LAST_SNAP_LIVE_SECS)
+                       LAST_SNAP_LIVE_SECS, DEAD_BALL_ADMIN_SECONDS)
 
 
+# ⚠️ A RUNNING-CLOCK SNAP ALSO PAYS DEAD-BALL ADMINISTRATION, so the window is wider than
+# the huddle plus the ball. Derived, never hardcoded: this file exists because the cost
+# model and what a snap ACTUALLY costs drifted apart once before (the helper used to charge
+# the first snap no pre-snap time at all), and a literal here would hide the next drift.
+# The stopped-clock window is unchanged — nothing is charged against a stopped clock.
 STOPPABLE = LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS                       # ~7s
-RUNNING = STOPPABLE + LAST_SNAP_HUDDLE_SECS                            # ~19s
+RUNNING = STOPPABLE + LAST_SNAP_HUDDLE_SECS + DEAD_BALL_ADMIN_SECONDS  # ~21s
 
 
 class StubGame:
@@ -156,8 +161,9 @@ class ChessClockSnapCostTests(unittest.TestCase):
         return g
 
     def testARunningClockPaysTheHuddleAndTheBall(self):
-        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE
-        need = NEU + LIVE
+        from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE,
+                               DEAD_BALL_ADMIN_SECONDS as ADMIN)
+        need = NEU + LIVE + ADMIN   # the budget pays the administration too
         self.assertTrue(self._game(need - 1, NEU)._lastSnapBeforeBreak())
         self.assertFalse(self._game(need + 1, NEU)._lastSnapBeforeBreak())
 

@@ -1,7 +1,7 @@
 """Sideline Goals play-calling regression suite (built on scenario.Scenario).
 
 Locks in the down/score-aware hoop-shot decision (floosball_game
-_shouldAttemptHoopShot / _hoopPointsNeeded / _hoopScoreWinsNow):
+_shouldAttemptHoopShot / _hoopPointsNeeded / _offensiveScoreWinsNow):
   - a hoop shot consumes the down with no yardage, so NEVER on the final down and
     normally NOT on the penultimate down either;
   - late and trailing/tied, when a hoop point bridges a FG/TD to a tie/lead, the

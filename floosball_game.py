@@ -50,6 +50,7 @@ from constants import (
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
+    INT_OPEN_DECAY, INT_THROW_DECAY, DEAD_BALL_ADMIN_SECONDS,
     LEAGUE_COVERAGE_BASELINE, PASS_COVERAGE_DISRUPTION_K, PASS_COVERAGE_BASELINE_SLOPE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
@@ -820,10 +821,20 @@ passPlayBook = {
                             'rb': None
                         }
                     },
+                    # ⚠️ wr1 IS THE LONG ROUTE, and was `medium` from this play's first
+                    # commit (460fe8b) — the only play in the whole book with no route at
+                    # its own pool's tier. It sits in the `long` pool and declares a long
+                    # dropback, so it was STRICTLY DOMINATED: `rushDifferential` charges
+                    # `(dropback - 1) * 2`, i.e. +6 against a medium play's +2, so it paid
+                    # four points of extra sack exposure to throw the medium pool's routes.
+                    # At 1 of 7 long plays it also made a called long come out `medium`
+                    # unconditionally — roughly half of the measured 29% long downgrade.
+                    # wr1 fills the pool's one gap: Play5 and Play19 are an identical
+                    # wr2-long-plus-TE-checkdown pair and nothing was the wr1 mirror.
                     'Play20': {
                         'dropback': QbDropback.long,
                         'targets': {
-                            'wr1': PassType.medium,
+                            'wr1': PassType.long,
                             'wr2': None,
                             'te': PassType.medium,
                             'rb': None
@@ -899,6 +910,22 @@ def flairOf(player) -> float:
     xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
     raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
     return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+
+
+def _depthClosing(passType) -> float:
+    """Separation a defender takes back while the ball is in the air, in openness points.
+
+    ONE definition, because it is subtracted in `calculateReceiverOpenness` (the catch is
+    contested at the arrival gap) and added back in `selectPassTarget` (the QB reads the
+    break, before any of it happens). Two copies would drift and the QB would silently
+    become clairvoyant, or blind, about the closing. Zero at the short tier and for any
+    route with no depth (a screen, a checkdown with no PassType).
+    """
+    from constants import PASS_DEPTH_MEANS as _PDM, PASS_DEPTH_SEPARATION_K as _K
+    name = getattr(passType, 'name', None)
+    if name not in _PDM:
+        return 0.0
+    return _K * max(0.0, _PDM[name] - _PDM['short'])
 
 
 def _rnd(value) -> int:
@@ -2156,8 +2183,15 @@ class Game:
         # own (much smaller) pre-snap time rather than a flat huddle.
         canStopClock = (not self.clockRunning) or timeoutsLeft > 0
         if not canStopClock:
-            secs -= (self._noHuddlePreSnapSecs() if self._isNoHuddle()
-                     else LAST_SNAP_HUDDLE_SECS)
+            # ⚠️ DEAD-BALL ADMINISTRATION COUNTS AGAINST THE PLAY COUNT TOO. The pre-snap
+            # block charges DEAD_BALL_ADMIN_SECONDS on every running-clock snap, so a snap
+            # genuinely costs that much more than its huddle. Omitting it here is the same
+            # defect this helper was fixed for once already — it used to charge the FIRST
+            # snap no pre-snap time at all — and it fails the same way: a cost model that
+            # disagrees with what a snap actually costs reports room for a play that does
+            # not fit.
+            secs -= ((self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                      else LAST_SNAP_HUDDLE_SECS) + DEAD_BALL_ADMIN_SECONDS)
             if secs <= FINAL_SNAP_SECS:
                 return 0
         plays = 0
@@ -2173,7 +2207,10 @@ class Game:
                 spikesAvailable -= 1
                 secs -= 5
             else:
-                secs -= 18
+                # Running clock between snaps, so this one pays the administration too —
+                # unlike the timeout and spike branches above, which STOP the clock and
+                # therefore cannot be charged it.
+                secs -= 18 + DEAD_BALL_ADMIN_SECONDS
         return plays
 
     def _isNoHuddle(self) -> bool:
@@ -2306,6 +2343,9 @@ class Game:
                     need = float(huddle or 0)
                 except Exception:
                     need = float(LAST_SNAP_HUDDLE_SECS)
+                # The pre-snap block charges dead-ball administration on every
+                # running-clock snap, so the budget a snap really costs includes it.
+                need += DEAD_BALL_ADMIN_SECONDS
             else:
                 need = 0.0
             return secs < need + LAST_SNAP_LIVE_SECS
@@ -2323,8 +2363,13 @@ class Game:
             # doing. Overcharging here makes the helper declare the LAST snap early, which
             # ends drives that had another play in them — the exact failure the chess-clock
             # version was fixed for, in the opposite direction.
-            need += (self._noHuddlePreSnapSecs() if self._isNoHuddle()
-                     else LAST_SNAP_HUDDLE_SECS)
+            # ⚠️ Plus the administration the pre-snap block charges on a running clock.
+            # Paid in the SAME branch as the huddle and for the same reason: if the offense
+            # can stop the clock it spends a timeout instead, and a stopped clock is charged
+            # neither. Under-stating the cost here declares the last snap LATE, which is how
+            # a half expires with the offense still thinking it had one more.
+            need += ((self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                      else LAST_SNAP_HUDDLE_SECS) + DEAD_BALL_ADMIN_SECONDS)
         return secs < need
 
     def leadEaseOffFactor(self) -> float:
@@ -2593,7 +2638,12 @@ class Game:
         # preserving the possession BUDGET, which no amount of tempo can do.
         if (self._isNoHuddle() and getattr(self.format, 'key', '') != 'chess_clock'):
             from constants import LAST_SNAP_LIVE_SECS
-            if self.gameClockSeconds > self._noHuddlePreSnapSecs() + LAST_SNAP_LIVE_SECS:
+            # ⚠️ Plus dead-ball administration: this runs just ABOVE the pre-snap block that
+            # charges it, so "does the snap still fit without a timeout" has to include it.
+            # Leave it out and the offense declines the timeout for a snap that no longer
+            # fits — the failure this safety net exists to prevent.
+            if self.gameClockSeconds > (self._noHuddlePreSnapSecs() + LAST_SNAP_LIVE_SECS
+                                        + DEAD_BALL_ADMIN_SECONDS):
                 return
         # Chess clock: the possession budget IS the offense's clock and a timeout
         # skips the huddle drain, so PRESERVING budget kicks in earlier (a wider
@@ -2661,6 +2711,29 @@ class Game:
         # score, so the exception is not needed there.
         if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
             if not self._leadIsAboutToEvaporate(defScore - offScore):
+                return
+            # ⚠️ IN OVERTIME THERE MAY BE NO ANSWER TO BUY AT ANY CLOCK READING, which
+            # the seconds floor below cannot express. Once the offense is past the first
+            # guaranteed possession, ANY score ends the game — so a tied-or-leading
+            # defense that stops the clock is not saving time for a reply it will never
+            # get, it is handing the clock back to an offense that only has to reach
+            # kicking range. Measured over a real season: 2 fires a season, both tied in
+            # OT with the offense already in range, and in both the game ended on the
+            # very next scoring play with the defense never snapping the ball again.
+            #
+            # ⚠️ NOT "never in overtime". While the offense is on the FIRST OT possession
+            # a field goal does not win, so the defense IS guaranteed the ball and the
+            # timeout is legitimate — the exact mirror of `isFirstPoss` in the OT play
+            # caller. ⚠️ And TRAILING is untouched here as everywhere else in this rule.
+            #
+            # ⚠️ ASK ABOUT THE THREAT THIS RULE ACTUALLY REACTED TO, mirroring the two
+            # limbs above: inside the red-zone window it is a touchdown possession, else
+            # the kick. Asking with the wrong one suppresses a timeout that still buys a
+            # possession — measured, a defense up 7 with the offense on the 1 is a TIE if
+            # they score, so the game plays on and the answer is real.
+            threat = (self._oneScore() if self.yardsToEndzone <= LEAD_THREAT_TD_YARDS
+                      else self._fgValue())
+            if self._offensiveScoreWinsNow(threat):
                 return
             # ⚠️ AND THE TIME SAVED HAS TO BE USABLE. The exception above buys a
             # possession to win in regulation; below this floor there is no possession to
@@ -3666,6 +3739,64 @@ class Game:
                     'medium' if self.yardsToFirstDown <= 12 else 'long'))
             return
 
+        # ── THE NORMAL-GAME 4TH DOWN: GO, KICK OR PUNT, ON ONE MODEL ──
+        # ⚠️ This used to be a tree of ~20 branches, each rolling its own threshold with
+        # its own idea of score and field position — a team trailing in the first half
+        # outside FG range NEVER went for it on 4th & 1, and inside the opponent's 40 a
+        # 55-yard kick was taken ~90% of the time. Against NFL 2021-25 the sim went for it
+        # on 4th & 1 in opponent territory 32-52% of the time (NFL 85-94%), on 4th & 2-3
+        # about half as often as the NFL, and kicked from 52-57 yards where NFL coaches
+        # mostly go or punt — while CONVERTING 4th & 1 more often than the NFL (76% vs 70%).
+        # Two fitted pieces now decide it: `_fourthDownGoProbability` (go or not) and
+        # `_fourthDownKickShare` (kick or punt, off THIS kicker's make probability, so a
+        # big leg genuinely earns longer tries). The late-game clock branches below still
+        # own the final 5:00 of Q4, the last minute of Q2 and overtime, where the decision
+        # is about the clock first; other formats keep their own strategy.
+        goProb = self._fourthDownGoProbability(scoreDiff, coach)
+        if goProb is not None:
+            kickShare = self._fourthDownKickShare(fgProb, fgThreshold, kickerMaxDistance, fgHelps)
+            self.play.insights['fourthDown'] = {
+                'decision': None, 'goProbability': round(goProb * 100, 1),
+                'kickShareIfNotGoing': round(kickShare * 100, 1),
+                'fgProbability': round(fgProb * 100, 1), 'inFgRange': inFieldGoalRange,
+                'yardsToEndzone': self.yardsToEndzone,
+                'coachAggr': coach.aggressiveness if coach else None,
+            }
+            if (chargedInRange and fgHelps and self.yardsToFirstDown > 2
+                    and self.yardsToEndzone > 8):
+                # A charged awakened kicker takes the free three (unchanged rule).
+                self.play.insights['fourthDown']['decision'] = 'chargedKick'
+                self.play.playType = PlayType.FieldGoal
+                return
+            # ⚠️ THE GO RATE IS CONDITIONED ON THIS TEAM'S KICK. The table is the NFL's go
+            # rate for a TYPICAL kicker at this spot; a team with no viable field goal goes
+            # for it more (the NFL goes on ~26-36% of its non-kick 4th & 7+ calls at the
+            # opponent's 36-40) and one with a big leg kicks more. So the table rate becomes
+            # the go SHARE of non-kick decisions for a typical kicker, applied to whatever
+            # this kicker leaves. A typical kicker reproduces the table exactly; with no kick
+            # inside field-goal range the share goes to 1, so "too close to punt" falls out.
+            typKick = self._typicalKickShare()
+            pKick = (1.0 - goProb) * kickShare
+            goShare = goProb / max(1e-6, 1.0 - (1.0 - goProb) * typKick)
+            pGo = min(1.0, goShare) * (1.0 - pKick)
+            self.play.insights['fourthDown']['goProbability'] = round(pGo * 100, 1)
+            roll = _random.random()
+            goes = roll < pGo
+            kicks = (not goes) and roll < pGo + pKick
+            if goes:
+                self.play.insights['fourthDown']['decision'] = 'goForIt'
+                # Through the normal play path, so a 4th & short gets the same concepts, QB
+                # sneak and audible as a 3rd & short. A bare runPlay() here never picked a
+                # concept, which meant a final-down sneak could not happen at all.
+                self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
+            elif kicks:
+                self.play.insights['fourthDown']['decision'] = 'fieldGoal'
+                self.play.playType = PlayType.FieldGoal
+            else:
+                self.play.insights['fourthDown']['decision'] = 'punt'
+                self.play.playType = PlayType.Punt
+            return
+
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
@@ -4065,43 +4196,105 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
 
+    def _fourthDownGoProbability(self, scoreDiff: int, coach) -> float:
+        """Chance the offense goes for it on this 4th down, or None where this model does
+        not decide it (other formats, the end-of-half clock windows, overtime).
+
+        The base comes from `FOURTH_GO_TABLE`, NFL 2021-25 go rates by yards to go and
+        yards to the end zone (smoothed). Its shape is the point: for 4th & 2+ the NFL
+        goes MOST between the opponent's 30 and 45 — too far for an easy kick, too close
+        to punt — and less in the red zone, where the short field goal is the percentage
+        play. Score and coach aggressiveness shift it in log-odds (the NFL goes on 4th &
+        1 in opponent territory 97% of the time trailing by 9+, 80% leading by 9+).
+        """
+        from constants import (FOURTH_GO_YTE, FOURTH_GO_YTG, FOURTH_GO_TABLE,
+                               FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT,
+                               FOURTH_GO_AGGR_K)
+        if getattr(self.format, 'key', 'standard') != 'standard':
+            return None
+        q, secs = self.currentQuarter, self.gameClockSeconds
+        if q >= 5 or (q == 4 and secs <= 300) or (q == 2 and secs <= 60):
+            return None
+        byYtg = [float(np.interp(self.yardsToEndzone, FOURTH_GO_YTE, row)) for row in FOURTH_GO_TABLE]
+        base = float(np.interp(self.yardsToFirstDown, FOURTH_GO_YTG, byYtg))
+        base = min(0.995, max(0.002, base))
+        shift = float(np.interp(scoreDiff, FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT))
+        aggrNorm = ((coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE) if coach else 0.0
+        logit = math.log(base / (1 - base)) + shift + FOURTH_GO_AGGR_K * aggrNorm
+        return 1.0 / (1.0 + math.exp(-logit))
+
+    def _fourthDownKickShare(self, fgProb: float, fgThreshold: float,
+                             kickerMaxDistance: float, fgHelps: bool) -> float:
+        """Given the offense is NOT going for it, the chance it kicks rather than punts.
+
+        ⚠️ KEYED ON THIS KICKER'S MAKE PROBABILITY, NOT ON DISTANCE. The NFL's kick share
+        when not going falls off a cliff between 52 and 58 yards (97% at 50-52, 60% at
+        54-56, 21% at 56-58, 3% at 58-60); run through the sim's median kicker that is a
+        logistic centred on a ~61% make chance, which a big leg reaches from further out.
+        The midpoint moves with `_coachFgThreshold`, so an aggressive coach and a kicker
+        who has been reliable today both stretch it, and a miss earlier makes a staff
+        more cautious — the personality the old hard cutoff carried."""
+        from constants import FOURTH_KICK_MID, FOURTH_KICK_SCALE
+        if not fgHelps or fgProb <= 0 or self.yardsToEndzone > kickerMaxDistance:
+            return 0.0
+        mid = FOURTH_KICK_MID + (fgThreshold - self.gameRules.fgMinAttemptProb)
+        return 1.0 / (1.0 + math.exp(-(fgProb - mid) / FOURTH_KICK_SCALE))
+
+    def _typicalKickShare(self) -> float:
+        """How often the sim's MEDIAN kicker would kick rather than punt from here, when
+        not going for it — the kicker the NFL go table implicitly assumes. See
+        `_fourthDownKickShare`; this is the same logistic on a median make curve."""
+        from constants import (FOURTH_TYPICAL_FG_DIST, FOURTH_TYPICAL_FG_PROB,
+                               FOURTH_KICK_MID, FOURTH_KICK_SCALE)
+        dist = self.yardsToEndzone + self.gameRules.fgSnapDistance
+        if dist > FOURTH_TYPICAL_FG_DIST[-1]:
+            return 0.0
+        p = float(np.interp(dist, FOURTH_TYPICAL_FG_DIST, FOURTH_TYPICAL_FG_PROB))
+        return 1.0 / (1.0 + math.exp(-(p - FOURTH_KICK_MID) / FOURTH_KICK_SCALE))
+
+    def _freshSeriesDistance(self) -> int:
+        """Yards to go for a new set of downs at the current spot: the rule's first-down
+        distance, or the goal line when that is closer. Read AFTER the spot is final."""
+        return max(1, min(int(self.gameRules.firstDownDistance), int(self.yardsToEndzone)))
+
     def _getBasePlayWeights(self) -> dict:
         """Return raw down/distance base weights before any modifier layers.
-        Tuned to land roughly 60/40 pass/run across a typical drive, which
-        is the NFL-realistic split. Previously was running 85/15 in games
-        with extended trailing — the base 1st-down and 2nd-and-medium
-        weights were too pass-heavy, compounding with situational pushes
-        to extinguish the run game.
+
+        Fitted so the REALIZED pass rate by down and distance lands on NFL 2021-25
+        play-by-play (2026-09-14). The old table lumped 3rd & 1 with 3rd & 3 and 2nd & 1
+        with 2nd & 4, which the NFL calls as different plays (3rd & 1 is 22% pass, 3rd &
+        2-3 is 70%), and ran 3rd & long 12-25% of the time against the NFL's 3-7%.
         """
+        # The table lives in constants (PLAY_CALL_BASE_ROWS) so the run/pass dial and the
+        # depth shape can be tuned separately — see the notes there.
+        #
+        # ⚠️ ROW 3 IS THE LAST DOWN BEFORE THE FINAL ONE, NOT LITERALLY 3RD DOWN.
+        # `downsPerSeries` is a votable rule (3 to 5), and the final down never reaches
+        # here (`_fourthDownCaller` owns it). At five downs, 3rd down still has a down in
+        # hand before the must-convert one and plays like a 2nd; at three downs, 2nd down
+        # IS the must-convert-soon down. At the default four this is exactly 1st / 2nd /
+        # 3rd, as before.
+        from constants import PLAY_CALL_BASE_ROWS
         ytg = self.yardsToFirstDown
-        if self.down == 1:
-            # 1st down: balanced 50/50 base. Most plays happen here, so
-            # this is the biggest lever on overall pass/run ratio.
-            from constants import FIRST_DOWN_RUN_WEIGHT as _FDR
-            return {'run': _FDR, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
-        elif self.down == 2:
-            if ytg <= 4:
-                # 2nd & short — run preferred (was already).
-                return {'run': 58.0, 'short': 28.0, 'medium': 10.0, 'long': 4.0, 'deep': 0.0}
-            elif ytg <= 9:
-                # 2nd & medium — closer to balanced, was 35/65 too pass-heavy.
-                return {'run': 45.0, 'short': 20.0, 'medium': 25.0, 'long': 9.0, 'deep': 1.0}
-            else:
-                # 2nd & long — obvious passing situation.
-                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
+        downs = int(getattr(self.gameRules, 'downsPerSeries', 4) or 4)
+        if self.down <= 1:
+            rowKey = 1
+        elif self.down >= downs - 1:
+            rowKey = 3
         else:
-            if ytg <= 3:
-                # 3rd & short — run is the percentage call.
-                return {'run': 60.0, 'short': 32.0, 'medium': 4.0, 'long': 4.0, 'deep': 0.0}
-            elif ytg <= 5:
-                # 3rd & medium-short — was 20% run, bump to 25%.
-                return {'run': 25.0, 'short': 45.0, 'medium': 21.0, 'long': 9.0, 'deep': 0.0}
-            elif ytg <= 12:
-                # 3rd & medium-long — still mostly pass but a draw is realistic.
-                return {'run': 12.0, 'short': 15.0, 'medium': 48.0, 'long': 23.0, 'deep': 2.0}
-            else:
-                # 3rd & extra long — almost always pass.
-                return {'run': 6.0, 'short': 10.0, 'medium': 15.0, 'long': 61.0, 'deep': 8.0}
+            rowKey = 2
+        rows = PLAY_CALL_BASE_ROWS[rowKey]
+        run, shape = rows[-1][1], rows[-1][2]
+        for maxYtg, rowRun, rowShape in rows:
+            if ytg <= maxYtg:
+                run, shape = rowRun, rowShape
+                break
+        passTotal = max(0.0, 100.0 - float(run))
+        shapeTotal = float(sum(shape)) or 1.0
+        weights = {'run': float(run)}
+        for key, part in zip(('short', 'medium', 'long', 'deep'), shape):
+            weights[key] = passTotal * float(part) / shapeTotal
+        return weights
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""
@@ -4113,6 +4306,7 @@ class Game:
         weights = self._applyGameplanMods(weights)
         weights = self._applyWeatherMods(weights)
         weights = self._applyAwakenedMods(weights)
+        weights = self._applyFieldDepthGate(weights)
         weights = self._applyDriveClockMods(weights, coach)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
@@ -4265,6 +4459,51 @@ class Game:
         weights['long'] = weights.get('long', 0) * max(0.3, 1 - 0.4 * bias)
         weights['deep'] = weights.get('deep', 0) * max(0.2, 1 - 0.6 * bias)
         return weights
+
+    def _protectLeadShift(self, scoreDiff: int, secs: float) -> float:
+        """How far a Q4 lead pulls the log-odds of passing down, before coach scaling.
+
+        ⚠️ THE OLD LAYERS WERE MULTIPLIERS ON THE RUN WEIGHT, AND THAT CAPS OUT. They
+        topped out near 2.7x, which takes 1st & 10 to ~73% runs but leaves 3rd & 8 at
+        ~68% pass, because a multiplier can only move a pass-heavy row so far. Measured
+        against NFL 2021-25, a leading team's pass rate falls by about the SAME LOG-ODDS
+        amount on every down as the clock runs: ~0.5 with 10-15 minutes left, ~1.3 at
+        5-10, ~2.5 at 2-5 and 3.5-4.4 inside two minutes. That takes 1st & 10 to 2% and
+        3rd & 8 to 28% — not zero, because a first down still ends the game. Scaling
+        every pass tier by exp(-shift) is exactly that shift, on any row, which a run
+        multiplier is not.
+
+        Bigger leads protect somewhat more (NFL, final 5:00: 33% pass up 1-3, 16% up 17+).
+        The caller multiplies by a clock-IQ scale of 0.7-1.0, so a poor clock manager
+        still protects less, which is the personality the old branches carried."""
+        from constants import (LEAD_PROTECT_SHIFT_MAX, LEAD_PROTECT_TAU_SECS,
+                               LEAD_PROTECT_LEAD_POINTS, LEAD_PROTECT_LEAD_SCALE)
+        if scoreDiff <= 0:
+            return 0.0
+        leadScale = float(np.interp(scoreDiff, LEAD_PROTECT_LEAD_POINTS, LEAD_PROTECT_LEAD_SCALE))
+        return LEAD_PROTECT_SHIFT_MAX * math.exp(-max(0.0, secs) / LEAD_PROTECT_TAU_SECS) * leadScale
+
+    def _leadProtectKeep(self, scoreDiff: int = None, coach=None) -> float:
+        """The factor a leading team's pass options are multiplied by late in Q4, 0-1.
+
+        exp(-shift) scales the log-odds of passing down by exactly `shift`, so every
+        route to a throw should use it — the play-call tiers AND the RPO, whose give-or-
+        throw choice happens after the weights and otherwise leaked ~30% of late-lead
+        passes back in. Coach-scaled on a narrower band than `sit`: inside two minutes
+        every NFL staff runs the clock, and averaging a poor clock manager's pass rate
+        in at 40% strength dragged the whole league's late-lead rate up."""
+        if self.currentQuarter < 4:
+            return 1.0
+        if scoreDiff is None:
+            isHome = self.offensiveTeam is self.homeTeam
+            scoreDiff = (self.homeScore - self.awayScore) * (1 if isHome else -1)
+        if scoreDiff <= 0:
+            return 1.0
+        if coach is None:
+            coach = getattr(self.offensiveTeam, 'coach', None)
+        shift = (self._protectLeadShift(scoreDiff, self.gameClockSeconds)
+                 * (0.7 + 0.3 * self._coachClockIQ(coach)))
+        return math.exp(-shift)
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
         """Apply game-state multipliers: quarter, score, clock, field position.
@@ -4423,33 +4662,17 @@ class Game:
                 # Cruise control — no adjustment, vulnerable to comeback
                 self._tallyCoachArchetype('leading_cruise')
 
-        # ── PROTECTING A ONE-SCORE LEAD late in Q4/OT ──
-        # The big-lead branch above only fires at 8+. A 1-7 point lead in the
-        # final minutes is exactly when a real coach runs the ball in-bounds to
-        # bleed clock and force the opponent to spend timeouts — incompletions
-        # would stop your own clock. Ramps as the clock winds down; coach-scaled
-        # via _mul so poor clock managers protect less.
-        elif 0 < scoreDiff <= self._oneScore() and q >= 4:
-            if secs <= 120:
-                protectUrgency = 1.0
-            elif secs <= 300:
-                protectUrgency = 0.6
-            else:
-                protectUrgency = 0.0
-            if protectUrgency > 0:
-                _mul('run',    1 + 0.7 * protectUrgency)
-                _mul('short',  1 + 0.2 * protectUrgency)
-                _mul('medium', 1 - 0.1 * protectUrgency)
-                _mul('long',   1 - 0.5 * protectUrgency)
-                _mul('deep',   1 - 0.7 * protectUrgency)
+        # (A one-score-lead Q4 branch used to sit here. It is folded into the
+        # lead-protection shift below, which covers every Q4 lead on one curve.)
 
         # ── LEAD-PROTECTION FLOOR (any Q4/OT lead) ──
         # Independent of coach archetype AND clock-IQ: no team should be chucking
         # deep with a 4th-quarter lead — an incompletion stops your OWN clock. The
         # branches above differentiate HOW WELL a coach drains (archetype) and how
-        # hard (clock-IQ via _mul); this guarantees a run lean + deep/long
-        # suppression for EVERYONE, ramping as the clock winds down. Uses _flat
-        # (no clock-IQ scaling) so even a poor clock-manager stops firing deep.
+        # hard (clock-IQ via _mul); this guarantees deep/long suppression for
+        # EVERYONE via _flat (no clock-IQ scaling, so even a poor clock-manager stops
+        # firing deep), plus the run lean from _protectLeadShift, which IS clock-IQ
+        # scaled.
         # Stacks on the mods above. Not Q2 — the half ends either way (handled
         # below); this is about protecting a lead, which only exists end-of-GAME.
         if scoreDiff > 2 * self._oneScore() and q == 3:
@@ -4463,12 +4686,30 @@ class Game:
             _mul('long',   0.7)
             _mul('deep',   0.6)
         if scoreDiff > 0 and q >= 4:
+            # The SHAPE of a leading team's passing game: shorter, never deep.
             floorUrg = 1.0 if secs <= 120 else (0.6 if secs <= 300 else 0.25)
-            _flat('run',    1 + 0.6 * floorUrg)
-            _flat('short',  1 + 0.15 * floorUrg)
             _flat('medium', 1 - 0.2 * floorUrg)
             _flat('long',   1 - 0.6 * floorUrg)
             _flat('deep',   1 - 0.8 * floorUrg)
+            # How OFTEN it passes at all: see _protectLeadShift.
+            keep = self._leadProtectKeep(scoreDiff, coach)
+            if keep < 1.0:
+                for _k in ('short', 'medium', 'long', 'deep'):
+                    weights[_k] = weights.get(_k, 0) * keep
+
+        # ── CHASING TWO SCORES IN Q4 (the mirror of the lead shift) ──
+        # ⚠️ The trailing branches above are run-weight multipliers again, and they cap
+        # the same way the lead ones did: down two scores in Q4 the sim passed 63-67% of
+        # the time against the NFL's 80% (2021-25, excluding the final 2:00, which has
+        # its own branch and already matched). One-score deficits are NOT shifted — the
+        # NFL's pass rate there is barely above neutral, because one possession still
+        # ties it and the clock is not yet the enemy.
+        if q == 4 and secs >= 120 and scoreDiff < -self._oneScore():
+            from constants import TRAIL_SHIFT_MAX, TRAIL_SHIFT_Q4_START
+            ramp = TRAIL_SHIFT_Q4_START + (1.0 - TRAIL_SHIFT_Q4_START) * (900 - min(900, secs)) / 900.0
+            boost = math.exp(TRAIL_SHIFT_MAX * ramp * (0.7 + 0.3 * clockIQ))
+            for _k in ('short', 'medium', 'long', 'deep'):
+                weights[_k] = weights.get(_k, 0) * boost
 
         # Q2 two-minute drill: REGARDLESS of score, push to score before the
         # half. A leading team does NOT sit on the ball in Q2 (clock-milking is
@@ -4637,6 +4878,53 @@ class Game:
         weights['short'] = weights.get('short', 0) * (1 + (1 - deep) * 0.35)
         return weights
 
+    def _applyFieldDepthGate(self, weights: dict) -> dict:
+        """You cannot run a route the field has no room for.
+
+        ⚠️ NOTHING IN THE CHAIN HAD A FIELD-POSITION TERM ON DEPTH — the only reads of
+        `yardsToEndzone` against a pass tier anywhere were the chess-clock strike and
+        darts, both format branches. So the table's depth shape applied whole from the
+        offense's own 1 to the opponent's 3, and measured, 5% of deep throws had LESS
+        FIELD AHEAD THAN THE TIER'S 27 AIR YARDS, five of them from inside the 5. They
+        completed at the normal rate and the yardage model quietly clamped the gain, so
+        the tier was fiction rather than a visible error.
+
+        ⚠️ THE TABLE HAD THE CONSTRAINT INVERTED, which is what this replaces. It forbade
+        deep on SHORT YARDAGE — where the NFL throws deep 7.6% of the time, because a
+        defense squatting on the sticks is exactly when the shot is available — and
+        permitted it from the opponent's 1. Real football's hard limit is yards to the
+        ENDZONE, not yards to go: NFL deep runs 10.7% beyond the 27 and 3.3% inside it,
+        and is flat at 7-11% across every down and distance. Keeping the rule here rather
+        than in the rows means it is stated once, and the rows describe an open field.
+
+        ⚠️ THE LIMIT IS THE SHALLOW EDGE OF THE TIER'S BAND, NOT ITS MEAN. A tier mean is
+        the CENTRE of a spread of real routes, so a `long` call from the 15 is an ordinary
+        throw into the end zone — and gating it at the 17-yard mean is what the NFL data
+        refuses: long runs 18.3% of throws from the 11-15 and 27.7% from the 16-20,
+        ABOVE its 15.2% league average, because that is where a 17-yard route scores.
+        Measured, gating on the mean cost the long game 15.4% -> 12.1% of throws. The edge
+        is the midpoint to the tier below — the same cut used to bin the NFL air yards, so
+        the gate and the yardstick agree by construction. Deep's edge lands at 22, which
+        is where NFL deep actually reappears (0.0% inside the 20, 11.1% at 21-25).
+
+        ⚠️ SCALED, NOT ZEROED, and the residual is the real 3.3% deep inside 27: some
+        routes in the band still fit where the average one does not. Zeroing put a cliff
+        mid-red-zone that no defense would have to respect.
+        """
+        yte = getattr(self, 'yardsToEndzone', None)
+        if not yte:
+            return weights
+        from constants import PASS_DEPTH_MEANS as _PDM, FIELD_DEPTH_GATE_FLOOR as _FLOOR
+        order = ['short', 'medium', 'long', 'deep']
+        for i, tier in enumerate(order):
+            if tier not in ('long', 'deep'):
+                continue
+            need = (_PDM[tier] + _PDM[order[i - 1]]) / 2.0     # shallow edge of the band
+            if yte < need:
+                # linear from full weight at the edge down to the floor with no field left
+                weights[tier] = weights.get(tier, 0) * (_FLOOR + (1 - _FLOOR) * (yte / need))
+        return weights
+
     def _applyAwakenedMods(self, weights: dict) -> dict:
         """Bias the play call toward an awakened skill player so the offense
         feeds the star. An awakened RB pushes run weight up; an awakened WR/TE
@@ -4725,7 +5013,7 @@ class Game:
     # works for the defense's own read.
     DISGUISE_READ_PENALTY = 0.30
 
-    def _maybeAudible(self, playCall: str) -> str:
+    def _maybeAudible(self, playCall: str, weights: dict = None) -> str:
         """The QB looks at the box and changes the call, or does not.
 
         ⚠️ THE OFFENSIVE MIRROR OF `_applyPreSnapRead`. The defense has committed
@@ -4758,6 +5046,7 @@ class Game:
         from constants import (AUDIBLE_ENABLED, AUDIBLE_BOX_STACKED, AUDIBLE_READ_BASE,
                                AUDIBLE_READ_SKILL, AUDIBLE_QB_WEIGHT, AUDIBLE_COACH_WEIGHT,
                                AUDIBLE_WILLINGNESS_BASE, AUDIBLE_WILLINGNESS_SWING,
+                               AUDIBLE_SITUATION_AWARE, AUDIBLE_LEAN_EXPONENT,
                                COACH_ATTR_NEUTRAL)
         if not AUDIBLE_ENABLED:
             return playCall
@@ -4816,6 +5105,26 @@ class Game:
         # slip that made `calculateSackProbability` look missing earlier.
         undis = self.play._undiscipline(qb)
         willing = AUDIBLE_WILLINGNESS_BASE + AUDIBLE_WILLINGNESS_SWING * undis
+        # ⚠️ THE BOX IS NOT THE ONLY THING ON THE FIELD. The read above looks at the defense
+        # alone, so on its own it checks at the same ~15% on every down: into a run on 3rd &
+        # 8 because the box is light, out of a run while protecting a late lead because the
+        # box is stacked. Measured against NFL 2021-25 that flattened every situation —
+        # 3rd & 7-10 ran 24% of the time against the NFL's 3%, and turning audibles off
+        # recovered ~10 points of 3rd-down pass rate on its own.
+        #
+        # The caller's `weights` already encode down, distance, score, clock and the
+        # ruleset, so they ARE the situation. A check into a call the situation argues
+        # against is scaled down by how hard it argues; a check toward the lean, or on a
+        # genuine coin-flip down, is untouched. One rule rather than a list of exceptions,
+        # and it follows the rules vote for free (5 downs, long first downs).
+        if weights and AUDIBLE_SITUATION_AWARE:
+            _tot = sum(max(0.0, float(weights.get(k, 0) or 0))
+                       for k in ('run', 'short', 'medium', 'long', 'deep'))
+            if _tot > 0:
+                _runShare = max(0.0, float(weights.get('run', 0) or 0)) / _tot
+                _destShare = _runShare if wantsRun else 1.0 - _runShare
+                if _destShare < 0.5:
+                    willing *= (_destShare / 0.5) ** AUDIBLE_LEAN_EXPONENT
         if _random.random() >= willing:
             self.play.insights['audible'] = {'checked': False, 'sawStacked': perceivedStacked,
                                              'readRight': readRight}
@@ -4850,7 +5159,7 @@ class Game:
                      weights['long'], weights.get('deep', 0)]
         )[0]
 
-        playCall = self._maybeAudible(playCall)
+        playCall = self._maybeAudible(playCall, weights)
 
         self.play.insights['playCall'] = playCall
         # Reset per-play RPO / trick state (set only by _executeRpo / _executeTrickPlay).
@@ -4983,17 +5292,46 @@ class Game:
         from constants import SIDELINE_GOAL_MIDRANGE_YARD
         return 3 if SIDELINE_GOAL_MIDRANGE_YARD else 2
 
-    def _hoopScoreWinsNow(self) -> bool:
-        """Would an OFFENSIVE score by the team on offense end the game the instant it
-        happens? Mirrors checkOvertimeEnd for a non-defensive score: 2nd+ OT is pure
-        sudden death (any score wins); 1st OT ends on a go-ahead score only once both
-        guaranteed possessions are done. False in regulation (the opponent always has
-        answering time left on the clock)."""
+    def _offensiveScoreWinsNow(self, points: float) -> bool:
+        """Would an OFFENSIVE score worth `points` end the game the instant it happens?
+        Mirrors checkOvertimeEnd for a non-defensive score. False in regulation (the
+        opponent always has answering time left on the clock).
+
+        ⚠️ TWO CALLERS ASKING THE SAME QUESTION FROM OPPOSITE SIDES, which is why this is
+        deliberately NOT named for either of them (it was `_hoopScoreWinsNow`). The
+        OFFENSE asks it to know a sideline goal is worth taking outright; the DEFENSE
+        asks it in `_checkDefensiveTimeout` to know that stopping the clock buys nothing,
+        because there is no possession coming back. A second copy of this rule is exactly
+        the drift `fgMakeProbability` already paid for.
+
+        ⚠️ `points` IS REQUIRED, AND A SCORE THAT ONLY TIES ENDS NOTHING. `checkOvertimeEnd`
+        refuses on `homeScore == awayScore`, i.e. it reads the board AFTER the points land,
+        so a helper that ignores the amount answers a different question. Measured: a
+        defense up 7 with the offense on the 1 on its guaranteed possession is NOT in a
+        no-answer state, because the touchdown and extra point tie it and the game plays
+        on — and it duly did, the defense got the ball back and reached a field-goal try.
+
+        ⚠️ AND `otSecondPossComplete` ALONE IS TOO LATE. That flag is set in `turnover()`,
+        when the possession ENDS, so mid-possession it is still False on the very drive
+        whose score will end the game. The third clause reads the situation instead: the
+        offense is ON the second guaranteed possession (the first one is done and this is
+        not the team that had it), so a go-ahead score here completes that possession and
+        `isGameOver` fires. Without it the rule missed a tied defense whose opponent was
+        driving on the second possession — measured, exactly one of two remaining OT
+        fires."""
         if not getattr(self, 'isOvertime', False) or self.currentQuarter < 5:
             return False
+        offIsHome = self.offensiveTeam is self.homeTeam
+        offScore = self.homeScore if offIsHome else self.awayScore
+        defScore = self.awayScore if offIsHome else self.homeScore
+        if offScore + points <= defScore:
+            return False                     # still behind or level: nothing ends
         if getattr(self, 'otPeriod', 0) >= 2:
-            return True
-        return bool(getattr(self, 'otSecondPossComplete', False))
+            return True                      # 2nd+ OT is outright sudden death
+        if getattr(self, 'otSecondPossComplete', False):
+            return True                      # both guaranteed possessions already done
+        return bool(getattr(self, 'otFirstPossComplete', False)
+                    and self.offensiveTeam is not getattr(self, 'otFirstPossTeam', None))
 
     def _dartsExactLandings(self) -> set:
         """Darts: every remaining-need value a CONVENTIONAL scoring play lands exactly.
@@ -5787,7 +6125,9 @@ class Game:
             return None
         # Tied: a single hoop point breaks the tie and takes the lead.
         if scoreDiff == 0:
-            if self._hoopScoreWinsNow():   # OT sudden death — the go-ahead point wins outright
+            # OT: the go-ahead point ends it outright, so it is not merely helpful.
+            if self._offensiveScoreWinsNow(
+                    float(getattr(self.gameRules, 'sidelineGoalPoints', 1) or 1)):
                 return 'critical'
             return 'helpful'
         if scoreDiff > 0:
@@ -6300,6 +6640,9 @@ class Game:
         aggrLean = max(0.0, (aggr - 60) / 40.0)              # 0 conservative -> 1 aggressive
         offLean = 0.6 + max(0.0, (offMind - 60) / 40.0) * 0.4
         p = (0.05 + 0.22 * fit) * (0.35 + 1.0 * aggrLean) * offLean
+        # An RPO is a pass option, so a team protecting a late lead takes it as rarely
+        # as it takes any other throw.
+        p *= self._leadProtectKeep()
         return _random.random() < max(0.0, min(0.40, p))
 
     def _executeRpo(self):
@@ -7653,7 +7996,8 @@ class Game:
         self.yardsToEndzone = yards
         self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
-        self.yardsToFirstDown = self.gameRules.firstDownDistance
+        # A turnover returned to the 5 is 1st & goal, not 1st & 10.
+        self.yardsToFirstDown = self._freshSeriesDistance()
         # New possession → fresh drive clock (no-op unless the mechanic is on).
         self._resetDriveClock()
         # New drive → both sideline-hoop pairs are available again (Sideline Goals).
@@ -9913,6 +10257,28 @@ class Game:
                     # would otherwise burn the clock (may set clockRunning False).
                     self._maybeCallTimeoutToSaveSnap()
                 if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+                    # ⚠️ DEAD-BALL ADMINISTRATION — THE CLOCK THIS SIM HAS NO SYSTEM FOR.
+                    # A real game spends time between snaps that no play accounts for, and
+                    # overwhelmingly that is PENALTIES: measured over 1,424 NFL games, 11.9
+                    # flags a game at 24.8s each = 295s, 8% of the game clock. This sim has
+                    # none, so that time went into extra snaps instead — 74.5 a team-game
+                    # against the NFL's 68.5, and the surplus (6.0) matched what the penalty
+                    # clock buys (6.1) to within 2%.
+                    # ⚠️ IT IS A STAND-IN, NOT A MODEL: no flag, no yardage, no replayed
+                    # down. It exists so every downstream rate is measured against a
+                    # realistic number of snaps. Delete it the day penalties are built.
+                    # ⚠️ RUNNING CLOCK ONLY — time cannot come off a stopped clock, which is
+                    # also what real football does (a stoppage holds until the snap). That
+                    # is ~56% of snaps, so the charge is ~3.7s to average the 2.1s per snap
+                    # the measurement calls for.
+                    # ⚠️ FLAT, NOT LUMPY, ON PURPOSE. Real penalties are ~25s on 9% of
+                    # snaps; firing that would put a visible 25-second hole in the feed with
+                    # no flag to explain it, which reads as a bug. Spread thin it is
+                    # invisible and sums to the same clock.
+                    if DEAD_BALL_ADMIN_SECONDS:
+                        self.consumeGameTime(DEAD_BALL_ADMIN_SECONDS)
+                        if self.gameClockSeconds <= 0:
+                            break
                     preSnapTime = self.calculatePreSnapTime()
                     # Frames: don't AWARD a frame while the pre-snap huddle drains the clock
                     # (the snap hasn't happened yet). Deferring the award to the play's own
@@ -10157,7 +10523,7 @@ class Game:
                         # attacking coordinates that is `landing` yards out.
                         self.yardsToEndzone = max(1, landing)
                         self.down = 1
-                        self.yardsToFirstDown = min(10, self.yardsToEndzone)
+                        self.yardsToFirstDown = self._freshSeriesDistance()
                         lastPlayFormatted = True
                         break
 
@@ -10452,12 +10818,16 @@ class Game:
                             self.away1stDownsTotal += 1
                             if downBefore == _setupDown: self.away3rdDownConv += 1
                             elif downBefore == _lastDown: self.away4thDownConv += 1
-                        if self.yardsToEndzone < self.gameRules.firstDownDistance:
-                            self.yardsToFirstDown = self.yardsToEndzone
-                        else:
-                            self.yardsToFirstDown = self.gameRules.firstDownDistance
+                        # ⚠️ MOVE THE BALL FIRST, THEN ASK HOW FAR TO GO. The goal-to-go
+                        # test used to run BEFORE the spot moved, so it read where the play
+                        # STARTED: a 15-yard gain from the 20 checked "20 out", set 1st &
+                        # 10, then placed the ball on the 5. Measured against NFL play-by-
+                        # play, 86% of the sim's 1st downs inside the 10 carried a distance
+                        # of 10 — so the play caller read 1st & goal from the 3 as 1st &
+                        # 10, and 3rd & goal from the 2 as 3rd & long.
                         self.yardsToSafety += self.play.yardage
                         self.yardsToEndzone -= self.play.yardage
+                        self.yardsToFirstDown = self._freshSeriesDistance()
                         # Drive Clock: a first down refills it in 'series' mode; in
                         # 'possession' mode it keeps draining, so a spent hard cap
                         # ends the drive even on a first down.
@@ -13760,12 +14130,139 @@ class Game:
         pct = max(0.40, min(0.95, 0.75 + aggressNorm * 0.15))
         return random.random() < pct
 
+    def _conversionOptions(self, scoringTeam: FloosTeam.Team, kickAllowed: bool, goRungs: list,
+                           kick: dict) -> list:
+        """Every conversion choice the rules offer right now, as (rung, points, makeChance).
+        The kick when it exists, plus every go rung — under the Conversion Ladder that is
+        2-5 point tries and NO kick."""
+        opts = []
+        if kickAllowed:
+            kicker = scoringTeam.rosterDict.get('k')
+            pKick = (self.fgMakeProbability(kicker, kick['distance'] + self.gameRules.fgSnapDistance)
+                     if kicker else 0.0)
+            opts.append((kick, float(kick['points']), pKick))
+        for r in goRungs:
+            opts.append((r, float(r['points']), self._estimateConversionProb(scoringTeam, r['distance'])))
+        return opts
+
+    def _conversionWinChance(self, margin: float, drives: int, options: list) -> float:
+        """Chance the scoring team wins from `margin` (negative = behind) with `drives`
+        possessions left in regulation, the OPPONENT receiving first and the ball
+        alternating after that.
+
+        ⚠️ FUTURE TOUCHDOWNS CHOOSE THEIR OWN CONVERSION. Each drive ends in nothing, a
+        field goal or a touchdown (`CONVERSION_DRIVE_ODDS`), and after a touchdown the side
+        that scored picks whichever of `options` does it the most good at that margin.
+        Treating a later touchdown as "TD + kick" is what made a first version kick down
+        10 and go down 9 — backwards — because it could not see that a team down 8 goes
+        for two. Both sides play it the same way (opponent minimises, we maximise). Point
+        values are the CURRENT rules, so a voted scoring change reshapes the chart. A tie
+        at the end counts half (overtime is a coin flip)."""
+        from constants import CONVERSION_DRIVE_ODDS
+        rules = self.gameRules
+        td = float(getattr(rules, 'touchdownPoints', 6))
+        fg = float(self._fgValue())
+        pNone, pFg, pTdKick, pTdTwo = CONVERSION_DRIVE_ODDS
+        pTd = pTdKick + pTdTwo
+        choices = [(pts, p) for _, pts, p in options]
+        memo = {}
+
+        def v(m, k, oursNext):
+            if k <= 0:
+                return 1.0 if m > 0 else 0.5 if m == 0 else 0.0
+            key = (m, k, oursNext)
+            if key in memo:
+                return memo[key]
+            sign = 1.0 if oursNext else -1.0
+            nxt = lambda mm: v(mm, k - 1, not oursNext)
+            afterTd = m + sign * td
+            conv = [p * nxt(afterTd + sign * pts) + (1 - p) * nxt(afterTd) for pts, p in choices]
+            best = (max(conv) if oursNext else min(conv)) if conv else nxt(afterTd)
+            out = pNone * nxt(m) + pFg * nxt(m + sign * fg) + pTd * best
+            memo[key] = out
+            return out
+
+        return v(float(margin), int(drives), False)
+
+    def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list) -> dict:
+        """Pick the conversion that leaves the best chance of winning.
+
+        ⚠️ THE OLD CHART ONLY EVER LET A TRAILING TEAM GO, AND LET IT GO ALMOST
+        EVERYWHERE. Leading teams never went for two — up 1 (make it 3, so a field goal
+        only ties) and up 5 (make it 7, so a touchdown only ties) are the plainest calls
+        in the sport, and the NFL goes for two there essentially every time in Q4. And
+        any one-score deficit that did not tie or save a possession took the "real
+        aggression" tier, so a team down 7 went for two 65% of the time on a flat rule.
+        The kick makes it down 6 (a touchdown wins); the try buys insurance against an
+        opponent field goal first (down 8 after one is still tied up by a touchdown and
+        two, down 9 is not), so it is a close call the model now makes on its merits —
+        ~19% of Q4 cases — while down 3, where the kick already leaves a field goal to
+        win, is never taken.
+
+        ⚠️ IT USES THE SIM'S OWN ODDS, NOT THE NFL'S (owner, 2026-09-14). Two-point tries
+        convert ~70% here against the NFL's ~48%, so the chart is more aggressive than
+        the NFL's (it also goes up 2 and up 6, for instance). The comeback aggression the
+        old chart was tuned for mostly survives because it mostly PAYS at 70%; only the
+        dominated tries go. Under the Conversion Ladder there is no kick, and this picks
+        the rung — the one that best serves the score, not just the one a bold coach
+        reaches for.
+
+        The safest option is the default; another is taken only for a real edge, nearly
+        always for a clear one, with coach aggressiveness deciding the marginal ones."""
+        from constants import (CONVERSION_SECS_PER_DRIVE, CONVERSION_VALUE_MIN_GAIN,
+                               CONVERSION_VALUE_BASE, CONVERSION_VALUE_GAIN_SCALE)
+        import random
+        q = self.currentQuarter
+        quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
+        secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
+        drives = min(8, max(1, round(secsLeft / CONVERSION_SECS_PER_DRIVE)))
+        mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+        theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+        margin = float(mine - theirs)
+        # ⚠️ A TEAM BEHIND PLAYS FOR THE POSSESSIONS IT NEEDS, clock permitting. The even
+        # clock split gives a team down 18 with 5:49 left ONE more drive, from which no
+        # conversion changes anything — so the model shrugged and kicked what is really a
+        # free roll. A trailing side hurries and onside-kicks for more, so it plans on as
+        # many own drives as the deficit needs, up to one per CONVERSION_TRAIL_SECS_PER_DRIVE
+        # of clock (and always at least one: a stop, an onside kick). Opponent receives first.
+        if margin < 0:
+            from constants import CONVERSION_TRAIL_SECS_PER_DRIVE
+            needed = math.ceil(-margin / (self._maxPossession() or 8.0))
+            affordable = 1 + int(secsLeft // CONVERSION_TRAIL_SECS_PER_DRIVE)
+            drives = max(drives, 2 * max(1, min(needed, affordable)))
+        stand = self._conversionWinChance(margin, drives, options)
+        valued = []
+        for rung, pts, p in options:
+            win = p * self._conversionWinChance(margin + pts, drives, options) + (1 - p) * stand
+            valued.append((win, p, rung))
+        safest = max(valued, key=lambda t: t[1])          # the highest make chance
+        best = max(valued, key=lambda t: (t[0], t[1]))
+        gain = best[0] - safest[0]
+        # ⚠️ A CHASING TEAM MAXIMISES ITS CHANCES HOWEVER SMALL THEY ARE. Down 18 the win
+        # chance is ~1% either way, so the absolute edge of a free roll is a rounding error
+        # and a flat threshold kicked it — but 1% -> 2% doubles the team's chances. Behind,
+        # the edge is measured RELATIVE to where it stands; ahead it stays absolute, so a
+        # decided game is not run up with a two-pointer. Only a genuine long shot gets this
+        # (under CONVERSION_CHASE_WIN_BELOW): applied to an ordinary one-score deficit it
+        # amplified the expected-points edge of a 70% two-pointer into going for two on
+        # nearly every Q4 touchdown, dominated tries included.
+        from constants import CONVERSION_CHASE_WIN_BELOW
+        if margin < 0 and safest[0] < CONVERSION_CHASE_WIN_BELOW:
+            gain = gain / max(0.02, 2.0 * safest[0])
+        if best[2] is safest[2] or gain <= CONVERSION_VALUE_MIN_GAIN:
+            return safest[2]
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        pct = CONVERSION_VALUE_BASE + gain * CONVERSION_VALUE_GAIN_SCALE + aggressNorm * 0.15
+        return best[2] if random.random() < max(0.05, min(0.97, pct)) else safest[2]
+
     def _chooseConversion(self, scoringTeam: FloosTeam.Team) -> dict:
         """Pick the post-TD conversion rung (Conversion-Ladder-aware). Returns a
         rung dict {kind, points, distance}. Generalizes the old _shouldGoForTwo:
         when the ladder is OFF there is only the 2-pt go-rung, so this reduces
         EXACTLY to the kick-vs-2-pt decision. The TD points are already banked
-        before this is called; only Q4 trailing teams gamble.
+        before this is called. In a standard game with the kick available the choice
+        is `_chooseConversionByValue`, for leading and trailing teams alike.
         """
         import random
         rungs = self._conversionRungs()
@@ -13808,6 +14305,23 @@ class Game:
                        if not self.format.voidsScore(self, scoringTeam, r['points'])]
             if not goRungs:
                 return fallback
+        # A standard game decides on WIN VALUE in the quarters where the exact margin matters
+        # (`CONVERSION_VALUE_QUARTERS`, Q4), leading or trailing, over whatever the rules
+        # offer — kick and two-point, or the ladder's 2-5 point rungs with no kick. See
+        # `_chooseConversionByValue`. Before that: the kick by convention (or, under the
+        # ladder, the coach's aggressiveness-picked rung).
+        # ⚠️ NOT "ALL GAME" ON PURPOSE (owner, 2026-09-14). Two-point tries convert ~70% in
+        # this sim, so on expected points alone (1.4 vs 0.95) the model goes for two on
+        # nearly every touchdown when there is a lot of game left — correct for the sim's
+        # odds, and nothing like football. Other formats keep the desire chart below.
+        if goRungs and self.currentQuarter <= 4 and getattr(self.format, 'key', 'standard') == 'standard':
+            from constants import CONVERSION_VALUE_QUARTERS
+            if self.currentQuarter in CONVERSION_VALUE_QUARTERS:
+                return self._chooseConversionByValue(
+                    scoringTeam, self._conversionOptions(scoringTeam, kickAllowed, goRungs, kick))
+            # Before then: the kick, or under the ladder / no-kick mode the coach's
+            # aggressiveness-picked rung, exactly as before.
+            return fallback
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
@@ -17689,6 +18203,14 @@ class Play():
         Route quality is dynamic per play — affected by game pressure,
         defensive coverage intensity, receiver mental state, and natural variance.
         Disciplined receivers are more consistent; frustrated or pressured ones slip.
+
+        ⚠️ THIS IS SEPARATION AT THE BREAK, NOT AT THE CATCH, and it carries no depth term
+        on purpose. The defender closes while the ball is in the air, which happens AFTER
+        the QB has read the field — so that decay belongs to the contest, and is applied
+        once in `calculateCatchProbability` via `_depthClosing`. Subtracting it here
+        instead makes the quarterback clairvoyant about a defender who has not closed yet:
+        measured, deep retention fell 72% -> 53%, undoing what PASS_CALLED_DEPTH_READ_BONUS
+        exists to fix. Reading this value is reading what the QB sees.
         """
         baseRouteRunning = receiver.gameAttributes.routeRunning
 
@@ -17729,6 +18251,8 @@ class Play():
         meanOpenness += getattr(self, '_passConceptOpennessBonus', 0.0)
         meanOpenness += getattr(self, '_rpoOpennessBonus', 0.0)   # RPO throw into a vacated box
         meanOpenness += getattr(self, '_trickOpennessBonus', 0.0)  # flea flicker: receiver open deep
+        # Separation decays over the ball's flight, and flight time scales with air yards,
+        # so a deeper route arrives with less of it. Zero at the short tier by construction.
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -17750,6 +18274,10 @@ class Play():
         Returns: (selectedTarget, willThrowAway)
         """
         aggrBonus = int(round(aggression * MENTAL_AGGR_ROLL_K))
+        # The route at the CALLED depth gets a read bonus below (perception only).
+        from constants import PASS_CALLED_DEPTH_READ_BONUS
+        _called = (getattr(self, 'insights', None) or {}).get('playCall')
+        calledDepth = {'long': PassType.long, 'deep': PassType.deep}.get(_called)
         # Calculate how accurately QB perceives openness
         # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
         if qbVision >= 90:
@@ -17805,6 +18333,15 @@ class Play():
                 perceivedOpenness = min(100, perceivedOpenness + awakenedBonus)
             if teBonus and teReceiver is not None and target['receiver'] is teReceiver:
                 perceivedOpenness = min(100, perceivedOpenness + teBonus)
+            # ⚠️ THE READ STARTS WITH THE CALLED DEPTH. Openness has no depth term, so the
+            # QB simply took the most open of the play's two or three routes, and on a deep
+            # call half of those are shorter: a called deep ball was thrown deep only ~55%
+            # of the time and the long game shrank to 8% of throws against the NFL's 15%.
+            # The route at the called depth gets a perception bonus, the way a progression
+            # starts with the concept that was called. PERCEPTION ONLY — the throw is still
+            # resolved against how open the receiver really is.
+            if calledDepth is not None and target['route'] is calledDepth:
+                perceivedOpenness = min(100, perceivedOpenness + PASS_CALLED_DEPTH_READ_BONUS)
 
             perceivedTargets.append({
                 'receiver': target['receiver'],
@@ -17884,14 +18421,9 @@ class Play():
         # Combined with the arm-strength weighting above, weak-armed QBs on
         # deep balls land in the bad-throw bucket, but average QBs can still
         # complete intermediate routes at NFL-realistic rates.
-        passTypeDifficulty = {
-            PassType.short:    1.00,
-            PassType.medium:   0.92,
-            PassType.long:     0.80,
-            PassType.deep:     0.65,
-            PassType.hailMary: 0.42,
-        }
-        difficultyMod = passTypeDifficulty.get(passType, 0.85)
+        # Per-tier values live in constants.PASS_TYPE_DIFFICULTY.
+        from constants import PASS_TYPE_DIFFICULTY
+        difficultyMod = PASS_TYPE_DIFFICULTY.get(getattr(passType, 'name', None), 0.85)
 
         # Calculate pressure impact from same rushDifferential used for sacks
         pressureDegradation = self.calculatePressureImpact(rushDifferential)
@@ -17923,33 +18455,55 @@ class Play():
         actually slow mature offenses, instead of being zeroed out whenever the
         receiver is open.
         """
+        # ⚠️ THE CATCH IS CONTESTED AT THE ARRIVAL GAP, NOT THE GAP AT THE BREAK. A
+        # defender closes for as long as the ball is in the air and flight time scales
+        # with air yards, so the separation a receiver had when the QB decided is not the
+        # separation he has when it gets there. `calculateReceiverOpenness` deliberately
+        # carries no depth term (that is the read's view, taken before any of this), so
+        # the decay is applied HERE, once, to both openness inputs — the completion side
+        # (`coverageDisruption`, `contestPenalty`) and the pick side (`openGap`,
+        # `proximity`) must contest the same gap or they describe different plays.
+        # ⚠️ Applying it in `calculateReceiverOpenness` instead was tried and reverted: it
+        # reaches the QB's read through `selectPassTarget` and took deep retention 72% ->
+        # 53%. Adding it back for the read was worse — it couples every caller to having
+        # come through that one function, and a hand-built target list then reads as
+        # wildly open. One subtraction, at the contest.
+        _closing = _depthClosing(passType)
+        receiverOpenness = max(0.0, receiverOpenness - _closing)
+        if receiverActualOpenness is not None:
+            receiverActualOpenness = max(0.0, receiverActualOpenness - _closing)
+
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
-        # Top-end lightly compressed so elite throws aren't quite automatic.
-        if throwQuality >= 70:
-            baseContact = 85 + (throwQuality - 70) * 0.45  # 85-99
-            reachFactor = receiverReach * 0.05
-        elif throwQuality >= 50:
-            baseContact = 53 + (throwQuality - 50) * 1.6   # 53-85
-            reachFactor = (receiverReach - 60) * 0.4
-        else:
-            baseContact = 10 + throwQuality * 0.85         # 10-52
-            reachFactor = (receiverReach - 60) * 0.7
+        # ⚠️ THIS WAS PIECEWISE WITH A SLOPE DISCONTINUITY WHERE MOST THROWS LIVE. The old
+        # form ran `85 + (tq-70)*0.45` above 70, `53 + (tq-50)*1.6` between 50 and 70 and
+        # `10 + tq*0.85` below — so sensitivity to throw quality collapsed from 1.6 to 0.45
+        # at exactly 70, and measured, SHORT throws average tq 79 and MEDIUM 70.6, i.e.
+        # 76% of all passes sat on that plateau. The two tiers came out 3.8 contact points
+        # apart while real football separates their completion rates by 14.6 points, which
+        # is most of why medium completed 71.7% against the NFL's 59.3%.
+        # A logistic is the same S the piecewise form was approximating, without the corner:
+        # monotonic, saturating (a perfect ball is nearly always reachable, never certain),
+        # and still responsive at the top where the old one had gone flat.
+        from constants import (PASS_CONTACT_CEILING as _CC, PASS_CONTACT_CENTER as _CMID,
+                               PASS_CONTACT_STEEPNESS as _CK, PASS_REACH_WEIGHT_SHARP,
+                               PASS_REACH_WEIGHT_ERRANT)
+        baseContact = _CC / (1.0 + math.exp(-_CK * (throwQuality - _CMID)))
+        # Reach matters MOST on a badly placed ball — that was the intent of the old bands
+        # (0.05 / 0.4 / 0.7 as quality fell) and it survives as a ramp rather than a step.
+        _reachW = PASS_REACH_WEIGHT_SHARP + (PASS_REACH_WEIGHT_ERRANT - PASS_REACH_WEIGHT_SHARP) \
+            * max(0.0, min(1.0, (100.0 - throwQuality) / 100.0))
+        reachFactor = (receiverReach - 60) * _reachW
 
         # Tier-scaled coverage disruption: short throws are quick-release, so
         # defenders have little time to make a play; deep throws give DBs more
         # window to converge. This is the lever that keeps trailing-team offenses
         # viable — short passes should be reliable even against tight coverage,
         # so teams can sustain drives in catch-up mode.
-        tierDisruptionMult = {
-            PassType.short:    0.40,
-            PassType.medium:   0.75,
-            PassType.long:     1.00,
-            PassType.deep:     1.15,
-            PassType.hailMary: 1.30,
-        } if passType is not None else None
-        tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
+        # Per-tier values live in constants.PASS_TIER_DISRUPTION.
+        from constants import PASS_TIER_DISRUPTION
+        tierMult = PASS_TIER_DISRUPTION.get(getattr(passType, 'name', None), 1.0)
         coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * PASS_COVERAGE_DISRUPTION_K * tierMult
         # Baseline coverage pressure: always applies, scales modestly with
         # defensive rating. Anchored at 70 (league-average) so elite defenses
@@ -18004,8 +18558,22 @@ class Play():
         # ~75) otherwise compounds the pick rate every season; centering on 80 keeps the INT contribution
         # league-relative so the rate holds as attributes climb. Feeds pBadRead + pBadThrow below.
         covFactor = 0.80 + (cov - 80) / 100 * 0.5
-        openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
-        throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
+        # ⚠️ THESE WERE HARD KNEES SITTING IN THE MIDDLE OF THEIR OWN DISTRIBUTIONS. They
+        # read `max(0, 50 - openness)/50` and `max(0, 55 - throwQuality)/55`, so risk
+        # switched off COMPLETELY above those points — and the thrown population lives
+        # above them. Measured: the ball goes to the most open man 88% of the time at a
+        # mean openness of 65.4, so the openness gate opened on 23% of short and 25% of
+        # medium throws and the throw gate on 2% and 8%. Interceptions came out
+        # 0.7 / 0.8 / 2.1 / 6.1 by tier against the NFL's 1.2 / 2.5 / 4.2 / 5.5 — nearly
+        # flat below the deep tier, because for three throws in four the model had already
+        # decided a pick was impossible.
+        # Continuous decay instead: risk falls smoothly with separation and with placement
+        # and never reaches zero, because no receiver is so open and no ball so perfectly
+        # placed that a defender cannot make a play on it. The decay constants are set so
+        # a BLANKETED receiver keeps roughly the risk he had before — this lengthens the
+        # tail, it does not re-level the floor.
+        openGap = math.exp(-max(0.0, intOpenness) / INT_OPEN_DECAY)      # ~0 open … 1 blanketed
+        throwGap = math.exp(-max(0.0, throwQuality) / INT_THROW_DECAY)   # ~0 sharp … 1 errant
         # Proximity: how reachable the ball is for a defender. Full effect when
         # the receiver is blanketed, fades toward zero once he's wide open
         # (≥75). The floor is tier-dependent: a short throw can be genuinely
@@ -18864,12 +19432,26 @@ class Play():
                     _wxFootPass = self.game.wx('footing')
                     if passYards < self.yardsToEndzone:
                         # Bad throws can't be caught in stride — limits all YAC.
-                        from constants import YAC_THROW_MULT as _YTM
-                        if throwQuality >= 80:
+                        # ⚠️ JUDGED AGAINST WHAT THIS TIER NORMALLY THROWS, NOT ABSOLUTELY.
+                        # `PASS_TYPE_DIFFICULTY` has already multiplied throwQuality DOWN
+                        # for being a deep ball, so reading the result as "badly thrown"
+                        # charges for depth a second time. Measured, a deep throw averages
+                        # tq 32.6 and fell in the `bad` bucket (0.20) on essentially every
+                        # snap — yet a deep catch is where real YAC is HIGHEST, because the
+                        # receiver is past the defense: NFL yards after catch run 4.04 /
+                        # 3.26 / 4.13 / 5.69 by tier, flat to RISING with depth, while the
+                        # sim ran 2.31 / 1.44 / 0.89 / -0.18, collapsing. Dividing the
+                        # difficulty back out recovers the thing this multiplier is
+                        # actually for: was this ball put where the receiver could run
+                        # with it, FOR A THROW OF THIS KIND.
+                        from constants import YAC_THROW_MULT as _YTM, PASS_TYPE_DIFFICULTY as _PTD
+                        _tierDiff = _PTD.get(getattr(self.passType, 'name', None), 0.85) or 1.0
+                        _placement = throwQuality / _tierDiff
+                        if _placement >= 80:
                             throwYacMult = _YTM['elite']
-                        elif throwQuality >= 60:
+                        elif _placement >= 60:
                             throwYacMult = _YTM['good']
-                        elif throwQuality >= 40:
+                        elif _placement >= 40:
                             throwYacMult = _YTM['poor']
                         else:
                             throwYacMult = _YTM['bad']
@@ -18906,14 +19488,17 @@ class Play():
                         from constants import YAC_TIER_CAPS as _YTC
                         def _tc(name):
                             t = _YTC[name]
-                            return {'gateAFail': _YFC, 'gateAPass': t['pass'],
+                            return {'gateAFail': t.get('failCap', _YFC),
+                                    'fallForward': t.get('fallForward', 1.0),
+                                    'gateAPass': t['pass'],
                                     'gateBFail': t['bFail'], 'housecallMean': t['house']}
                         yacCaps = {
                             PassType.short:    _tc('short'),
                             PassType.medium:   _tc('medium'),
                             PassType.long:     _tc('long'),
                             PassType.deep:     _tc('deep'),
-                            PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
+                            PassType.hailMary: {'gateAFail': 2, 'fallForward': 1.0, 'gateAPass': 5,
+                                'gateBFail': 10, 'housecallMean': 10},
                         }
                         caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
 
@@ -18935,12 +19520,24 @@ class Play():
                         gateBChance = max(6, min(35, 20 + (rcvSpeed - openFieldDef) * 0.9))
 
                         def _capYac(gain, hardCap):
-                            gain = int(gain * throwYacMult)
+                            # ⚠️ `_rnd`, NEVER `int`. This is the documented truncation
+                            # defect surviving in the one place it could hide: every DRAW
+                            # above was converted to `_rnd`, but this MULTIPLICATION was
+                            # not, because it is not a draw. `int()` truncates toward zero,
+                            # so a 1-yard gain scaled by a 0.95 multiplier became
+                            # `int(0.95)` = 0 — and gate A's tackled-immediately draw
+                            # centres on exactly 1. Measured on live rosters, 35% of
+                            # completions gained nothing after the catch against real
+                            # football's 25%, with every larger gain shaved as well.
+                            gain = _rnd(gain * throwYacMult)
                             return max(0, min(gain, hardCap, sidelineCap, self.yardsToEndzone - passYards - yac))
 
                         if batched_randint(1, 100) > gateAChance:
                             # Tackled by covering defender — clamped 0-3 YAC
-                            yac += _capYac(max(0, _rnd(np.random.normal(1.0, 1.0))), caps['gateAFail'])
+                            # Forward progress at contact, scaled by how fast the receiver
+                            # is already travelling — see YAC_TIER_CAPS['fallForward'].
+                            yac += _capYac(max(0, _rnd(np.random.normal(caps['fallForward'], 1.0))),
+                                           caps['gateAFail'])
                         else:
                             # Slipped the tackle — clamped 2-6 YAC
                             yac += _capYac(max(2, _rnd(np.random.normal(3.2, 1.5))), caps['gateAPass'])
