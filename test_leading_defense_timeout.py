@@ -193,14 +193,23 @@ expect(f"on the 3 with a poor kicker: still a touchdown threat ({r:.0%})", r > 0
 # same 74% rate at 0:15 as at 1:50, so the clock played no part in the decision. Reported
 # as the leader stopping the clock at 0:20 and getting the ball back with nothing to do.
 #
-# Bite check: delete the LEAD_ANSWER_MIN_SECONDS gate and the first two fail.
-for secs in (15, 20, 25):
+# ⚠️ THE BOUNDS ARE DERIVED FROM THE CONSTANT, NOT WRITTEN OUT. This floor has already
+# moved once (30 -> 50, after a real season measured the clock falling a median 15s and
+# up to 32s between the timeout and the leader's answering possession — the offense plays
+# out the REST of its drive, it does not score on the next snap), and the hardcoded 0:45
+# case here asserted the old value as correct rather than testing the rule.
+#
+# Bite check: delete the LEAD_ANSWER_MIN_SECONDS gate and the below-floor cases fail.
+from constants import LEAD_ANSWER_MIN_SECONDS as FLOOR              # noqa: E402
+
+for secs in (15, FLOOR // 2, FLOOR - 5):
     r = calls(defScore=17, offScore=14, yardsToEndzone=3, secs=secs)
     expect(f"up 3, they are on the 3, but only 0:{secs} left — no answer to save for "
            f"({r:.0%})", r == 0)
 
-r = calls(defScore=17, offScore=14, yardsToEndzone=3, secs=45)
-expect(f"0:45 is enough for them to score and us to reply ({r:.0%})", r > 0.4)
+r = calls(defScore=17, offScore=14, yardsToEndzone=3, secs=FLOOR + 5)
+expect(f"0:{FLOOR + 5} clears the floor — time for them to score and us to reply "
+       f"({r:.0%})", r > 0.4)
 
 # ⚠️ ASYMMETRIC ON PURPOSE. A TRAILING defense at 0:15 loses if it does nothing, so a
 # slim chance beats none; the leader is spending the clock that protects its own lead.

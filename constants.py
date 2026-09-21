@@ -5290,15 +5290,27 @@ LEAD_THREAT_FG_MIN_PROB = 0.75
 # on the clock as with 1:50. Reported as the leader stopping the clock at 0:20 and then
 # getting the ball back nowhere near able to do anything with it.
 #
-# The floor is the whole sequence, not just the answer: one snap for the offense to
-# score (~7s), a kickoff, then a minimal answering drive — two clock-stopped snaps and a
-# kick, ~21s. Below this even the optimistic version fails, and the timeout is spent on
-# nothing.
+# ⚠️ THE FLOOR IS READ AT THE TIMEOUT AND MUST GUARANTEE TIME ON THE *ANSWER*, WHICH IS
+# A LATER MOMENT. The first version budgeted the sequence as one snap for the offense to
+# score (~7s) plus a kickoff plus a minimal answering drive, and set 30. That underprices
+# the first term badly: the offense does not score on the very next snap, it plays out
+# the REST OF ITS DRIVE, and the timeout only stops the clock between snaps rather than
+# shortening it. Measured over a real season 7 on production rosters, across 28 drives
+# where a leading defense's timeout was followed by the offense scoring, the clock fell a
+# MEDIAN OF 15 SECONDS from the timeout to the leader's answering possession, worst case
+# 32. So a 30-second floor routinely delivered a 15-second answer — five of those 28
+# started under 0:25 and one at 0:02 — and every one traced back to a fire in the 0:31 to
+# 0:46 band, i.e. the cases that had only just cleared the gate. Every fire at 0:55 or
+# later produced an answer at 0:37 or later.
+#
+# 50 puts the guarantee where the rule's own justification needs it: past the measured
+# worst-case drop, the answering possession still opens with ~18s, and past the median it
+# opens with ~35s — a real two-snap-and-kick drill rather than a kneel-down.
 #
 # ⚠️ LEADING ONLY. A TRAILING defense at 0:15 is right to burn timeouts: it loses
 # otherwise, so a 2% chance beats none. The leader is trading a real asset — the clock
 # that is protecting its lead — for that 2%, which is why the gate is asymmetric.
-LEAD_ANSWER_MIN_SECONDS = 30
+LEAD_ANSWER_MIN_SECONDS = 50
 
 GLITCH_CARDS_ENABLED = True
 
