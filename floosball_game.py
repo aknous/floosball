@@ -2664,8 +2664,14 @@ class Game:
         endOfHalf = self.currentQuarter == 2
         endOfGameNeed = (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff <= 0
         # Chess clock: a budget that's GETTING low is a preserve-time situation in
-        # ANY quarter (trailing/tied) — spend a timeout to save the huddle drain.
-        chessBudgetNeed = isChess and self._chessClockLow(preserveWindow) and scoreDiff <= 0
+        # ANY quarter — spend a timeout to save the huddle drain.
+        # ⚠️ AT ANY SCORE, LEADING INCLUDED. A lockout is a turnover at the spot whatever
+        # the lead, which is why the last-gasp tempo and the chess-clock spike already
+        # ignore the scoreboard. Gated on trailing/tied, this left a LEADING offense
+        # able to stop the clock only by spiking, so it spent downs with three
+        # timeouts in its pocket (prod game 2779, up 27-3). A leader has no other use
+        # for them here: on defense a stoppage only saves the opponent's budget.
+        chessBudgetNeed = isChess and self._chessClockLow(preserveWindow)
         if not (endOfHalf or endOfGameNeed or chessBudgetNeed):
             return
         self.play.insights['clockMgmt'] = {
@@ -7560,7 +7566,12 @@ class Game:
             # costs a down AND a few seconds of budget, so require room for >= 2 productive
             # plays (spike + a real snap). At <= 1 the spike would just forfeit the down and
             # burn the last of the budget into a lockout — run the real play instead.
+            # ⚠️ AND ONLY WITH NO TIMEOUTS LEFT, like the standard spike. A timeout stops
+            # the clock just as well without forfeiting the down; with one in hand the
+            # real play gets called and `_maybeCallTimeoutToSaveSnap` stops the clock
+            # before the huddle.
             if (self._chessClockLow(45)
+                    and timeoutsLeft == 0
                     and self._estimateAvailablePlays() >= 2
                     and self.clockRunning
                     and self.down <= self.gameRules.downsPerSeries - 2
