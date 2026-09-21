@@ -2712,6 +2712,29 @@ class Game:
         if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
             if not self._leadIsAboutToEvaporate(defScore - offScore):
                 return
+            # ⚠️ IN OVERTIME THERE MAY BE NO ANSWER TO BUY AT ANY CLOCK READING, which
+            # the seconds floor below cannot express. Once the offense is past the first
+            # guaranteed possession, ANY score ends the game — so a tied-or-leading
+            # defense that stops the clock is not saving time for a reply it will never
+            # get, it is handing the clock back to an offense that only has to reach
+            # kicking range. Measured over a real season: 2 fires a season, both tied in
+            # OT with the offense already in range, and in both the game ended on the
+            # very next scoring play with the defense never snapping the ball again.
+            #
+            # ⚠️ NOT "never in overtime". While the offense is on the FIRST OT possession
+            # a field goal does not win, so the defense IS guaranteed the ball and the
+            # timeout is legitimate — the exact mirror of `isFirstPoss` in the OT play
+            # caller. ⚠️ And TRAILING is untouched here as everywhere else in this rule.
+            #
+            # ⚠️ ASK ABOUT THE THREAT THIS RULE ACTUALLY REACTED TO, mirroring the two
+            # limbs above: inside the red-zone window it is a touchdown possession, else
+            # the kick. Asking with the wrong one suppresses a timeout that still buys a
+            # possession — measured, a defense up 7 with the offense on the 1 is a TIE if
+            # they score, so the game plays on and the answer is real.
+            threat = (self._oneScore() if self.yardsToEndzone <= LEAD_THREAT_TD_YARDS
+                      else self._fgValue())
+            if self._offensiveScoreWinsNow(threat):
+                return
             # ⚠️ AND THE TIME SAVED HAS TO BE USABLE. The exception above buys a
             # possession to win in regulation; below this floor there is no possession to
             # buy, so the timeout is spent on nothing — and it still hands the offense the
@@ -5269,17 +5292,46 @@ class Game:
         from constants import SIDELINE_GOAL_MIDRANGE_YARD
         return 3 if SIDELINE_GOAL_MIDRANGE_YARD else 2
 
-    def _hoopScoreWinsNow(self) -> bool:
-        """Would an OFFENSIVE score by the team on offense end the game the instant it
-        happens? Mirrors checkOvertimeEnd for a non-defensive score: 2nd+ OT is pure
-        sudden death (any score wins); 1st OT ends on a go-ahead score only once both
-        guaranteed possessions are done. False in regulation (the opponent always has
-        answering time left on the clock)."""
+    def _offensiveScoreWinsNow(self, points: float) -> bool:
+        """Would an OFFENSIVE score worth `points` end the game the instant it happens?
+        Mirrors checkOvertimeEnd for a non-defensive score. False in regulation (the
+        opponent always has answering time left on the clock).
+
+        ⚠️ TWO CALLERS ASKING THE SAME QUESTION FROM OPPOSITE SIDES, which is why this is
+        deliberately NOT named for either of them (it was `_hoopScoreWinsNow`). The
+        OFFENSE asks it to know a sideline goal is worth taking outright; the DEFENSE
+        asks it in `_checkDefensiveTimeout` to know that stopping the clock buys nothing,
+        because there is no possession coming back. A second copy of this rule is exactly
+        the drift `fgMakeProbability` already paid for.
+
+        ⚠️ `points` IS REQUIRED, AND A SCORE THAT ONLY TIES ENDS NOTHING. `checkOvertimeEnd`
+        refuses on `homeScore == awayScore`, i.e. it reads the board AFTER the points land,
+        so a helper that ignores the amount answers a different question. Measured: a
+        defense up 7 with the offense on the 1 on its guaranteed possession is NOT in a
+        no-answer state, because the touchdown and extra point tie it and the game plays
+        on — and it duly did, the defense got the ball back and reached a field-goal try.
+
+        ⚠️ AND `otSecondPossComplete` ALONE IS TOO LATE. That flag is set in `turnover()`,
+        when the possession ENDS, so mid-possession it is still False on the very drive
+        whose score will end the game. The third clause reads the situation instead: the
+        offense is ON the second guaranteed possession (the first one is done and this is
+        not the team that had it), so a go-ahead score here completes that possession and
+        `isGameOver` fires. Without it the rule missed a tied defense whose opponent was
+        driving on the second possession — measured, exactly one of two remaining OT
+        fires."""
         if not getattr(self, 'isOvertime', False) or self.currentQuarter < 5:
             return False
+        offIsHome = self.offensiveTeam is self.homeTeam
+        offScore = self.homeScore if offIsHome else self.awayScore
+        defScore = self.awayScore if offIsHome else self.homeScore
+        if offScore + points <= defScore:
+            return False                     # still behind or level: nothing ends
         if getattr(self, 'otPeriod', 0) >= 2:
-            return True
-        return bool(getattr(self, 'otSecondPossComplete', False))
+            return True                      # 2nd+ OT is outright sudden death
+        if getattr(self, 'otSecondPossComplete', False):
+            return True                      # both guaranteed possessions already done
+        return bool(getattr(self, 'otFirstPossComplete', False)
+                    and self.offensiveTeam is not getattr(self, 'otFirstPossTeam', None))
 
     def _dartsExactLandings(self) -> set:
         """Darts: every remaining-need value a CONVENTIONAL scoring play lands exactly.
@@ -6073,7 +6125,9 @@ class Game:
             return None
         # Tied: a single hoop point breaks the tie and takes the lead.
         if scoreDiff == 0:
-            if self._hoopScoreWinsNow():   # OT sudden death — the go-ahead point wins outright
+            # OT: the go-ahead point ends it outright, so it is not merely helpful.
+            if self._offensiveScoreWinsNow(
+                    float(getattr(self.gameRules, 'sidelineGoalPoints', 1) or 1)):
                 return 'critical'
             return 'helpful'
         if scoreDiff > 0:

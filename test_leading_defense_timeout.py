@@ -55,9 +55,12 @@ class StubGame:
     _maxPossession = fg.Game._maxPossession
     fgMakeProbability = fg.Game.fgMakeProbability
     _estimateFgProbability = fg.Game._estimateFgProbability
+    _offensiveScoreWinsNow = fg.Game._offensiveScoreWinsNow
 
     def __init__(self, *, quarter=4, secs=50, defScore=17, offScore=14,
-                 yardsToEndzone=30, timeouts=3, maxFg=55, accuracy=80):
+                 yardsToEndzone=30, timeouts=3, maxFg=55, accuracy=80,
+                 isOvertime=False, otPeriod=0, otSecondPossComplete=False,
+                 otFirstPossComplete=False, offenseHadFirstPoss=False):
         self.homeTeam = Team('DEFENSE', maxFg, accuracy)   # home = defense
         self.awayTeam = Team('OFFENSE', maxFg, accuracy)
         self.offensiveTeam = self.awayTeam
@@ -76,6 +79,13 @@ class StubGame:
         self._clockStoppedByWarning = False
         self.twoMinuteWarningShown = True
         self.timingManager = None
+        self.isOvertime = isOvertime
+        self.otPeriod = otPeriod
+        self.otSecondPossComplete = otSecondPossComplete
+        self.otFirstPossComplete = otFirstPossComplete
+        # who took the OT coin flip: the offense, or (default) the defense
+        self.otFirstPossTeam = self.offensiveTeam if offenseHadFirstPoss else self.defensiveTeam
+        self._oneScore = fg.Game._oneScore.__get__(self)
 
     def broadcastGameState(self, **kw):
         pass
@@ -215,6 +225,57 @@ expect(f"0:{FLOOR + 5} clears the floor — time for them to score and us to rep
 # slim chance beats none; the leader is spending the clock that protects its own lead.
 r = calls(defScore=14, offScore=17, yardsToEndzone=30, secs=15)
 expect(f"a TRAILING defense still spends timeouts at 0:15 ({r:.0%})", r > 0.4)
+
+
+# ── IN OVERTIME THE ANSWER MAY NOT EXIST AT ANY CLOCK READING ──────────────
+# The seconds floor asks "is there enough time for a reply". Under modified sudden death
+# that is the wrong question once the offense is past its first guaranteed possession:
+# ANY score ends the game, so there is no reply to time. Measured over a real season the
+# rule fired twice a year in exactly this state, both tied in OT with the offense already
+# in range and at 1:40 / 1:45 — far above the floor — and in both the game ended on the
+# next scoring play with the defense never snapping the ball again. Worse than wasted:
+# stopping the clock hands it to an offense that only has to reach kicking range.
+#
+# Bite check: delete the `_offensiveScoreWinsNow()` guard and the four r == 0 cases fail.
+ot = dict(quarter=5, isOvertime=True, secs=100, defScore=17, offScore=17)
+
+r = calls(**ot, otPeriod=1, otSecondPossComplete=True, yardsToEndzone=3)
+expect(f"1st OT, both possessions done: their score ends it, no reply to buy ({r:.0%})",
+       r == 0)
+
+r = calls(**ot, otPeriod=2, otSecondPossComplete=False, yardsToEndzone=3)
+expect(f"2nd OT is outright sudden death — same, at any clock ({r:.0%})", r == 0)
+
+# ⚠️ `otSecondPossComplete` IS SET WHEN THE POSSESSION ENDS, so mid-drive it is still
+# False on the very possession whose score ends the game. Tied, the opponent driving on
+# the SECOND guaranteed possession: a go-ahead score completes it and the game is over.
+# This was one of the two OT fires left after the first version of the guard.
+r = calls(**ot, otPeriod=1, otFirstPossComplete=True, yardsToEndzone=3)
+expect(f"tied, them driving on the 2nd guaranteed possession: no reply ({r:.0%})", r == 0)
+
+r = calls(**ot, otPeriod=1, otFirstPossComplete=True, yardsToEndzone=30,
+          maxFg=62, accuracy=90)
+expect(f"same, on the kick limb rather than the red zone ({r:.0%})", r == 0)
+
+# ⚠️ NOT "never in overtime". While the offense is on the FIRST guaranteed possession a
+# score does not win it, so the defense really is getting the ball back and the timeout is
+# doing its job — the mirror of `isFirstPoss` in the OT play caller.
+r = calls(**ot, otPeriod=1, offenseHadFirstPoss=True, yardsToEndzone=3)
+expect(f"1st OT, their opening possession: a reply IS guaranteed, so stop it ({r:.0%})",
+       r > 0.4)
+
+# ⚠️ A SCORE THAT ONLY TIES ENDS NOTHING, which is why the helper needs the point value.
+# Up 7 with them on the 1 on the second possession: the TD and extra point level it and
+# the game plays on, so the answer is real. Measured live, the defense got the ball back
+# and reached a field-goal try — suppressing here would have been the regression.
+r = calls(quarter=5, isOvertime=True, secs=100, defScore=24, offScore=17,
+          otPeriod=1, otFirstPossComplete=True, yardsToEndzone=1)
+expect(f"up 7, them on the 1: their score TIES, so the reply is real ({r:.0%})", r > 0.4)
+
+# ⚠️ And the asymmetry survives into overtime for the same reason as everywhere else.
+r = calls(quarter=5, isOvertime=True, otPeriod=2, secs=100,
+          defScore=14, offScore=17, yardsToEndzone=30)
+expect(f"a TRAILING defense in OT sudden death still spends them ({r:.0%})", r > 0.4)
 
 print("\nPASS — the leader stops the clock exactly when the clock stops helping it."
       if not fails else f"\n{len(fails)} FAILED")
