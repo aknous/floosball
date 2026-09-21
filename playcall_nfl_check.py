@@ -66,7 +66,12 @@ FIELDS = ['game', 'team', 'down', 'ytg', 'yte', 'qtr', 'qsecs', 'scoreDiff', 'of
           'openN', 'throwQ', 'nTgt', 'bestOpen',
           # running score at the snap, so a DRIVE's outcome can be reconstructed —
           # points alone cannot say whether a league scores often or scores big.
-          'homeScore', 'awayScore']
+          'homeScore', 'awayScore',
+          # ⚠️ THE REAL AIR YARDS AND YAC, not `yards - PASS_DEPTH_MEANS[tier]`. Air yards
+          # are DRAWN (`normal(mean, stdDev)`, sd 1.2 to 4.5 by tier) and a screen is thrown
+          # at or behind the line whatever its nominal tier, so inferring them from the tier
+          # mean is wrong per throw and biased wherever the two diverge.
+          'airY', 'yacY', 'concept']
 
 
 def _camel(name):
@@ -216,7 +221,9 @@ def _play(games, teams, rng):
         pre.update(openN=ins.get('rcvActualOpenness', ''), throwQ=ins.get('throwQuality', ''),
                    nTgt=len(tgts),
                    bestOpen=(max((t.get('openness', 0) for t in tgts), default='')),
-                   homeScore=game.homeScore, awayScore=game.awayScore)
+                   homeScore=game.homeScore, awayScore=game.awayScore,
+                   airY=ins.get('airYards', ''), yacY=ins.get('yac', ''),
+                   concept=getattr(p, 'passConcept', '') or '')
         rows.append(pre)
 
     FG.Game.playCaller = hooked
@@ -409,7 +416,8 @@ def load(path):
             row = {k: (int(v) if k in ints and v not in ('', None) else v) for k, v in rec.items()}
             for k in ('yte', 'qsecs', 'scoreDiff', 'yards'):
                 row[k] = float(row[k] or 0)
-            for k in ('openN', 'throwQ', 'nTgt', 'bestOpen', 'homeScore', 'awayScore'):
+            for k in ('openN', 'throwQ', 'nTgt', 'bestOpen', 'homeScore', 'awayScore',
+                      'airY', 'yacY'):
                 if k in row:
                     row[k] = float(row[k]) if row[k] not in ('', None) else None
             out.append(row)

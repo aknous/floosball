@@ -1562,6 +1562,14 @@ PASS_DEPTH_MEANS = {
 # play could travel 10 yards through the air and still be the shorter gain. Big
 # plays should come from genuine downfield throws. Tightening the short tiers and
 # lengthening the deep air bands REDISTRIBUTES yardage rather than adding it.
+# ⚠️ `fallForward` IS ONLY RAISED FOR **DEEP**, AND A RISING LADDER WAS WRONG. It was first
+# set 1.0/1.5/2.2/4.2 on the reasoning that forward progress scales with how fast the
+# receiver is already moving. That reasoning is sound and the DATA is not monotonic: real
+# YAC runs 4.04 / 3.26 / 4.13 / 5.69, DIPPING at medium, because a short throw is caught in
+# space with blockers (screens, slants) while a 6-10 yard throw is caught in coverage. A
+# rising ladder therefore pushed medium and long OVER (3.97 and 4.84 against 3.26 and 4.13)
+# while only deep had ever been short. Narrowed to deep alone: per-tier error 0.59 -> 0.26,
+# and scoring recovered 43.0 -> 45.0.
 # ⚠️ `fallForward` IS THE STAGE THAT WAS NOT PER TIER, AND IT IS THE ONE THAT DOMINATES A
 # DEEP CATCH. Every other stage here has always been tier-scaled; gate A's FAIL branch — the
 # receiver tackled by the man covering him — drew `normal(1.0, 1.0)` against a flat cap for
@@ -1580,17 +1588,17 @@ YAC_TIER_CAPS = {
     'medium': {'pass': int(_os.environ.get('FLOOS_YACC_M_P', '6')),
                'bFail': int(_os.environ.get('FLOOS_YACC_M_B', '8')),
                'house': int(_os.environ.get('FLOOS_YACC_M_H', '10')),
-               'fallForward': float(_os.environ.get('FLOOS_YACF_M', '1.5')), 'failCap': 4},
+               'fallForward': float(_os.environ.get('FLOOS_YACF_M', '1.0')), 'failCap': 4},
     'long':   {'pass': 6, 'bFail': 12, 'house': 14,
-               'fallForward': float(_os.environ.get('FLOOS_YACF_L', '2.2')), 'failCap': 5},
+               'fallForward': float(_os.environ.get('FLOOS_YACF_L', '1.4')), 'failCap': 5},
     # ⚠️ DEEP'S CEILINGS SHOULD EXCEED LONG'S, and they did not — `pass` and `house` were
     # identical to the tier below. A receiver who catches at 17 yards and slips the tackler
     # still has a safety in front of him; one who catches at 27 has broken through the
     # coverage, which is why real YAC is HIGHEST on deep balls (5.69) rather than tapering.
-    'deep':   {'pass': int(_os.environ.get('FLOOS_YACC_D_P', '9')),
+    'deep':   {'pass': int(_os.environ.get('FLOOS_YACC_D_P', '8')),
                'bFail': int(_os.environ.get('FLOOS_YACC_D_B', '15')),
-               'house': int(_os.environ.get('FLOOS_YACC_D_H', '18')),
-               'fallForward': float(_os.environ.get('FLOOS_YACF_D', '4.2')), 'failCap': 7},
+               'house': int(_os.environ.get('FLOOS_YACC_D_H', '16')),
+               'fallForward': float(_os.environ.get('FLOOS_YACF_D', '3.8')), 'failCap': 7},
 }
 YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '32'))
 YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '55'))
