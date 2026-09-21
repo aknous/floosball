@@ -68,6 +68,13 @@ season*
 # it also silently swallowed season_finish.py, which works locally and is simply
 # absent in production. seasonManager.py only survives it by already being tracked.
 !season_*.py
+# ...and not the preseason forecasts. Same rule, second victim: `season*` matched
+# docs/SEASON3/5/6/7/12/13_PREDICTIONS.md and their runs JSON, so SIX forecasts had
+# never been in the repo at all — each one the record of what the sim predicted before
+# a season was played, which is worthless if it only exists on the machine that ran it.
+# (Matching is case-insensitive here, which is why the uppercase names were caught.)
+!docs/SEASON*_PREDICTIONS.md
+!docs/season*_runs.json
 *.pyc
 *.png
 data/unusedNames.json
