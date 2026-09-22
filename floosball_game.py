@@ -15071,7 +15071,10 @@ class Game:
                            and not getattr(self.play, 'isPassCompletion', False))
         if _passIncomplete:
             self.play.yardage = 0
-        good = (self.play.yardage >= distance) and not _passIncomplete
+        # A try that ends in a lost fumble or a pick did not convert, whatever the yardage.
+        _lostBall = bool(getattr(self.play, 'isFumbleLost', False)
+                         or getattr(self.play, 'isInterception', False))
+        good = (self.play.yardage >= distance) and not _passIncomplete and not _lostBall
         if good:
             self._addScore(scoringTeam, points)
             self.play.playResult = PlayResult.Touchdown2PtGood if is2pt else PlayResult.ConversionGood
@@ -17338,6 +17341,18 @@ class Play():
 
         _defFire = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
         _offFire = bool(self.awakenedFire) and not _defFire
+        # ⚠️ A CARRIER WHO BREAKS THE PLANE HAS SCORED, and the ball is dead the instant
+        # he does, so there is nothing left to fumble. This check ran after the yardage
+        # was final with no goal-line test, so a scoring run could also come back a LOST
+        # fumble: on a normal down the turnover branch reads it first and turns the
+        # touchdown into a touchback, and on a conversion (which scores on yardage alone)
+        # the try was booked Good AND narrated as a fumble the defense recovered (prod
+        # game 2923). The awakened strip is a guaranteed takeaway, so it keeps the ball
+        # and holds the carrier a yard short instead: he was stripped before he got in.
+        _brokePlane = self.yardage >= self.yardsToEndzone
+        if _defFire and _brokePlane:
+            self.yardage = max(0, self.yardsToEndzone - 1)
+            _brokePlane = False
         if _defFire:
             # Forced strip — the awakened defender rips it loose and recovers (a guaranteed takeaway).
             self.isFumble = True
@@ -17347,7 +17362,7 @@ class Play():
             self.defense.updateInGameConfidence(.02)
             self.defense.gameDefenseStats['fumRec'] += 1
             self.playResult = PlayResult.Fumble
-        elif not _offFire and self.game._wxFumbleAdjust(
+        elif not _offFire and not _brokePlane and self.game._wxFumbleAdjust(
                 (fumbleRoll + fumbleResistModifier) > fumbleThreshold,
                 # ⚠️ The EFFECTIVE threshold, not the nominal one. The resist modifier
                 # is added to the ROLL rather than subtracted from the bar, so the real
@@ -17723,8 +17738,9 @@ class Play():
             tackler.stat_tracker.add_tackle(isReg)
 
         # Small fumble chance on the scramble (credit the tackler if lost) — never on an awakened fire.
+        # Never once he has broken the plane — a scoring scramble is a dead ball (see runPlay).
         if (batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE - _stFumbleBump)
-                and not self.awakenedFire):
+                and not self.awakenedFire and yds < self.yardsToEndzone):
             self.isFumble = True
             if batched_randint(1, 100) <= 50:
                 self.isFumbleLost = True
@@ -19755,7 +19771,9 @@ class Play():
                     # otherwise a wet ball is only wet when a back is holding it.
                     _stripThreshold = 97 - _stFumbleBump
                     _stripped = batched_randint(1, 100) > _stripThreshold
+                    # Nor once he has crossed the goal line: a scoring catch is a dead ball.
                     if (primaryTackler and self.isInBounds and not self.awakenedFire
+                            and self.yardage < self.yardsToEndzone
                             and self.game._wxFumbleAdjust(_stripped, _stripThreshold)):
                         # ~3% chance of fumble on catch (wider after a reach-for-the-marker
                         # stretch — _stFumbleBump); only in bounds — a receiver who steps
