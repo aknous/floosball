@@ -2988,6 +2988,9 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'conversionPoints': getattr(play_data, 'conversionPoints', None),
                                 'isProvisionalScore': getattr(play_data, 'isProvisionalScore', False),
                                 'isTouchdown': getattr(play_data, 'isTd', False),
+                                # Who the points went to — the DEFENSE on a pick-six or
+                                # scoop-and-score (the engine's two builders carry it too).
+                                'scoringTeam': getattr(getattr(play_data, 'scoringTeam', None), 'abbr', None),
                                 'isTurnover': (getattr(play_data, 'isFumbleLost', False) or getattr(play_data, 'isInterception', False)),
                                 'isSack': getattr(play_data, 'isSack', False),
                                 'scoreChange': getattr(play_data, 'scoreChange', False),

@@ -8928,7 +8928,14 @@ class Game:
             line = line.replace('{yards}', str(max(0, getattr(self.play, 'yardage', 0) or 0)))
             if fire.get('situation') in ('pick', 'strip'):
                 ry = getattr(self.play, 'returnYardage', 0) or 0
-                if ry > 0:
+                # ⚠️ A RETURN THAT REACHES THE GOAL IS A SCORE, AND THIS LINE USED TO
+                # STOP AT THE YARDAGE. The normal turnover text calls it ("Pick six!" /
+                # "Taken to the house!") off the same field-geometry test; the power
+                # text did not, so a strip returned for a touchdown read as a plain
+                # return (prod game 2891).
+                if ry > 0 and (self.yardsToSafety + (self.play.yardage or 0)) <= 0:
+                    line += '. Pick six!' if fire.get('situation') == 'pick' else '. Taken to the house!'
+                elif ry > 0:
                     line += f", returned {ry} yards"
             # A made FG needs its distance in the text. The kick flavor is
             # distance-agnostic, so weave the yardage in as a trailing clause,
@@ -10870,7 +10877,7 @@ class Game:
                                     gameId=self.id,
                                     homeScore=self.homeScore,
                                     awayScore=self.awayScore,
-                                    scoringPlay={'type': 'touchdown', 'team': self.offensiveTeam.abbr}
+                                    scoringPlay={'type': 'touchdown', 'team': self.defensiveTeam.abbr}
                                 )
                                 broadcaster.broadcast_sync(self.id, event)
 
@@ -12531,7 +12538,18 @@ class Game:
             return batched_choice(candidates)
 
         # Touchdowns — highest priority
-        if getattr(play, 'isTd', False):
+        # ⚠️ A DEFENSIVE TOUCHDOWN IS THE DEFENDER'S. `isTd` is set on a pick-six or a
+        # scoop-and-score too, and this used to hand the line to the ball carrier who
+        # just fumbled ("I think I scored. Did I score? I scored." — prod game 2891).
+        # The defender who took it away scored; if nobody is named, fall through to
+        # the turnover reactions below, which are right for the offense either way.
+        scorer = getattr(play, 'scoringTeam', None)
+        if getattr(play, 'isTd', False) and scorer is not None and scorer is play.defense:
+            taker = (getattr(play, 'interceptedBy', None) or getattr(play, 'forcedFumbleBy', None)
+                     or getattr(play, 'returner', None))
+            if taker is not None:
+                return (taker, 'td_scored')
+        elif getattr(play, 'isTd', False):
             if getattr(play, 'isPassCompletion', False):
                 featured = _pickPassSkill()
                 if featured is not None:
@@ -13258,6 +13276,10 @@ class Game:
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                     'conversionPoints': getattr(playObj, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                     'isTouchdown': getattr(playObj, 'isTd', False),
+                    # Who the points went to. On a pick-six or scoop-and-score that is the
+                    # DEFENSE, and a client reading `offensiveTeam` drew the score into the
+                    # wrong end zone (prod game 2891). None when nobody scored.
+                    'scoringTeam': getattr(getattr(playObj, 'scoringTeam', None), 'abbr', None),
                     'isTurnover': (getattr(playObj, 'isFumbleLost', False) or getattr(playObj, 'isInterception', False)),
                     'isSack': getattr(playObj, 'isSack', False),
                     'scoreChange': getattr(playObj, 'scoreChange', False),
@@ -13334,6 +13356,9 @@ class Game:
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
+                # Who the points went to — the DEFENSE on a pick-six / scoop-and-score.
+                # See the feed builder; the three payloads carry it alike.
+                'scoringTeam': getattr(getattr(self.play, 'scoringTeam', None), 'abbr', None),
                 # Contested Scoring beat 1: the ball reached the end zone but the TD
                 # isn't banked until the contest resolves, so isTd is still False here.
                 # Without this the frontend can't tell a provisional score from a play
