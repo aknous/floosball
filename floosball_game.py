@@ -18192,6 +18192,14 @@ class Play():
         short = target - self.yardage
         if short < 1 or short > 2:           # only when within a reach
             return (0, None, 0)
+        # ⚠️ FORWARD PROGRESS, OR THERE IS NOTHING TO REACH FROM. The window is measured
+        # off where the play ENDED, so a carrier driven BACKWARDS could still be within
+        # two yards of the line and lunge for it — read as "is dropped for -1 yards, and
+        # reaches for the goal line". A man going backwards is being carried away from
+        # the line, not extending toward it. A no-gain still reaches: he was stopped at
+        # the spot rather than pushed off it.
+        if self.yardage < 0:
+            return (0, None, 0)
         C = self._confidenceState(carrier)
         if C <= 0:
             return (0, None, 0)              # not confident enough to lunge for it

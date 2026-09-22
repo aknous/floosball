@@ -101,6 +101,19 @@ class StretchNoteTests(unittest.TestCase):
         self.assertEqual(noteFor(yardage=3, yardsToEndzone=4, yardsToFirstDown=4), 'stretch_goal')
         self.assertEqual(noteFor(yardage=3, yardsToEndzone=40, yardsToFirstDown=5), 'stretch_first')
 
+    def testACarrierDrivenBackwardsDoesNotReach(self):
+        """The window is measured off where the play ENDED, so a man tackled for a
+        loss two yards out was still inside it — "is dropped for -1 yards, and
+        reaches for the goal line". He is going the wrong way. Measured: 38 such
+        reaches per 300 games before, 0 after."""
+        self.assertIsNone(noteFor(yardage=-1, yardsToEndzone=1, yardsToFirstDown=1))
+        self.assertIsNone(noteFor(yardage=-2, yardsToEndzone=0, yardsToFirstDown=8))
+
+    def testANoGainStillReaches(self):
+        """Stopped at the spot, not pushed off it — he can still extend. Measured
+        at 132 such reaches per 300 games, deliberately kept."""
+        self.assertEqual(noteFor(yardage=0, yardsToEndzone=1, yardsToFirstDown=1), 'stretch_goal')
+
     def testEveryNoteHasItsOwnSentence(self):
         """A note with no text in the map appends nothing, so the reach happens
         silently — the failure that is invisible by construction."""
