@@ -8892,6 +8892,7 @@ class Game:
                 'stretch_first': ', and reaches the ball across the marker for the first down!',
                 'stretch_goal':  ', and stretches the ball across the goal line!',
                 'stretch_short': ', and lunges for the marker but comes up just short',
+                'stretch_short_goal': ', and reaches for the goal line but comes up just short',
             }.get(_stNote)
             if _stText:
                 text += _stText
@@ -8928,7 +8929,14 @@ class Game:
             line = line.replace('{yards}', str(max(0, getattr(self.play, 'yardage', 0) or 0)))
             if fire.get('situation') in ('pick', 'strip'):
                 ry = getattr(self.play, 'returnYardage', 0) or 0
-                if ry > 0:
+                # ⚠️ A RETURN THAT REACHES THE GOAL IS A SCORE, AND THIS LINE USED TO
+                # STOP AT THE YARDAGE. The normal turnover text calls it ("Pick six!" /
+                # "Taken to the house!") off the same field-geometry test; the power
+                # text did not, so a strip returned for a touchdown read as a plain
+                # return (prod game 2891).
+                if ry > 0 and (self.yardsToSafety + (self.play.yardage or 0)) <= 0:
+                    line += '. Pick six!' if fire.get('situation') == 'pick' else '. Taken to the house!'
+                elif ry > 0:
                     line += f", returned {ry} yards"
             # A made FG needs its distance in the text. The kick flavor is
             # distance-agnostic, so weave the yardage in as a trailing clause,
@@ -10870,7 +10878,7 @@ class Game:
                                     gameId=self.id,
                                     homeScore=self.homeScore,
                                     awayScore=self.awayScore,
-                                    scoringPlay={'type': 'touchdown', 'team': self.offensiveTeam.abbr}
+                                    scoringPlay={'type': 'touchdown', 'team': self.defensiveTeam.abbr}
                                 )
                                 broadcaster.broadcast_sync(self.id, event)
 
@@ -12531,7 +12539,18 @@ class Game:
             return batched_choice(candidates)
 
         # Touchdowns — highest priority
-        if getattr(play, 'isTd', False):
+        # ⚠️ A DEFENSIVE TOUCHDOWN IS THE DEFENDER'S. `isTd` is set on a pick-six or a
+        # scoop-and-score too, and this used to hand the line to the ball carrier who
+        # just fumbled ("I think I scored. Did I score? I scored." — prod game 2891).
+        # The defender who took it away scored; if nobody is named, fall through to
+        # the turnover reactions below, which are right for the offense either way.
+        scorer = getattr(play, 'scoringTeam', None)
+        if getattr(play, 'isTd', False) and scorer is not None and scorer is play.defense:
+            taker = (getattr(play, 'interceptedBy', None) or getattr(play, 'forcedFumbleBy', None)
+                     or getattr(play, 'returner', None))
+            if taker is not None:
+                return (taker, 'td_scored')
+        elif getattr(play, 'isTd', False):
             if getattr(play, 'isPassCompletion', False):
                 featured = _pickPassSkill()
                 if featured is not None:
@@ -13258,6 +13277,10 @@ class Game:
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                     'conversionPoints': getattr(playObj, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                     'isTouchdown': getattr(playObj, 'isTd', False),
+                    # Who the points went to. On a pick-six or scoop-and-score that is the
+                    # DEFENSE, and a client reading `offensiveTeam` drew the score into the
+                    # wrong end zone (prod game 2891). None when nobody scored.
+                    'scoringTeam': getattr(getattr(playObj, 'scoringTeam', None), 'abbr', None),
                     'isTurnover': (getattr(playObj, 'isFumbleLost', False) or getattr(playObj, 'isInterception', False)),
                     'isSack': getattr(playObj, 'isSack', False),
                     'scoreChange': getattr(playObj, 'scoreChange', False),
@@ -13334,6 +13357,9 @@ class Game:
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
+                # Who the points went to — the DEFENSE on a pick-six / scoop-and-score.
+                # See the feed builder; the three payloads carry it alike.
+                'scoringTeam': getattr(getattr(self.play, 'scoringTeam', None), 'abbr', None),
                 # Contested Scoring beat 1: the ball reached the end zone but the TD
                 # isn't banked until the contest resolves, so isTd is still False here.
                 # Without this the frontend can't tell a provisional score from a play
@@ -17672,6 +17698,15 @@ class Play():
             yds = self.yardsToEndzone
         yds = self._holdUpShortCap(yds)   # darts (bust): hold up short of a would-bust TD
         self.yardage = yds
+        # ⚠️ A SCRAMBLING QB REACHES FOR THE LINE TOO. Both carrier tails call
+        # `_stretchForFirst` and this path calls neither, so a scramble that ended at
+        # the 1 (or a yard short of the marker) simply stopped there — the one carrier
+        # in the sim who could not reach. The reach's fumble bump rides the scramble's
+        # own fumble roll below, the way the run tail folds it into its check.
+        _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.passer)
+        if _stBonus:
+            self.yardage = self._holdUpShortCap(min(self.yardage + _stBonus, self.yardsToEndzone))
+        yds = self.yardage
         self.isInBounds = batched_randint(1, 100) > QB_SCRAMBLE_OOB_CHANCE
         self.tackledBy = tackler
 
@@ -17688,7 +17723,8 @@ class Play():
             tackler.stat_tracker.add_tackle(isReg)
 
         # Small fumble chance on the scramble (credit the tackler if lost) — never on an awakened fire.
-        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE) and not self.awakenedFire:
+        if (batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE - _stFumbleBump)
+                and not self.awakenedFire):
             self.isFumble = True
             if batched_randint(1, 100) <= 50:
                 self.isFumbleLost = True
@@ -18156,6 +18192,14 @@ class Play():
         short = target - self.yardage
         if short < 1 or short > 2:           # only when within a reach
             return (0, None, 0)
+        # ⚠️ FORWARD PROGRESS, OR THERE IS NOTHING TO REACH FROM. The window is measured
+        # off where the play ENDED, so a carrier driven BACKWARDS could still be within
+        # two yards of the line and lunge for it — read as "is dropped for -1 yards, and
+        # reaches for the goal line". A man going backwards is being carried away from
+        # the line, not extending toward it. A no-gain still reaches: he was stopped at
+        # the spot rather than pushed off it.
+        if self.yardage < 0:
+            return (0, None, 0)
         C = self._confidenceState(carrier)
         if C <= 0:
             return (0, None, 0)              # not confident enough to lunge for it
@@ -18169,9 +18213,14 @@ class Play():
         flairTerm = STRETCH_FLAIR_K * (self._flair(carrier) - 0.5) * 2.0        # ±K
         detTerm = STRETCH_DETERMINATION_K * self._determinationState(carrier)   # ±K
         successChance = int(45 + 25 * C + 15 * powerNorm + flairTerm + detTerm)
+        forGoal = (target == self.yardsToEndzone)
         if batched_randint(1, 100) > successChance:
-            return (0, 'stretch_short', 0)   # overreaches, comes up just short
-        note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
+            # ⚠️ THE MISS NAMES THE LINE IT MISSED. A failed reach at the goal line
+            # read "lunges for the marker but comes up just short" — the marker is
+            # the first-down line, and there isn't one to reach for on the play the
+            # reader just watched end at the 1.
+            return (0, 'stretch_short_goal' if forGoal else 'stretch_short', 0)
+        note = 'stretch_goal' if forGoal else 'stretch_first'
         fumbleBump = int(round(self._undiscipline(carrier) * 4 * C))  # 0 (disciplined) .. ~4 (gunslinger)
         return (short, note, fumbleBump)
 
