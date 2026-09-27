@@ -61,6 +61,7 @@ def init_db():
     _seedBetaAllowlist()
     _seedAchievements()
     _collapseLiveGenerationalNames()
+    _backfillProspectContracts()
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -807,6 +808,7 @@ def _runPendingMigrations():
             ('is_prospect', 'BOOLEAN DEFAULT 0'),
             ('is_undrafted', 'BOOLEAN DEFAULT 0'),
             ('prospect_seasons', 'INTEGER DEFAULT 0'),
+            ('on_prospect_contract', 'BOOLEAN DEFAULT 0'),
             ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
             ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
             ('will_retire', 'BOOLEAN DEFAULT 0'),
@@ -2092,6 +2094,8 @@ def _refreshCardEffectText():
 
     refreshEffects = {
         "odometer", "snake_eyes",
+        # Trust Fund growth capped at TRUST_FUND_GROWTH_WEEKS_CAP (2026-09-27).
+        "trust_fund",
         # FPx delta-notation sweep — existing cards stored 1.x values in
         # their tooltip/detail strings; re-render with the *Delta variants.
         "backfield_buddies", "all_in", "stacked_deck",
@@ -3828,6 +3832,80 @@ def baseName(name: str) -> str:
         previous = name
         name = _NAME_SUFFIX_RE.sub('', name).strip()
     return name
+
+
+_PROSPECT_CONTRACT_MARKER = 'prospect_contracts_backfilled'
+
+
+def _backfillProspectContracts():
+    """ONE-SHOT: bring prospects promoted before 2026-09-27 onto the new rules.
+
+    Three things were written live from that date and are missing for anyone promoted
+    earlier. For each rostered player still on the contract he was promoted onto:
+      1. `on_prospect_contract` is set, so no club can cut him (`isCutProtected`);
+      2. his contract is extended to the promotion floor, the seasons he had left in the
+         pipeline (`playerManager.promotionTerm`). The old rule keyed on his tier, so a
+         2-star draftee promoted this offseason signed for ONE season;
+      3. `prospect_seasons` is restored to the pipeline seasons he served, which the
+         development clock counts (`PlayerDevelopment.careerSeasons`). Promotion used to
+         zero it.
+
+    ⚠️ RECOVERED FROM THE RECAP LOG. A promotion is a `promotion` event and his draft a
+    `rookie_pick` event, both stamped with the season, so pipeline seasons served =
+    promotion season - draft season. No draft record (an in-season trade backfill
+    promotion writes no event) means only the flag is set.
+
+    ⚠️ "STILL ON THAT CONTRACT" IS `seasons_played + term_remaining == term`: both move
+    one season a year from the promotion, and any later deal breaks the equality. The two
+    move at different moments (season end vs offseason step 3), so a boot between those
+    two points misses the player; deploy outside that window.
+
+    One-shot because each of these is written live from here on; re-running it could
+    only re-extend a contract that has already been extended.
+    """
+    from constants import PROSPECT_DEVELOPMENT_WINDOW
+    from database.models import Player, SeasonRecapEvent, AppSetting
+    session = SessionLocal()
+    try:
+        if session.query(AppSetting).filter(AppSetting.key == _PROSPECT_CONTRACT_MARKER).first():
+            return
+        promoSeason, draftSeason = {}, {}
+        for pid, season, kind in (session.query(SeasonRecapEvent.player_id, SeasonRecapEvent.season,
+                                                SeasonRecapEvent.event_type)
+                                  .filter(SeasonRecapEvent.event_type.in_(('promotion', 'rookie_pick')),
+                                          SeasonRecapEvent.player_id.isnot(None)).all()):
+            target = promoSeason if kind == 'promotion' else draftSeason
+            target[pid] = max(target.get(pid, season), season) if kind == 'promotion' \
+                else min(target.get(pid, season), season)
+        flagged, extended = 0, []
+        if promoSeason:
+            for p in session.query(Player).filter(Player.id.in_(list(promoSeason))).all():
+                if p.team_id is None or not p.term or p.term_remaining is None:
+                    continue
+                if (p.seasons_played or 0) + (p.term_remaining or 0) != p.term:
+                    continue
+                p.on_prospect_contract = True
+                flagged += 1
+                if p.id in draftSeason:
+                    served = max(0, promoSeason[p.id] - draftSeason[p.id])
+                    p.prospect_seasons = served
+                    floor = int(PROSPECT_DEVELOPMENT_WINDOW) - served
+                    if floor > p.term:
+                        add = floor - p.term
+                        extended.append((p.name, p.term, floor))
+                        p.term = floor
+                        p.term_remaining = (p.term_remaining or 0) + add
+        session.add(AppSetting(key=_PROSPECT_CONTRACT_MARKER, value=str(flagged)))
+        session.commit()
+        if flagged:
+            logger.info(f"Flagged {flagged} promoted prospect(s) still on their promotion contract")
+        for name, was, now in extended:
+            logger.info(f"    extended {name}: {was} -> {now} season(s)")
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"Prospect-contract backfill failed: {e}")
+    finally:
+        session.close()
 
 
 def _collapseLiveGenerationalNames():

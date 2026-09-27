@@ -85,6 +85,25 @@ def wasPromotedThisOffseason(player, season) -> bool:
         return False
 
 
+def isCutProtected(player, season) -> bool:
+    """May this rostered player NOT be cut? The one predicate every cut path reads.
+
+    Two rules:
+      - promoted in this same offseason (`wasPromotedThisOffseason`);
+      - ⚠️ STILL ON HIS PROMOTION CONTRACT (`onProspectContract`, owner 2026-09-27): a
+        promoted prospect can only stay rostered or be traded, never cut, until that
+        contract expires. The contract runs at least his seasons left in the pipeline
+        (`promotionTerm`), so this is the same control the club had over him as a
+        prospect, where he could only be promoted or traded. Cutting him to make room
+        for a trade or an upgrade would hand another club the development it waited for.
+    """
+    if player is None:
+        return False
+    if getattr(player, 'onProspectContract', False):
+        return True
+    return wasPromotedThisOffseason(player, season)
+
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -462,6 +481,7 @@ class PlayerManager:
             player.lateBloomPending = int(getattr(db_player, 'late_bloom_pending', 0) or 0)
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
+            player.onProspectContract = bool(getattr(db_player, 'on_prospect_contract', False))
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
@@ -1072,6 +1092,26 @@ class PlayerManager:
         remaining = max(1, longevity - seasonsPlayed + 1)
         return float(max(floor, min(base, remaining)))
 
+    def promotionTerm(self, player) -> int:
+        """Contract term for a prospect being PROMOTED onto a roster.
+
+        ⚠️ AT LEAST THE SEASONS HE HAD LEFT IN THE PIPELINE. The first-contract branch of
+        `_getPlayerTerm` keys on today's tier, so a 2-star prospect promoted early signed
+        for ONE season — and the club could then decline to re-sign him and watch the
+        development it had waited for happen somewhere else (owner report: a 2-star
+        promoted on a 1-year deal). Left in the pipeline he was the club's for the rest of
+        his window; promoting him must not hand that control back early. So the deal runs
+        at least `PROSPECT_DEVELOPMENT_WINDOW - prospect_seasons`, the same seasons-left
+        figure his team page shows.
+
+        Read while he is still a prospect: `prospect_seasons` is kept through promotion as
+        his pipeline seasons served, so read after promotion it still gives the same figure.
+        """
+        from constants import PROSPECT_DEVELOPMENT_WINDOW
+        base = self._getPlayerTerm(player)
+        left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
+        return max(1, int(base), left)
+
     def _getPlayerTerm(self, player) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
@@ -1479,9 +1519,12 @@ class PlayerManager:
                     break
 
         peak = PlayerDevelopment.peakSeason(player)
-        if seasons < peak - DEV_PRIME_WINDOW and hasUpside:
+        # The arc is measured on the development clock (pro + pipeline seasons), the same
+        # one `careerContext` develops him on; the retirement bound above stays on pro seasons.
+        arcSeasons = PlayerDevelopment.careerSeasons(player)
+        if arcSeasons < peak - DEV_PRIME_WINDOW and hasUpside:
             return 'developing'
-        if seasons <= peak + DEV_PRIME_WINDOW:
+        if arcSeasons <= peak + DEV_PRIME_WINDOW:
             return 'prime'
         return 'aging'
 
@@ -1759,6 +1802,7 @@ class PlayerManager:
                         is_prospect=bool(getattr(player, 'is_prospect', False)),
                         is_undrafted=bool(getattr(player, 'is_undrafted', False)),
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
+                        on_prospect_contract=bool(getattr(player, 'onProspectContract', False)),
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                         will_retire=bool(getattr(player, 'willRetire', False)),
@@ -1792,6 +1836,7 @@ class PlayerManager:
                     db_player.late_bloom_pending = int(getattr(player, 'lateBloomPending', 0) or 0)
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
+                    db_player.on_prospect_contract = bool(getattr(player, 'onProspectContract', False))
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
@@ -5438,8 +5483,7 @@ class PlayerManager:
                 # cut, and it is the same rule as the comment above, not a new one.
                 held = [(sl, team.rosterDict.get(sl)) for sl in slots
                         if sl not in filledThisDraft and team.rosterDict.get(sl) is not None
-                        and not wasPromotedThisOffseason(team.rosterDict.get(sl),
-                                                         seasonNumber)]
+                        and not isCutProtected(team.rosterDict.get(sl), seasonNumber)]
                 held = [(sl, p, board.get(getattr(p, 'id', None))) for sl, p in held]
                 held = [h for h in held if h[2] is not None]
                 if not held:
@@ -5660,8 +5704,11 @@ class PlayerManager:
         else:
             # kind == 'prospect' — promote the chosen prospect into the slot.
             promoted = candidate
+            promotedTerm = self.promotionTerm(promoted)
             promoted.is_prospect = False
-            promoted.prospect_seasons = 0
+            promoted.onProspectContract = True
+            # prospect_seasons is KEPT: it is his pipeline seasons served, which the
+            # development clock counts (`PlayerDevelopment.careerSeasons`).
             promoted.drafting_team_id = None
             promoted.seasonsPlayed = 0
             promoted.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
@@ -5669,11 +5716,8 @@ class PlayerManager:
             team.rosterDict[slot] = promoted
             if promoted in team.prospects:
                 team.prospects.remove(promoted)
-            try:
-                promoted.term = self._getPlayerTerm(promoted)
-                promoted.termRemaining = promoted.term
-            except Exception:
-                promoted.termRemaining = 1
+            promoted.term = promotedTerm
+            promoted.termRemaining = promotedTerm
             # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
             # later in this same offseason — including two rounds further into this very
             # draft, which `_draftFilledSlots` does not prevent because that set is

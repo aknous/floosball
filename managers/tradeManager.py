@@ -2335,10 +2335,12 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
     # once the season ends — but a promotion is the opposite kind of move. The club spent
     # a pick on him and committed a roster spot days ago, and he has not played a down.
     # So the exemption that makes the trade rule right is exactly what leaves this hole.
-    from managers.playerManager import wasPromotedThisOffseason
-    if wasPromotedThisOffseason(worst, seasonNum):
+    # And not one still on his promotion contract: a promoted prospect can only stay
+    # rostered or be traded, so he is never cut to make room for a trade.
+    from managers.playerManager import isCutProtected
+    if isCutProtected(worst, seasonNum):
         logger.info(f"Trade declined: {buyer.name} would have to cut {worst.name}, "
-                    f"promoted in this same offseason")
+                    f"a promoted prospect")
         return None
     # ⚠️ NO SECOND UPGRADE TEST HERE. `bidFor` already established that the incoming
     # player beats this exact man — on the buyer's own BELIEVED, position-weighted read —
@@ -2447,17 +2449,21 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
     from constants import TRADE_MIDSEASON_SIGNING_TERM
     kind, person = backfill
     if kind == 'prospect':
+        try:
+            # A promotion runs at least his seasons left in the pipeline.
+            personTerm = seasonManager.playerManager.promotionTerm(person)
+        except Exception:
+            personTerm = 1
         person.is_prospect = False
-        person.prospect_seasons = 0
+        person.onProspectContract = True
+        # prospect_seasons is KEPT as pipeline seasons served; the development clock
+        # counts it (`PlayerDevelopment.careerSeasons`).
         person.drafting_team_id = None
         person.team = team
         if person in (getattr(team, 'prospects', None) or []):
             team.prospects.remove(person)
-        try:
-            person.term = seasonManager.playerManager._getPlayerTerm(person)
-            person.termRemaining = person.term
-        except Exception:
-            person.termRemaining = 1
+        person.term = personTerm
+        person.termRemaining = personTerm
     else:
         pm = seasonManager.playerManager
         if person in getattr(pm, 'freeAgents', []):

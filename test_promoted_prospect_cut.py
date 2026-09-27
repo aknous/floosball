@@ -94,9 +94,11 @@ CUTTERS = [
     ('managers/tradeManager.py', '_cutToMakeRoom',
      'cutting to make room for a trade'),
 ]
+# Each reads `isCutProtected`, which covers this offseason's promotion AND the whole
+# promotion contract (test_prospect_contract_protection.py).
 for path, fn, desc in CUTTERS:
     expect(f"{desc} refuses a just-promoted player",
-           'wasPromotedThisOffseason(' in _funcSource(path, fn))
+           'isCutProtected(' in _funcSource(path, fn))
 
 
 # ── the trade rule's offseason exemption is still there ─────────────────────

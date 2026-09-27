@@ -6098,6 +6098,13 @@ class SeasonManager:
                 # Only the winner is the Floosball champion
                 if season_str not in game.winningTeam.floosbowlChampionships:
                     game.winningTeam.floosbowlChampionships.append(season_str)
+                # ⚠️ THE TITLE PASSES, IT DOES NOT ACCUMULATE. `floosbowlChampion` means
+                # REIGNING champion, set on last season's winner at season start, and
+                # nothing cleared it here, so after the Bowl two teams held it and the
+                # old champion's page kept saying "Champions".
+                for _t in (getattr(self.leagueManager, 'teams', None) or
+                           [t for lg in self.leagueManager.leagues for t in lg.teamList]):
+                    _t.floosbowlChampion = False
                 game.winningTeam.floosbowlChampion = True
                 game.winningTeam.seasonTeamStats['floosbowlChamp'] = True
                 
@@ -8358,8 +8365,8 @@ class SeasonManager:
             # ⚠️ Not a prospect this club promoted minutes ago in the loop above. Trading
             # one just-promoted prospect for another is the churn this rule exists to
             # stop, and it costs a cut fee to end up with the same number of rookies.
-            from managers.playerManager import wasPromotedThisOffseason
-            if wasPromotedThisOffseason(
+            from managers.playerManager import isCutProtected
+            if isCutProtected(
                     incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
                 continue
             value = brain.decisionValue(incumbent, coach=coach, team=team)
@@ -8487,19 +8494,22 @@ class SeasonManager:
             if best is None:
                 break
 
+            try:
+                bestTerm = self.playerManager.promotionTerm(best)
+            except Exception:
+                bestTerm = 1
             best.is_prospect = False
-            best.prospect_seasons = 0
+            best.onProspectContract = True
+            # prospect_seasons is KEPT as pipeline seasons served; the development clock
+            # counts it (`PlayerDevelopment.careerSeasons`).
             best.drafting_team_id = None
             best.team = team
             team.rosterDict[bestSlot] = best
             if best in team.prospects:
                 team.prospects.remove(best)
             prospects.remove(best)
-            try:
-                best.term = self.playerManager._getPlayerTerm(best)
-                best.termRemaining = best.term
-            except Exception:
-                best.termRemaining = 1
+            best.term = bestTerm
+            best.termRemaining = bestTerm
             # ⚠️ Promoting is a commitment for the season. Without this he can be cut
             # again before a snap is played — by the FA draft's upgrade cut, by a trade
             # needing room, or by the very next turn of this same loop making room for
@@ -8882,6 +8892,10 @@ class SeasonManager:
 
                 # Decrement contract term
                 player.termRemaining -= 1
+                # The promotion contract has run out: whatever happens next (re-sign,
+                # walk, retire) he is an ordinary player from here, and cuttable.
+                if player.termRemaining <= 0:
+                    player.onProspectContract = False
 
                 # Retirement is contract-end-only and pre-decided during the
                 # regular season (see _evaluateRetirementCandidates). The flag
@@ -12103,22 +12117,34 @@ class SeasonManager:
         logger.info(f"Funding tiers assigned for season {season}: {tierCounts}")
 
     def _restoreReigningChampion(self, currentSeason: int) -> None:
-        """Restore the floosbowlChampion flag on the team that won last season."""
-        previousSeason = currentSeason - 1
-        if previousSeason < 1:
-            return
+        """Restore the floosbowlChampion flag on the REIGNING champion.
+
+        ⚠️ THAT IS THIS SEASON'S WINNER ONCE THE FLOOS BOWL HAS BEEN PLAYED. This always
+        read last season's champion, so a restart any time after the Bowl (the whole
+        offseason runs under this season's number) crowned the previous champion again and
+        left the new one without the flag. Exactly one team holds it.
+        """
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
             return
         try:
             from database.models import Season as DBSeason
-            prevDbSeason = self.db_session.query(DBSeason).filter_by(season_number=previousSeason).first()
-            if prevDbSeason and prevDbSeason.champion_team_id:
-                teamManager = self.serviceContainer.getService('team_manager')
-                if teamManager:
-                    champTeam = teamManager.getTeamById(prevDbSeason.champion_team_id)
-                    if champTeam:
-                        champTeam.floosbowlChampion = True
-                        logger.info(f"Restored reigning champion: {champTeam.city} {champTeam.name}")
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            champId = None
+            for season in (currentSeason, currentSeason - 1):
+                if season < 1:
+                    continue
+                row = self.db_session.query(DBSeason).filter_by(season_number=season).first()
+                if row and row.champion_team_id:
+                    champId = row.champion_team_id
+                    break
+            for team in getattr(teamManager, 'teams', None) or []:
+                team.floosbowlChampion = False
+            champTeam = teamManager.getTeamById(champId) if champId else None
+            if champTeam:
+                champTeam.floosbowlChampion = True
+                logger.info(f"Restored reigning champion: {champTeam.city} {champTeam.name}")
         except Exception as e:
             logger.error(f"Failed to restore reigning champion: {e}")
 

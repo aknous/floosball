@@ -77,16 +77,32 @@ class PlayerDevelopment:
                               DEV_DECLINE_FACTOR_MODE)
 
     @staticmethod
+    def careerSeasons(player: Any) -> int:
+        """Seasons since he entered the league: pro seasons PLUS pipeline seasons.
+
+        ⚠️ DEVELOPMENT DOES NOT DEPEND ON ROSTER STATUS (owner, 2026-09-27). The arc used to
+        read `seasonsPlayed` alone, which does not advance while a player is a prospect —
+        so every pipeline season was a free RISING season that never aged him, and
+        promotion started the clock. Two players drafted together developed differently
+        depending on whether their team promoted them. `prospect_seasons` counts the
+        pipeline seasons served and is deliberately KEPT through promotion (and a washout
+        keeps it too), so the sum is the same clock whatever his status.
+
+        ⚠️ DEVELOPMENT ONLY. Retirement, contracts and service time still read
+        `seasonsPlayed`, which is pro seasons.
+        """
+        return int(getattr(player, 'seasonsPlayed', 0) or 0) + \
+            int(getattr(player, 'prospect_seasons', 0) or 0)
+
+    @staticmethod
     def careerContext(player: Any, devBias: int) -> DevContext:
         """Resolve the player's current arc phase + decline steepening."""
-        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        seasons = PlayerDevelopment.careerSeasons(player)
         attrs = getattr(player, 'attributes', None)
         longevity = getattr(attrs, 'longevity', 6) if attrs else 6
         peak = PlayerDevelopment.peakSeason(player)
-        isProspect = (
-            bool(getattr(player, 'is_prospect', False))
-            or seasons <= DEV_PROSPECT_SEASONS
-        )
+        # Boom/bust for his first seasons in the league, prospect or not.
+        isProspect = seasons <= DEV_PROSPECT_SEASONS
 
         if seasons < peak:
             phase = CareerPhase.RISING

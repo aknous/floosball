@@ -1073,8 +1073,8 @@ class FrontOfficeBrain:
             # otherwise only asks about players, and every partial mock of that manager
             # in the tests would need a new method. The default of 0 matches no stamp,
             # so an unstamped brain simply leaves the player cuttable.
-            from managers.playerManager import wasPromotedThisOffseason
-            if wasPromotedThisOffseason(player, self.season):
+            from managers.playerManager import isCutProtected
+            if isCutProtected(player, self.season):
                 continue
             # ⚠️ SENTIMENT IS ON THE BAR HERE, NOT IN THE VALUE. A cut is a DEPARTURE,
             # and on a departure the club's own valuation is the side that does not
