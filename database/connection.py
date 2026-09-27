@@ -2094,6 +2094,8 @@ def _refreshCardEffectText():
 
     refreshEffects = {
         "odometer", "snake_eyes",
+        # Trust Fund growth capped at TRUST_FUND_GROWTH_WEEKS_CAP (2026-09-27).
+        "trust_fund",
         # FPx delta-notation sweep — existing cards stored 1.x values in
         # their tooltip/detail strings; re-render with the *Delta variants.
         "backfield_buddies", "all_in", "stacked_deck",

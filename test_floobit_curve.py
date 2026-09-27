@@ -18,8 +18,13 @@ Two obvious levers are both wrong, which is the point of this file:
   makes every week past the cap pay identically, so a great week and an absurd week are
   indistinguishable and the reason to keep playing dies at the cap.
 
-So: a second, harsher taper past a knee. Below the knee nothing changes at all; above it
-each doubling of FP pays 2^0.45 instead of 2^0.78. Continuous and monotonic.
+So: a second, harsher taper past a knee. Above it each doubling of FP pays 2^0.45 instead
+of 2^0.78. Continuous and monotonic.
+
+2026-09-27: typical weeks now pay MORE than the power curve (`WEEKLY_FP_FLOOBIT_BUMP`, +20%
+up to 1,000 FP, fading to nothing at the knee), because an FP-focused lineup was a net
+Floobit loss over a season. The knee and everything above it are untouched, so the tail
+tests below still hold exactly.
 
 Run: .venv/bin/python test_floobit_curve.py
 """
@@ -34,7 +39,8 @@ logging.disable(logging.CRITICAL)
 
 from constants import (  # noqa: E402
     WEEKLY_FP_FLOOBIT_EXPONENT, WEEKLY_FP_FLOOBIT_KNEE, WEEKLY_FP_FLOOBIT_SCALE,
-    WEEKLY_FP_FLOOBIT_TAIL_EXPONENT, weeklyFpFloobits,
+    WEEKLY_FP_FLOOBIT_TAIL_EXPONENT, WEEKLY_FP_FLOOBIT_BUMP, WEEKLY_FP_FLOOBIT_BUMP_FULL_UNTIL,
+    weeklyFpFloobits,
 )
 
 # Real percentiles of a user-week's FP, production seasons 12+ (n=2,221).
@@ -48,17 +54,29 @@ def oldCurve(fp):
 
 
 class TypicalPlayTests(unittest.TestCase):
-    """⚠️ The whole constraint. Everything at or below the knee must be untouched."""
+    """Typical weeks get the full bump; the knee and the tail get none of it."""
 
-    def testEveryPercentileBelowTheKneeIsUnchanged(self):
+    def testTypicalWeeksGetTheFullBump(self):
         for name, fp in (('p25', P25), ('p50', P50), ('p75', P75)):
-            self.assertLess(fp, WEEKLY_FP_FLOOBIT_KNEE,
-                            f'{name} moved above the knee — re-derive this test')
-            self.assertEqual(weeklyFpFloobits(fp), oldCurve(fp),
-                             f'{name} changed; the knee is meant to bite only the tail')
+            self.assertLessEqual(fp, WEEKLY_FP_FLOOBIT_BUMP_FULL_UNTIL,
+                                 f'{name} moved into the fade — re-derive this test')
+            expected = round(WEEKLY_FP_FLOOBIT_SCALE * fp ** WEEKLY_FP_FLOOBIT_EXPONENT
+                             * (1 + WEEKLY_FP_FLOOBIT_BUMP))
+            self.assertEqual(weeklyFpFloobits(fp), expected, f'{name} missed the bump')
 
-    def testTheMedianWeekStillPaysWhatTheLiftBoughtIt(self):
-        self.assertEqual(weeklyFpFloobits(P50), oldCurve(P50))
+    def testTheMedianWeekPaysMoreThanTheLiftAlone(self):
+        self.assertGreater(weeklyFpFloobits(P50), oldCurve(P50))
+
+    def testNoWeekAtOrAboveTheKneePaysMore(self):
+        """Owner: avoid increasing payouts for very high FP scores."""
+        atKnee = WEEKLY_FP_FLOOBIT_SCALE * WEEKLY_FP_FLOOBIT_KNEE ** WEEKLY_FP_FLOOBIT_EXPONENT
+        for fp in (WEEKLY_FP_FLOOBIT_KNEE, P90, 3000.0, P99, OBSERVED_MAX):
+            old = round(atKnee * (fp / WEEKLY_FP_FLOOBIT_KNEE) ** WEEKLY_FP_FLOOBIT_TAIL_EXPONENT)
+            self.assertEqual(weeklyFpFloobits(fp), old, f'{fp} FP changed')
+
+    def testTheFadeKeepsTheCurveIncreasing(self):
+        vals = [weeklyFpFloobits(fp) for fp in range(1, 3001)]
+        self.assertTrue(all(b >= a for a, b in zip(vals, vals[1:])), 'a bigger week paid less')
 
     def testTheKneeSitsBelowP90SoItBitesRoughlyTheTopDecile(self):
         self.assertLess(WEEKLY_FP_FLOOBIT_KNEE, P90)

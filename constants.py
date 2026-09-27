@@ -851,8 +851,24 @@ CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50
 FLOOSBOWL_WIN_REWARD = 150
 
-WEEKLY_LEADERBOARD_PRIZES = {1: 30, 2: 20, 3: 15}
-WEEKLY_LEADERBOARD_TOP_PCT_PRIZE = 5
+# ⚠️ SIZED SO AN FP BUILD IS NOT A NET FLOOBIT LOSS (owner, 2026-09-27). Measured on the
+# season-7 production snapshot, a lineup chasing FP spends ~1,200-1,300 Floobits a season
+# more on cards, packs, rerolls and level-ups than a Floobit-card lineup, and the old
+# table (30/20/15 +5; season 200/125/75 +25) paid ~2,200 across the WHOLE league, so an
+# FP-only user finished the season about 1,160 down while a Floobit build broke even.
+# At 5x the FP-only user nets about +120 and a Floobit build about -100: the rank prize is
+# what pays for competing on FP, and a Floobit build does not compete for it. Adds ~9,000 a
+# season league-wide, far less than the Floobit-card resize removes (Trust Fund, Gold Rush,
+# Highlight Reel). Re-measure if the FP->Floobit curve or those cards move.
+# Trust Fund's "weeks your roster stays unchanged" growth stops counting after this many
+# weeks. Uncapped, it grew all season: a card left alone 20 weeks paid ~395 Floobits a week
+# at tier 4, and Trust Fund alone was 39% of all card Floobits in season 7 (168 a card-week
+# against 18-45 for every other Floobit card). Capped at 4 it pays ~44 a card-week, inside
+# that band: patience is still rewarded, for a stretch rather than a season.
+TRUST_FUND_GROWTH_WEEKS_CAP = 4
+
+WEEKLY_LEADERBOARD_PRIZES = {1: 150, 2: 100, 3: 75}
+WEEKLY_LEADERBOARD_TOP_PCT_PRIZE = 30
 WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 
 # ── Supporter income (fan loyalty dividends) — feature/fan-income ──────────────
@@ -931,8 +947,9 @@ SPECTATOR_WEEKLY_PAYOUT_CAP = 60       # max Floobits/week from spectating
 SPECTATOR_BIG_PLAY_FILL = 4.0          # bonus fill per witnessed big play
 SPECTATOR_OWN_BIG_PLAY_MULT = 2.0      # multiplier when YOUR team makes the big play
 
-SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
-SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
+# 5x alongside the weekly table; see WEEKLY_LEADERBOARD_PRIZES.
+SEASON_LEADERBOARD_PRIZES = {1: 1000, 2: 650, 3: 400}
+SEASON_LEADERBOARD_TOP_PCT_PRIZE = 150
 SEASON_LEADERBOARD_TOP_PCT = 0.25
 
 ROSTER_SWAP_COST = 15          # Base cost per swap (escalates per slot)
@@ -1008,6 +1025,21 @@ WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 WEEKLY_FP_FLOOBIT_KNEE = 1500.0      # FP at which the second taper starts
 WEEKLY_FP_FLOOBIT_TAIL_EXPONENT = 0.45   # exponent applied to FP past the knee
 
+# ⚠️ A BUMP BELOW THE KNEE, FADING TO NOTHING AT IT (owner, 2026-09-27). An FP-focused
+# lineup was a net Floobit loss over a season: it spends more assembling a competitive
+# hand, and the leaderboard prizes (5x on the same day) only reach the week's top few.
+# Weeks up to WEEKLY_FP_FLOOBIT_BUMP_FULL_UNTIL pay (1 + BUMP) x the curve; between there
+# and the knee the bump fades linearly to 0, so at and above the knee every week pays
+# exactly what it did. No very high week pays more (owner: "avoid increasing payouts for
+# very high FP scores"). Stays strictly monotonic: the fade is slow enough that the
+# curve's own slope always wins.
+# Replayed against seasons 3-7 of the prod snapshot (with the Floobit-card resize and the
+# 5x prizes): FP-only net per season -193/-463/-659/-2938/+124 -> +218/+139/-23/-2262/+856.
+# Season 6 stays negative at any modest size: those users outspent their income by ~2,700
+# and rarely topped a week.
+WEEKLY_FP_FLOOBIT_BUMP = 0.20
+WEEKLY_FP_FLOOBIT_BUMP_FULL_UNTIL = 1000.0
+
 
 def weeklyFpFloobits(weekFp: float) -> int:
     """Floobits for a week's fantasy points. THE single definition of the curve.
@@ -1019,7 +1051,13 @@ def weeklyFpFloobits(weekFp: float) -> int:
     if weekFp <= 0:
         return 0
     if weekFp <= WEEKLY_FP_FLOOBIT_KNEE:
-        return round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
+        # Full bump up to BUMP_FULL_UNTIL, fading linearly to 0 at the knee.
+        if weekFp <= WEEKLY_FP_FLOOBIT_BUMP_FULL_UNTIL:
+            fade = 1.0
+        else:
+            fade = (WEEKLY_FP_FLOOBIT_KNEE - weekFp) / (WEEKLY_FP_FLOOBIT_KNEE - WEEKLY_FP_FLOOBIT_BUMP_FULL_UNTIL)
+        bump = 1.0 + WEEKLY_FP_FLOOBIT_BUMP * fade
+        return round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT) * bump)
     atKnee = WEEKLY_FP_FLOOBIT_SCALE * (WEEKLY_FP_FLOOBIT_KNEE ** WEEKLY_FP_FLOOBIT_EXPONENT)
     return round(atKnee * ((weekFp / WEEKLY_FP_FLOOBIT_KNEE) ** WEEKLY_FP_FLOOBIT_TAIL_EXPONENT))
 # Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the bank

@@ -931,7 +931,7 @@ EFFECT_TOOLTIPS = {
     "consolation_prize": "Here's a little something for your troubles. Guaranteed Floobits floor plus a chance at enhanced Floobits. The trigger bar fills from this player's own FP and from each roster player who has a bad week.",
     "rock_bottom": "Rock bottom has a cash reward. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the longer your favorite team's losing streak.",
     "buy_low": "Buy low, sell... whenever. Floobits for every underperforming roster player.",
-    "trust_fund": "The lazy investor strategy. Floobits that grow each week your roster stays unchanged.",
+    "trust_fund": "The lazy investor strategy. Floobits that grow each week your roster stays unchanged, for up to 4 weeks.",
     "feeding_frenzy": "Dinner is served. Floobits per roster TD, plus a jackpot bonus when your roster hits the TD threshold.",
     "highlight_reel": "Highlight reel material. Floobits for every big play your favorite team pulls off.",
     # Conditional (TE)
@@ -1121,7 +1121,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "consolation_prize": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Trigger odds fill from this player's FP plus each roster player under {fpThreshold} FP.",
     "rock_bottom": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. 20% at 1-game losing streak, up to 65%",
     "buy_low": "{perPlayerFloobits} Floobits per underperforming roster player",
-    "trust_fund": "{baseFloobits} Floobits base, +{growthPerWeek} per week your roster stays unchanged",
+    "trust_fund": "{baseFloobits} Floobits base, +{growthPerWeek} per week your roster stays unchanged (up to 4 weeks)",
     "feeding_frenzy": "{perTdFloobits}F per roster TD, +{bonusFloobits}F jackpot at {tdThreshold}+ roster TDs",
     "highlight_reel": "{rewardValue} Floobits per your favorite team's big plays",
     # Conditional (TE)
@@ -1645,8 +1645,13 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale, position=N
         # bonus in the hand and had been copying this one (max 228.7).
         return {"rewardType": "fp", "perTypeFP": round((17.0 + rn * 0.40) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gold_rush":
-        # Floobits output — leave untouched
-        return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
+        # ⚠️ HALVED (2026-09-27). It pays for each OTHER Floobit card, so a hand of Gold Rush
+        # cards pays each one for all the rest and the hand total grows with the square of
+        # the count: that is what made an all-Floobit hand the best play. Season 7 on prod:
+        # 115 a card-week against 18-45 for the other Floobit cards. The comment that stood
+        # here, "Floobits output — leave untouched", is why the metallic scale retune never
+        # reached it.
+        return {"rewardType": "floobits", "perCardFloobits": int(round((3 + rn * 0.15) * editionScale))}
     if effectName == "stacked_deck":
         # Exponential by design ("multiply the multipliers"), but the old
         # perCardMult (~0.24 @ r75) gave +136% on a full 4-FPx hand, which made
@@ -2373,7 +2378,10 @@ def _buildFloobitsParams(effectName, playerRating, editionScale, position=None):
                 "bonusFloobits": int(round((8 + rn * 0.3) * editionScale)),
                 "tdThreshold": 3}
     if effectName == "highlight_reel":
-        return {"rewardType": "floobits", "rewardValue": int(round((6 + rn * 0.3) * editionScale)),
+        # ⚠️ HALVED (2026-09-27), the holographic-retune correction Industrious and
+        # Diversified already got (EDITION_POWER_SCALE 0.47 -> 1.70 multiplied it 3.6x).
+        # Season 7 on prod: 85 a card-week against 18-45 for the other Floobit cards.
+        return {"rewardType": "floobits", "rewardValue": int(round((3 + rn * 0.15) * editionScale)),
                 "wpaThreshold": 7.0}
     if effectName == "workhorse":
         return {"rewardType": "fp",
@@ -3742,9 +3750,11 @@ def _computeBuyLow(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeTrustFund(primary, ctx, cardPlayerId, eqId):
+    from constants import TRUST_FUND_GROWTH_WEEKS_CAP
     baseFloobits = primary.get("baseFloobits", 0)
     growth = primary.get("growthPerWeek", 0)
-    weeks = max(0, ctx.rosterUnchangedWeeks)
+    # Capped (see TRUST_FUND_GROWTH_WEEKS_CAP): growth counts up to that many unchanged weeks.
+    weeks = min(max(0, ctx.rosterUnchangedWeeks), TRUST_FUND_GROWTH_WEEKS_CAP)
     eq = f"{baseFloobits}F base + ({growth}F × {weeks} wks unchanged)"
     return EffectResult(floobits=baseFloobits + growth * weeks, equation=eq)
 
