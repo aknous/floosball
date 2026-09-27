@@ -10498,6 +10498,13 @@ class Game:
                                 returner.addAdvanced(_SCR3.RETURNING, 'fairCatches', 1, _rsr3)
                             elif action == 'muff':
                                 returner.addAdvanced(_SCR3.RETURNING, 'muffs', 1, _rsr3)
+                                # A muff the kicking team recovers is a lost fumble:
+                                # it goes on the returner's line and costs him the
+                                # same -2 a runner pays. A muff his own team falls on
+                                # is only a muff.
+                                if ret.get('muffRecoveredBy') == 'kicking':
+                                    returner.addAdvanced(_SCR3.RETURNING, 'muffsLost', 1, _rsr3)
+                                    returner.stat_tracker.add_fantasy_points(-2)
                             else:
                                 returner.addAdvanced(_SCR3.RETURNING, 'puntReturns', 1, _rsr3)
                                 returner.addAdvanced(_SCR3.RETURNING, 'puntReturnYards', puntReturn, _rsr3)
@@ -10529,8 +10536,22 @@ class Game:
                     #    single biggest swing on a punt, and it did not exist before. ──
                     if action == 'muff' and ret.get('muffRecoveredBy') == 'kicking':
                         self.play.playResult = PlayResult.Fumble
+                        self.play.isFumble = True
                         self.play.isFumbleLost = True
                         self._applyMomentumEvent(MOMENTUM_TURNOVER, self.offensiveTeam)
+                        # ⚠️ A LOST MUFF IS A TURNOVER, and this branch used to set
+                        # only the play flags, so the box score, `games.*_fum_rec`,
+                        # `games.team_stats`, season fumble recoveries and the turnover
+                        # totals all missed it. The same counters every other lost
+                        # fumble increments, with the sides flipped: on a punt the
+                        # OFFENSE is the kicking team, which is the side that recovers.
+                        # Before the broadcast, so the snapshot it sends includes them.
+                        self.offensiveTeam.gameDefenseStats['fumRec'] += 1
+                        self.offensiveTeam.gameDefenseStats['fantasyPoints'] += 2
+                        if self.defensiveTeam is self.homeTeam:
+                            self.homeTurnoversTotal += 1
+                        elif self.defensiveTeam is self.awayTeam:
+                            self.awayTurnoversTotal += 1
                         self.formatPlayText()
                         self.gameFeed.insert(0, {'play': self.play})
                         self.highlights.insert(0, {'play': self.play})
@@ -10587,12 +10608,13 @@ class Game:
                     else:
                         newYards = 100 - min(99, max(1, landing + puntReturn))
                     
-                    # Consume time for punt (always stops clock)
-                    playDuration = self.calculatePlayDuration(PlayType.Punt, False)
-                    self.consumeGameTime(playDuration)
-                    self.play.stampClock()
-                    self.checkTwoMinuteWarning()
-                    self.clockRunning = False  # Clock stops after punt
+                    # ⚠️ NO SECOND CLOCK CHARGE HERE (fixed 2026-09-27). The kick, hang and
+                    # return were already charged above; this block was the old one-line
+                    # punt's own `calculatePlayDuration(Punt)` charge, left behind when the
+                    # return model arrived, so every ordinary punt paid the snap-and-kick
+                    # twice (4-6s) while a muff or a return TD, which break out earlier,
+                    # paid it once. The clock still stops: a punt changes possession.
+                    self.clockRunning = False
                     
                     self.formatPlayText()
                     if self.play.scoreChange or self.play.yardage >= 30:

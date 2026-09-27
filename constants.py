@@ -129,7 +129,7 @@ DEV_DECLINE_FACTOR_MODE = 0.85
 # Prospects / early-career players are boom-or-bust: widen both ends; good dev
 # (positive devBias) skews the spread toward boom.
 DEV_PROSPECT_SPREAD = 4
-DEV_PROSPECT_SEASONS = 1         # seasonsPlayed <= this (or is_prospect) → volatile
+DEV_PROSPECT_SEASONS = 1         # career seasons (pro + pipeline) <= this → volatile
 # A rising player climbs reliably toward their TRUE SKILL (the growth cap). Each
 # non-declining season there's a gated chance they OVERSHOOT past true skill
 # toward their potential ceiling — the overachiever who exceeds projection. Good

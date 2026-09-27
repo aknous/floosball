@@ -192,6 +192,7 @@ playerStatsDict =   {
                             'puntReturnTds': 0,
                             'fairCatches': 0,
                             'muffs': 0,
+                            'muffsLost': 0,
                             'longest': 0
                         },
                         'defense': {

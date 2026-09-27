@@ -200,6 +200,10 @@ class Player(Base):
     late_bloom_pending: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
     prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
+    # True from the moment a prospect is promoted until that promotion contract expires.
+    # While set he can only stay rostered or be traded, never cut (see
+    # `playerManager.isCutProtected`). Travels with him through a trade.
+    on_prospect_contract: Mapped[bool] = mapped_column(Boolean, default=False)
     drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     # True after _generateRookieClass, before the offseason rookie draft.
     # Upcoming rookies are visible to fans all season for scouting/voting but

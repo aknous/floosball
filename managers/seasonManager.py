@@ -8358,8 +8358,8 @@ class SeasonManager:
             # ⚠️ Not a prospect this club promoted minutes ago in the loop above. Trading
             # one just-promoted prospect for another is the churn this rule exists to
             # stop, and it costs a cut fee to end up with the same number of rookies.
-            from managers.playerManager import wasPromotedThisOffseason
-            if wasPromotedThisOffseason(
+            from managers.playerManager import isCutProtected
+            if isCutProtected(
                     incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
                 continue
             value = brain.decisionValue(incumbent, coach=coach, team=team)
@@ -8487,19 +8487,22 @@ class SeasonManager:
             if best is None:
                 break
 
+            try:
+                bestTerm = self.playerManager.promotionTerm(best)
+            except Exception:
+                bestTerm = 1
             best.is_prospect = False
-            best.prospect_seasons = 0
+            best.onProspectContract = True
+            # prospect_seasons is KEPT as pipeline seasons served; the development clock
+            # counts it (`PlayerDevelopment.careerSeasons`).
             best.drafting_team_id = None
             best.team = team
             team.rosterDict[bestSlot] = best
             if best in team.prospects:
                 team.prospects.remove(best)
             prospects.remove(best)
-            try:
-                best.term = self.playerManager._getPlayerTerm(best)
-                best.termRemaining = best.term
-            except Exception:
-                best.termRemaining = 1
+            best.term = bestTerm
+            best.termRemaining = bestTerm
             # ⚠️ Promoting is a commitment for the season. Without this he can be cut
             # again before a snap is played — by the FA draft's upgrade cut, by a trade
             # needing room, or by the very next turn of this same loop making room for
@@ -8882,6 +8885,10 @@ class SeasonManager:
 
                 # Decrement contract term
                 player.termRemaining -= 1
+                # The promotion contract has run out: whatever happens next (re-sign,
+                # walk, retire) he is an ordinary player from here, and cuttable.
+                if player.termRemaining <= 0:
+                    player.onProspectContract = False
 
                 # Retirement is contract-end-only and pre-decided during the
                 # regular season (see _evaluateRetirementCandidates). The flag

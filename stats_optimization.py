@@ -246,6 +246,7 @@ class ReturningStats:
     puntReturnTds: int = 0
     fairCatches: int = 0
     muffs: int = 0
+    muffsLost: int = 0   # muffs the KICKING team recovered: a lost fumble
     longest: int = 0
 
     def reset(self):
@@ -254,6 +255,7 @@ class ReturningStats:
         self.puntReturnTds = 0
         self.fairCatches = 0
         self.muffs = 0
+        self.muffsLost = 0
         self.longest = 0
 
     def copy_from(self, other: 'ReturningStats'):
@@ -262,6 +264,7 @@ class ReturningStats:
         self.puntReturnTds = other.puntReturnTds
         self.fairCatches = other.fairCatches
         self.muffs = other.muffs
+        self.muffsLost = other.muffsLost
         self.longest = other.longest
 
 @dataclass
@@ -430,6 +433,7 @@ class OptimizedPlayerStats:
                 'puntReturnTds': self.returning.puntReturnTds,
                 'fairCatches': self.returning.fairCatches,
                 'muffs': self.returning.muffs,
+                'muffsLost': self.returning.muffsLost,
                 'longest': self.returning.longest,
             }
         }

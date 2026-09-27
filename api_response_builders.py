@@ -425,6 +425,9 @@ class PlayerResponseBuilder(ResponseBuilder):
             'teamId': team.id if hasTeamObj else None,
             'teamAbbr': team.abbr if hasTeamObj else None,
             'isProspect': isProspect,
+            # Promoted and still on his promotion contract: can only stay rostered or be
+            # traded, never cut (`playerManager.isCutProtected`).
+            'protectedProspect': bool(getattr(player, 'onProspectContract', False)),
             'draftingTeamId': draftingTeamId,
             'draftingTeamName': draftingTeamName,
             'draftingTeamCity': draftingTeamCity,
