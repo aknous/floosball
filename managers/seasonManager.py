@@ -6098,6 +6098,13 @@ class SeasonManager:
                 # Only the winner is the Floosball champion
                 if season_str not in game.winningTeam.floosbowlChampionships:
                     game.winningTeam.floosbowlChampionships.append(season_str)
+                # ⚠️ THE TITLE PASSES, IT DOES NOT ACCUMULATE. `floosbowlChampion` means
+                # REIGNING champion, set on last season's winner at season start, and
+                # nothing cleared it here, so after the Bowl two teams held it and the
+                # old champion's page kept saying "Champions".
+                for _t in (getattr(self.leagueManager, 'teams', None) or
+                           [t for lg in self.leagueManager.leagues for t in lg.teamList]):
+                    _t.floosbowlChampion = False
                 game.winningTeam.floosbowlChampion = True
                 game.winningTeam.seasonTeamStats['floosbowlChamp'] = True
                 
@@ -12110,22 +12117,34 @@ class SeasonManager:
         logger.info(f"Funding tiers assigned for season {season}: {tierCounts}")
 
     def _restoreReigningChampion(self, currentSeason: int) -> None:
-        """Restore the floosbowlChampion flag on the team that won last season."""
-        previousSeason = currentSeason - 1
-        if previousSeason < 1:
-            return
+        """Restore the floosbowlChampion flag on the REIGNING champion.
+
+        ⚠️ THAT IS THIS SEASON'S WINNER ONCE THE FLOOS BOWL HAS BEEN PLAYED. This always
+        read last season's champion, so a restart any time after the Bowl (the whole
+        offseason runs under this season's number) crowned the previous champion again and
+        left the new one without the flag. Exactly one team holds it.
+        """
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
             return
         try:
             from database.models import Season as DBSeason
-            prevDbSeason = self.db_session.query(DBSeason).filter_by(season_number=previousSeason).first()
-            if prevDbSeason and prevDbSeason.champion_team_id:
-                teamManager = self.serviceContainer.getService('team_manager')
-                if teamManager:
-                    champTeam = teamManager.getTeamById(prevDbSeason.champion_team_id)
-                    if champTeam:
-                        champTeam.floosbowlChampion = True
-                        logger.info(f"Restored reigning champion: {champTeam.city} {champTeam.name}")
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            champId = None
+            for season in (currentSeason, currentSeason - 1):
+                if season < 1:
+                    continue
+                row = self.db_session.query(DBSeason).filter_by(season_number=season).first()
+                if row and row.champion_team_id:
+                    champId = row.champion_team_id
+                    break
+            for team in getattr(teamManager, 'teams', None) or []:
+                team.floosbowlChampion = False
+            champTeam = teamManager.getTeamById(champId) if champId else None
+            if champTeam:
+                champTeam.floosbowlChampion = True
+                logger.info(f"Restored reigning champion: {champTeam.city} {champTeam.name}")
         except Exception as e:
             logger.error(f"Failed to restore reigning champion: {e}")
 
