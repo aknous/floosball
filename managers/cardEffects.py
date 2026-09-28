@@ -946,7 +946,7 @@ EFFECT_TOOLTIPS = {
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
-    "odometer": "Hit the milestones. Escalating FP at each yardage gate this player hits. Resets weekly.",
+    "odometer": "Hit the milestones. FP at each yardage gate this player's passing, rushing and receiving yards reach this week, each gate adding to the last.",
     "leg_day": "Never skip it. FP growing each week this player nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
@@ -1137,7 +1137,10 @@ EFFECT_DETAIL_TEMPLATES = {
     "fairweather_fan": "{baseReward} Floobits base, +{growthPerTick} per consecutive favorite-team win.",
     "bandwagon_express": "+{baseReward} FP base, +{growthPerTick} per consecutive favorite-team win.",
     "touchdown_jackpot": "{baseReward} Floobits on 1st roster TD, +{growthPerTick} for every subsequent roster TD. Resets weekly.",
-    "odometer": "Escalating FP as this player piles up yards this week (40 / 80 / 120 / 160+).",
+    # ⚠️ The amounts are _computeOdometer's fallback gates (5 + 6 per gate), which is what
+    # every Odometer card pays: minted cards carry roster-scale `gates` the compute does not
+    # read. Keep this text in step with that function (test_odometer_text.py).
+    "odometer": "+5 / +11 / +17 / +23 FP as this player's passing, rushing and receiving yards this week reach 40 / 80 / 120 / 160. Each gate adds to the last, up to +56 FP.",
     "leg_day": "+{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak.",
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
     "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
