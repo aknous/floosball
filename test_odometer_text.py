@@ -49,6 +49,12 @@ class OdometerTextTest(unittest.TestCase):
                                                 {'yards': 600, 'fp': 10.6}, {'yards': 800, 'fp': 14.4}]}
         self.assertEqual(pay(runYards=160, primary=minted), pay(runYards=160))
 
+    def test_the_tooltip_states_the_same_maximum(self):
+        from managers.cardEffects import EFFECT_TOOLTIPS
+        cap = pay(runYards=900)
+        self.assertIn(f"up to +{int(cap)} FP", EFFECT_TOOLTIPS['odometer'])
+        self.assertIn(f"up to +{int(cap)} FP", self.TEXT)
+
     def test_passing_rushing_and_receiving_all_count(self):
         self.assertIn('passing, rushing and receiving', self.TEXT)
         self.assertEqual(pay(passYards=100, runYards=40, rcvYards=20), pay(runYards=160))
