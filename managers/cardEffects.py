@@ -946,7 +946,7 @@ EFFECT_TOOLTIPS = {
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
-    "odometer": "Hit the milestones. Escalating FP at each yardage gate this player hits. Resets weekly.",
+    "odometer": "Hit the milestones. FP at each yardage gate this player reaches this week, set by position and each adding to the last, up to +145 FP.",
     "leg_day": "Never skip it. FP growing each week this player nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
@@ -1137,7 +1137,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "fairweather_fan": "{baseReward} Floobits base, +{growthPerTick} per consecutive favorite-team win.",
     "bandwagon_express": "+{baseReward} FP base, +{growthPerTick} per consecutive favorite-team win.",
     "touchdown_jackpot": "{baseReward} Floobits on 1st roster TD, +{growthPerTick} for every subsequent roster TD. Resets weekly.",
-    "odometer": "Escalating FP as this player piles up yards this week (40 / 80 / 120 / 160+).",
+    # Amounts are constants.ODOMETER_GATE_FP; {gatesText} is this card's position's yard gates.
+    # Keep in step with _computeOdometer (test_odometer_text.py).
+    "odometer": "+20 / +30 / +40 / +55 FP as this player's passing, rushing and receiving yards this week reach {gatesText}. Each gate adds to the last, up to +145 FP.",
     "leg_day": "+{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak.",
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
     "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
@@ -1417,7 +1419,7 @@ POSITION_EXCLUDED_EFFECTS = {
     # position-EXCLUSIVE effect here does nothing. "spotlight_moment" was dropped from
     # this set when it became WR-exclusive.
     5: {"squire", "cha_ching", "mismatch", "double_trouble",
-        "traverse", "closer"},  # K: no meaningful yardage or Q4 stats
+        "traverse", "closer", "odometer"},  # K: no meaningful yardage or Q4 stats
 }
 
 
@@ -2477,6 +2479,17 @@ def _buildConditionalParams(effectName, playerRating, editionScale, position=Non
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(20.4 * editionScale * _BAL_FP_MULT, 1)}
 
 
+def odometerGatesText(position) -> str:
+    """The card-face wording for Odometer's gates at this position (1-5, or its label)."""
+    from constants import ODOMETER_GATES_BY_POSITION
+    if isinstance(position, str):
+        position = {v: k for k, v in POSITION_LABELS.items()}.get(position)
+    gates = ODOMETER_GATES_BY_POSITION.get(position)
+    if not gates:
+        return "its position's yardage gates (a kicker gains no yards, so this card pays nothing on one)"
+    return " / ".join(str(g) for g in gates) + " yards"
+
+
 def _buildStreakParams(effectName, playerRating, editionScale, position=None):
     """Streak card parameter builder.
 
@@ -2522,13 +2535,8 @@ def _buildStreakParams(effectName, playerRating, editionScale, position=None):
                 "baseReward": int(round((4 + rn * 0.2) * editionScale)),
                 "growthPerTick": int(round((2 + rn * 0.1) * editionScale))}
     if effectName == "odometer":
-        return {"rewardType": "fp",
-                "gates": [
-                    {"yards": 200, "fp": round((10.0 + rn * 0.16) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 400, "fp": round((20.0 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 600, "fp": round((28.0 + rn * 0.44) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 800, "fp": round((38.0 + rn * 0.56) * editionScale * _BAL_FP_MULT, 1)},
-                ]}
+        # Display only: scoring reads constants.ODOMETER_GATES_BY_POSITION (see _computeOdometer).
+        return {"rewardType": "fp", "gatesText": odometerGatesText(position)}
     if effectName == "leg_day":
         return {"rewardType": "fp",
                 "baseReward": round((20.4 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1),
@@ -4330,47 +4338,40 @@ def _countWeeklyTicks(effectName, primary, ctx):
 
 
 def _computeOdometer(primary, ctx, cardPlayerId, eqId):
-    """Yard gates with escalating payouts, re-based off the whole roster to THIS
-    player's own yards — so the gates are single-player scale (a good game clears a
-    few), not roster scale."""
+    """Yard gates set by the card player's POSITION, each paying and adding to the last.
+
+    ⚠️ THE GATES AND PAYOUTS COME FROM `constants` AT SCORING TIME, NOT FROM THE CARD. Minted
+    cards carry roster-scale `gates` (and newer ones `gatesText`, for display only); scoring
+    reads the per-position table so every card, old or new, pays the same rule.
+    """
+    from constants import ODOMETER_GATES_BY_POSITION, ODOMETER_GATE_FP
     stats = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}) or {}
     totalYards = (
         (stats.get("passing_stats", {}) or {}).get("passYards", 0)
         + (stats.get("rushing_stats", {}) or {}).get("runYards", 0)
         + (stats.get("receiving_stats", {}) or {}).get("rcvYards", 0)
     )
-    # Single-player gates (roster gates were 200/400/600/800); re-tuned so a strong
-    # individual game clears the lower ones and a monster game clears them all.
-    gates = primary.get("gatesSolo") or []
-    if not gates:
-        baseReward = primary.get("baseReward", 5.0)
-        growth = primary.get("growthPerTick", 6.0)
-        gates = [
-            {"yards": 40, "fp": round(baseReward, 1)},
-            {"yards": 80, "fp": round(baseReward + growth, 1)},
-            {"yards": 120, "fp": round(baseReward + growth * 2, 1)},
-            {"yards": 160, "fp": round(baseReward + growth * 3, 1)},
-        ]
+    pos = (getattr(ctx, 'rosterPlayerPositions', None) or {}).get(cardPlayerId) \
+        or getattr(ctx, 'cardPosition', 0)
+    yardGates = ODOMETER_GATES_BY_POSITION.get(pos)
+    if not yardGates:
+        return EffectResult(equation="No yardage gates for this position")
     totalFP = 0
     gatesHit = 0
     gateDetails = []
-    for gate in gates:
-        yardThreshold = gate.get("yards", 100)
-        gateFP = gate.get("fp", 2.0)
+    for yardThreshold, gateFP in zip(yardGates, ODOMETER_GATE_FP):
         if totalYards >= yardThreshold:
             totalFP += gateFP
             gatesHit += 1
             gateDetails.append(f"{yardThreshold}yd=+{gateFP}")
     if gatesHit == 0:
-        nextGate = gates[0] if gates else {"yards": 50}
-        eq = f"{totalYards} yds — next gate at {nextGate['yards']}"
+        eq = f"{totalYards} yds — next gate at {yardGates[0]}"
         return EffectResult(equation=eq)
-    nextIdx = gatesHit
-    if nextIdx < len(gates):
-        nextLabel = f" — next gate at {gates[nextIdx]['yards']}yd"
+    if gatesHit < len(yardGates):
+        nextLabel = f" — next gate at {yardGates[gatesHit]}yd"
     else:
         nextLabel = " — all gates cleared!"
-    totalFP = round(totalFP, 1)
+    totalFP = round(float(totalFP), 1)
     eq = f"{totalYards} yds: {', '.join(gateDetails)} = +{totalFP} FP{nextLabel}"
     return EffectResult(fpBonus=totalFP, equation=eq)
 
