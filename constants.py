@@ -860,6 +860,22 @@ FLOOSBOWL_WIN_REWARD = 150
 # what pays for competing on FP, and a Floobit build does not compete for it. Adds ~9,000 a
 # season league-wide, far less than the Floobit-card resize removes (Trust Fund, Gold Rush,
 # Highlight Reel). Re-measure if the FP->Floobit curve or those cards move.
+# ⚠️ ODOMETER'S YARD GATES ARE PER POSITION (owner, 2026-09-27). One set of gates cannot fit
+# every position when passing yards count: at 40/80/120/160 a QB cleared all four 91% of the
+# time (a flat 56 FP), a TE 1%, and a K never paid. Each position's gates sit near its own
+# 25th/50th/75th/90th-percentile week (season 7, prod), so any position clears the first
+# about three weeks in four and all four about one week in ten. Payouts sized to the
+# prismatic tier: ~46-48 FP a week on average at every position (prismatic FP cards run ~52),
+# 145 at the ceiling. Re-measure the gates if yardage shifts. Kickers gain no yards and are
+# excluded from minting it.
+ODOMETER_GATES_BY_POSITION = {
+    1: (200, 275, 350, 440),   # QB (passing + rushing)
+    2: (75, 105, 155, 220),    # RB
+    3: (60, 100, 150, 215),    # WR
+    4: (30, 45, 70, 100),      # TE
+}
+ODOMETER_GATE_FP = (20, 30, 40, 55)
+
 # Trust Fund's "weeks your roster stays unchanged" growth stops counting after this many
 # weeks. Uncapped, it grew all season: a card left alone 20 weeks paid ~395 Floobits a week
 # at tier 4, and Trust Fund alone was 39% of all card Floobits in season 7 (168 a card-week

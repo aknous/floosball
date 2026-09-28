@@ -2058,6 +2058,12 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
     # on the card face: "bonus at each of [299, 391, 483]". `gatesText` is the same
     # numbers written as prose. Derived from what IS stored, so an already-minted card
     # keeps the exact gates it was minted with.
+    # Odometer's text names the card's own position's yard gates (2026-09-27). Every card
+    # already stores its position as `posLabel`, which is all the gates depend on.
+    if effectName == 'odometer' and 'gatesText' not in primary:
+        from managers.cardEffects import odometerGatesText
+        primary['gatesText'] = odometerGatesText(primary.get('posLabel'))
+        return True
     if effectName == 'updraft' and 'gatesText' not in primary:
         gates = primary.get('gates')
         if isinstance(gates, (list, tuple)) and gates:
