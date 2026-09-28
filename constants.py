@@ -1881,8 +1881,32 @@ FORM_PULL = float(_os.environ.get('FLOOS_FORM_PULL', '0.50'))   # how hard a dev
 # inside a game day, contributing nothing at the block scale form is measured on.
 # Keep it slow enough that a hot spell lasts a few weeks.
 FORM_REVERSION = float(_os.environ.get('FLOOS_FORM_REVERSION', '0.45'))
-FORM_NOISE = float(_os.environ.get('FLOOS_FORM_NOISE', '0.050'))  # weekly gaussian wobble — the un-earned part of a slump
-FORM_MAX = float(_os.environ.get('FLOOS_FORM_MAX', '0.14'))     # clamp on the multiplier; ±10% ≈ ±7-8 rating points
+# Weekly gaussian wobble — the un-earned part of a slump. ⚠️ SCALES WITH FORM_MAX: it was
+# 0.050 against a 0.14 cap, and at a 0.05 cap that same sd alone holds a club's offset at
+# ~0.045, i.e. near the cap, so form would be noise wearing a mental label. 0.018 keeps the
+# original share of the range (0.05 x 0.05/0.14).
+FORM_NOISE = float(_os.environ.get('FLOOS_FORM_NOISE', '0.018'))
+# ⚠️ ±5%, DOWN FROM ±14% (owner, 2026-09-28): FORM MUST COLOR A ROSTER, NOT OVERRIDE IT.
+# Compression leaves the talent gap between rosters at roughly ±6% around the league mean
+# (a 95 plays ~90, a 70 ~78), so a ±14% form swing outweighed the roster itself. Measured
+# on the season-8 prod snapshot (25 runs/arm): team strength spread DOUBLED across the
+# season (6.3 -> 13.3 pts/game; the NFL holds 7.3 -> 8.7), 29.7% of games were decided by
+# 21+ (NFL 16.1%) and underdogs won by 21+ in 9.2% (NFL 3.2%) — the "heavy underdog
+# blowouts" and back-to-back rematches that looked nothing alike (margin corr 0.04).
+FORM_MAX = float(_os.environ.get('FLOOS_FORM_MAX', '0.05'))     # clamp on the multiplier
+
+# How the roster's mental state sets the size of a form move:
+#   target *= FORM_TRAIT_BASE + FORM_TRAIT_SCALE * trait
+# where trait is collectiveResolve (climbing) or collectiveVulnerability (falling), both
+# 0 (bulletproof / checked out) .. 1. ⚠️ WAS 0.5 + 1.0 x trait, WHICH MADE THE MENTAL STATE
+# NEARLY IRRELEVANT: prod rosters span trait 0.04-0.44, so the gain ran 0.54-0.94 and a
+# disciplined club swung more than half as hard as a volatile one. The layer's arcs were
+# then driven by results chasing results, not by the minds on the roster — measured, the
+# early-to-late swing correlated with mental state at +0.25 with the layer ON and +0.25
+# with it OFF, i.e. it contributed no mental signal at all. 0 + 2 x trait means a
+# bulletproof roster does not move and a trait of 0.5 moves exactly as before.
+FORM_TRAIT_BASE = float(_os.environ.get('FLOOS_FORM_TRAIT_BASE', '0.0'))
+FORM_TRAIT_SCALE = float(_os.environ.get('FLOOS_FORM_TRAIT_SCALE', '2.0'))
 
 # ---- Prospect Pipeline ----
 # Prospects are drafted rookies stashed on the team's pipeline (not roster-eligible).
