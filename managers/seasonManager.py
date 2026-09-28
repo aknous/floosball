@@ -11431,7 +11431,8 @@ class SeasonManager:
         """
         from constants import (FORM_OSCILLATION_ENABLED, FORM_WINDOW, FORM_PULL,
                                FORM_REVERSION, FORM_NOISE, FORM_MAX,
-                               FORM_FEEDBACK, FORM_DECAY)
+                               FORM_FEEDBACK, FORM_DECAY,
+                               FORM_TRAIT_BASE, FORM_TRAIT_SCALE)
         if not FORM_OSCILLATION_ENABLED:
             return
         from random import gauss as _gauss
@@ -11455,17 +11456,18 @@ class SeasonManager:
                 # below, not by a restoring force, so it cannot run away.
                 target = recent * FORM_PULL
                 if recent > 0:
-                    target *= 0.5 + team.collectiveResolve()       # ride the run
+                    trait = team.collectiveResolve()        # ride the run
                 else:
-                    target *= 0.5 + team.collectiveVulnerability()  # the collapse
+                    trait = team.collectiveVulnerability()  # the collapse
             else:
                 # Mean-reverting: above your own level pulls you down. Stable, and
                 # measured to cancel arcs rather than create them — kept for A/B.
                 target = -recent * FORM_PULL
                 if recent > 0:
-                    target *= 0.5 + team.collectiveVulnerability()
+                    trait = team.collectiveVulnerability()
                 else:
-                    target *= 0.5 + team.collectiveResolve()
+                    trait = team.collectiveResolve()
+            target *= FORM_TRAIT_BASE + FORM_TRAIT_SCALE * trait
 
             offset = getattr(team, 'formOffset', 0.0) or 0.0
             offset += (target - offset) * FORM_REVERSION + _gauss(0, FORM_NOISE)
