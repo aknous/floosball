@@ -149,6 +149,72 @@ The talent span compressed hard while the dispersion ratio held at 0.84. Season 
 
 ⚠️ **Candidate causes, none established at n=2 seasons.** The offseason between them was the first to run the **trade market** and the restored **rookie draft**, either of which redistributes surplus talent from teams that cannot use it toward teams that can. Roster churn alone could also do it. **The test for next season:** if the 6.7-to-20.5 style span holds into season 8 it is structural and the trading market is the likely cause; if it springs back toward season 6's range it was roster churn. Re-run this and compare the span, not the dispersion ratio, which has been stable at 0.84 twice.
 
+## Actual results (added 2026-09-27)
+
+**Champion: the Midnights**, who won 0 of the 50 forecast runs and never reached a single forecast Floos Bowl. The forecast had them at **13.6 wins (9 to 18)**; they went **17-11**, then won four straight playoff games, beating the forecast's projected best team, the Residents, in the Bowl. The Residents were the forecast's fourth-likeliest champion (12%); the Raccoons, its favorite at 18%, went out in round 1.
+
+### Playoffs
+
+| round | result |
+|---|---|
+| Round 1 | Normals def. Sand Dollars 24-3 |
+| Round 1 | Pinecones def. Rhyme 21-20 |
+| Round 1 | Exoticos def. Raccoons 17-6 |
+| Round 1 | Residents def. Dry Heat 38-10 |
+| Round 1 | Strangers def. Waffles 26-9 |
+| Round 1 | Classics def. Extras 31-20 |
+| Round 1 | Rocks def. Caddies 37-17 |
+| Round 1 | Midnights def. Curd 50-0 |
+| Round 2 | Midnights def. Pinecones 52-23 |
+| Round 2 | Strangers def. Normals 34-24 |
+| Round 2 | Residents def. Rocks 31-13 |
+| Round 2 | Classics def. Exoticos 30-16 |
+| League Championship | Residents def. Strangers 38-20 |
+| League Championship | Midnights def. Classics 37-25 |
+| Floos Bowl | Midnights def. Residents 28-24 |
+
+### Regular season against the forecast
+
+- **Ranking held up.** Correlation between forecast average and actual wins: **0.76**. Mean absolute miss: **2.7 wins**, close to the 2.3-win SD any single season carries.
+- **25 of 32** teams landed within two forecast SDs of their average, and **28 of 32** inside the range the 50 runs actually produced. Outside it: Pinecones (24, range 12-22), Caddies (18, range 8-16), Cranes (7, range 8-17), Buffalo (4, range 6-20).
+- **Biggest over-performers:** Pinecones +7.3, Curd +6.1, Caddies +5.7, Classics +4.6. **Biggest under-performers:** Buffalo -6.4, Grillmeisters -5.3, Cranes -5.1, Oysters -3.5.
+- ⚠️ **The forecast cannot see in-season trades**, which open in week 15, after its snapshot. The Midnights (Trinity Pantsdown) and the Pinecones (Squall Baptiste) each made exactly one in-season acquisition, both in week 15. Curd and Caddies, two of the other big over-performers, made none, so trades are at most part of the story.
+
+| team | forecast avg | forecast range | actual | miss | inside range |
+|---|---:|---:|---:|---:|:---:|
+| Pinecones | 16.7 | 12-22 | 24-4 | +7.3 | **no** |
+| Classics | 18.4 | 13-23 | 23-5 | +4.6 | yes |
+| Curd | 13.9 | 6-20 | 20-8 | +6.1 | yes |
+| Normals | 16.1 | 10-20 | 19-9 | +2.9 | yes |
+| Residents | 20.5 | 16-26 | 18-10 | -2.5 | yes |
+| Raccoons | 19.4 | 15-23 | 18-10 | -1.4 | yes |
+| Caddies | 12.3 | 8-16 | 18-10 | +5.7 | **no** |
+| Extras | 15.7 | 13-20 | 17-11 | +1.3 | yes |
+| Waffles | 13.8 | 8-18 | 17-11 | +3.2 | yes |
+| Midnights | 13.6 | 9-18 | 17-11 | +3.4 | yes |
+| Exoticos | 19.1 | 13-24 | 16-12 | -3.1 | yes |
+| Rocks | 16.6 | 11-22 | 16-12 | -0.6 | yes |
+| Strangers | 15.7 | 13-19 | 16-12 | +0.3 | yes |
+| Dry Heat | 15.7 | 10-20 | 16-12 | +0.3 | yes |
+| Sand Dollars | 17.2 | 13-22 | 15-13 | -2.2 | yes |
+| Rhyme | 16.9 | 11-20 | 15-13 | -1.9 | yes |
+| Tuesdays | 16.8 | 10-22 | 15-13 | -1.8 | yes |
+| Monuments | 12.9 | 6-20 | 15-13 | +2.1 | yes |
+| Trains | 11.7 | 4-17 | 15-13 | +3.3 | yes |
+| Bees | 15.3 | 11-19 | 14-14 | -1.3 | yes |
+| Pops | 12.8 | 7-18 | 14-14 | +1.2 | yes |
+| Broads | 13.6 | 10-17 | 12-16 | -1.6 | yes |
+| Jetskis | 10.5 | 5-16 | 12-16 | +1.5 | yes |
+| Oysters | 14.5 | 9-20 | 11-17 | -3.5 | yes |
+| Melons | 12.2 | 6-16 | 10-18 | -2.2 | yes |
+| Beans | 10.6 | 5-16 | 9-19 | -1.6 | yes |
+| Sodas | 9.9 | 4-14 | 9-19 | -0.9 | yes |
+| Cranes | 12.1 | 8-17 | 7-21 | -5.1 | **no** |
+| Slippers | 7.3 | 3-15 | 6-22 | -1.3 | yes |
+| Phones | 6.7 | 2-12 | 6-22 | -0.7 | yes |
+| Buffalo | 10.4 | 6-20 | 4-24 | -6.4 | **no** |
+| Grillmeisters | 9.3 | 4-15 | 4-24 | -5.3 | yes |
+
 ## Reproducing this
 
 ```bash
