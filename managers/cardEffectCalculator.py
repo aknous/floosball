@@ -277,6 +277,10 @@ class CardBreakdown:
     gateThreshold: float = 0.0  # the position FP threshold this card's bar needs
     gateInverse: bool = False   # inverse gate — the effect is active WHILE under the threshold
     gateAllPro: bool = False    # All-Pro card: its bar is lowered 30% (CARD_GATE_ALLPRO_MULT)
+    # The raw gate ratio behind gateActive: 1.0 / 0.0 live, the player's CLEAR PROBABILITY
+    # in an expected projection. Internal (not in the stored breakdown): the amplifiers
+    # scale their projected boost by it. See _ampGateWeight.
+    gateRatio: Optional[float] = None
 
     # ── Glitch (docs/GLITCH_CARDS.md) ──
     # `glitched` marks the card; the rest describe THIS week's roll. `glitchOutcome` is the
@@ -920,10 +924,12 @@ def _computeCardPass(
     _gateInverse = bool(_gate.get("inverse"))
     _gateAllPro = bool(_gate.get("allPro"))
     _gateActive = None
+    _gateRatioValue = None
     if _gateThreshold:
         _ratio = (getattr(ctx, "_gateRatios", None) or {}).get(eq.id)
         if _ratio is not None:
             _gateActive = _ratio >= 1.0
+            _gateRatioValue = float(_ratio)
 
     return CardBreakdown(
         slotNumber=eq.slot_number,
@@ -961,6 +967,7 @@ def _computeCardPass(
         streakActive=ctx.liveStreakConditionsMet.get(eq.id) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else None,
         streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else 0,
         gateActive=_gateActive,
+        gateRatio=_gateRatioValue,
         gateThreshold=_gateThreshold,
         gateInverse=_gateInverse,
         gateAllPro=_gateAllPro,
@@ -1502,6 +1509,21 @@ def _captainTargets(breakdowns, ctx) -> List[tuple]:
     return out
 
 
+def _ampGateWeight(ampBreakdown) -> float:
+    """How much of an amplifier's boost applies, from its OWN power bar.
+
+    ⚠️ LIVE this is exactly 1 or 0, so nothing changes there. In an EXPECTED PROJECTION
+    the gate ratio is the player's PROBABILITY of clearing the bar, and `gateActive`
+    (ratio >= 1.0) read that as "didn't clear" for any p < 1 — so Captain and Conductor
+    projected no boost at all, and a hand built around them projected below what it
+    scores. Every other gated card projects at output x p; the amplifiers now project
+    at boost x p, the same expected value. Ungated (no ratio recorded) = full weight."""
+    ratio = getattr(ampBreakdown, "gateRatio", None)
+    if ratio is None:
+        return 0.0 if ampBreakdown.gateActive is False else 1.0
+    return max(0.0, min(1.0, ratio))
+
+
 # Cards that produce nothing of their own and only amplify others.
 _AMPLIFIER_EFFECTS = frozenset({
     "captain", "conductor", "double_down", "doubler", "surveyor", "sharpshooter",
@@ -1515,10 +1537,14 @@ def _amplifierDidWork(ampBreakdown, others, ctx) -> bool:
     name = ampBreakdown.effectName
     if name == "double_down":
         return _lemonsTarget(others) is not None
+    # A trigger count is all-or-nothing, so a projected amplifier counts when it is MORE
+    # likely than not to clear its bar — strictly, because a player with no weekly history
+    # projects at exactly 0.5 ("unknown"), which is not a reason to count it. Live the
+    # weight is exactly 1 or 0.
     if name == "conductor":
-        return ampBreakdown.gateActive is not False and bool(_conductorTargets(others))
+        return _ampGateWeight(ampBreakdown) > 0.5 and bool(_conductorTargets(others))
     if name == "captain":
-        return ampBreakdown.gateActive is not False and bool(_captainTargets(others, ctx))
+        return _ampGateWeight(ampBreakdown) > 0.5 and bool(_captainTargets(others, ctx))
     if name == "advantage":
         # Every chance card rolls with it (best of N, set in the pre-scan with no bar
         # check), so it has boosted something whenever a chance card hit.
@@ -1558,6 +1584,50 @@ def groupProjectTriggerCount(ctx, firstPassBreakdowns, eqId) -> int:
     preTriggers = getattr(ctx, "_secondPassPreTriggers", None) or {}
     count += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     return count
+
+
+def groupProjectFireProbability(ctx, firstPassBreakdowns, eqId, threshold) -> float:
+    """EXPECTED PROJECTION ONLY: the probability that `threshold`+ of Group Project's
+    other cards trigger, from each card's own chance.
+
+    ⚠️ A COUNT OF EV-SCALED OUTPUTS IS NOT A PROBABILITY. In an expected projection a
+    gated card outputs value x p, which is above zero whenever p is, so the plain count
+    read every gated card as triggered and projected Group Project as firing outright.
+    Measured on real season-7 hands with real history: 34 of 40 projected fires against 20
+    live, over-projecting those hands by up to +350 FP. The count is all-or-nothing, so the
+    honest expected value is reward x P(count >= threshold) — computed exactly (a
+    Poisson-binomial over each card's trigger chance), never by thresholding the mean.
+
+    Per card: a gated card triggers with its clear probability when it would pay at all;
+    an ungated one with certainty if it paid; Captain/Conductor with their own clear
+    probability when they have a target; the other amplifiers and the second-pass cards
+    are already resolved to yes/no."""
+    first = list(firstPassBreakdowns or [])
+    spBds = getattr(ctx, "_secondPassBreakdowns", None) or []
+    spIds = getattr(ctx, "_secondPassEqIds", None) or []
+    others = first + [b for i, b in zip(spIds, spBds) if i != eqId and b.effectName != "bonus_round"]
+    probs = []
+    for b in first:
+        if b.effectName in ("captain", "conductor"):
+            hasTarget = bool(_captainTargets(others, ctx) if b.effectName == "captain"
+                             else _conductorTargets(others))
+            probs.append(_ampGateWeight(b) if hasTarget else 0.0)
+        elif b.effectName in _AMPLIFIER_EFFECTS:
+            probs.append(1.0 if _amplifierDidWork(b, others, ctx) else 0.0)
+        elif not _producedOutput(b):
+            probs.append(0.0)
+        else:
+            probs.append(1.0 if b.gateRatio is None else max(0.0, min(1.0, b.gateRatio)))
+    preTriggers = getattr(ctx, "_secondPassPreTriggers", None) or {}
+    probs += [1.0 if t else 0.0 for otherId, t in preTriggers.items() if otherId != eqId]
+    dist = [1.0]                      # dist[k] = P(exactly k triggered so far)
+    for p in probs:
+        nxt = [0.0] * (len(dist) + 1)
+        for k, q in enumerate(dist):
+            nxt[k] += q * (1 - p)
+            nxt[k + 1] += q * p
+        dist = nxt
+    return sum(dist[threshold:]) if threshold < len(dist) else 0.0
 
 
 def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
@@ -1605,7 +1675,9 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
     if conductorBreakdown is None:
         return
     # The Conductor has to show up to conduct — no boost if their own player was cold.
-    if conductorBreakdown.gateActive is False:
+    # Projected, the boost is weighted by the chance they clear (see _ampGateWeight).
+    weight = _ampGateWeight(conductorBreakdown)
+    if weight <= 0:
         conductorBreakdown.equation = "Conductor didn't clear their bar"
         return
     boostPct = 20
@@ -1620,6 +1692,8 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
             tier = getattr(eq.user_card, "tier", 1) or 1
             boostPct = tierScaledStrength("conductor", prim, CARD_TIER_MULT.get(tier, 1.0)).get("boostPct", boostPct)
             break
+    if weight < 1.0:
+        boostPct = round(boostPct * weight, 1)
     factor = 1.0 + (boostPct / 100.0)
     boosted = 0
     # Boost the card's own effect output (primaryFP), not totalFP — the
@@ -1649,7 +1723,9 @@ def _applyCaptainBoost(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
     if captainBd is None:
         return
     # The Captain has to show up to lead — no boost if their own player was under the bar.
-    if captainBd.gateActive is False:
+    # Projected, the boost is weighted by the chance they clear (see _ampGateWeight).
+    weight = _ampGateWeight(captainBd)
+    if weight <= 0:
         captainBd.equation = "Captain didn't clear their bar"
         return
     perPct = 0.0
@@ -1667,7 +1743,7 @@ def _applyCaptainBoost(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
         return
     boosted = 0
     for b, overshoot in _captainTargets(breakdowns, ctx):
-        factor = min(overshoot * perPct, 1.0)  # cap at +100% (2x)
+        factor = min(overshoot * perPct, 1.0) * weight  # cap at +100% (2x)
         if factor <= 0:
             continue
         if b.outputType == "fp" and b.primaryFP > 0:

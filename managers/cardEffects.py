@@ -5213,9 +5213,17 @@ def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
     its marker multiplier read as output. In a high-end hand the amplifiers ARE the
     build, so leaving them out made the card unusable there. The rule lives in
     cardEffectCalculator._amplifierDidWork, beside the boosts it mirrors."""
-    from managers.cardEffectCalculator import groupProjectTriggerCount
+    from managers.cardEffectCalculator import groupProjectTriggerCount, groupProjectFireProbability
     rewardValue = primary.get("rewardValue", 8)
     threshold = _BONUS_ROUND_THRESHOLD
+    if getattr(ctx, "isProjection", False) and getattr(ctx, "projectionVariant", "expected") == "expected":
+        # All-or-nothing card: project reward x P(4+ trigger), not a count of EV-scaled
+        # outputs (which reads every gated card as triggered). See groupProjectFireProbability.
+        prob = groupProjectFireProbability(ctx, ctx._firstPassBreakdowns, eqId, threshold)
+        if prob <= 0:
+            return EffectResult(equation=f"Unlikely: {threshold}+ other cards triggering")
+        fp = round(rewardValue * prob, 1)
+        return EffectResult(fpBonus=fp, equation=f"{prob:.0%} chance of {threshold}+ cards triggering × {rewardValue} FP")
     triggeredCount = groupProjectTriggerCount(ctx, ctx._firstPassBreakdowns, eqId)
     if triggeredCount >= threshold:
         eq = f"+{rewardValue} FP ({triggeredCount}/{threshold}+ cards triggered)"
