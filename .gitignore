@@ -108,3 +108,6 @@ data/avatars/
 # Social-media crest exports. Regenerate with tools_export_crests.py — 1.3MB of
 # derived artwork does not belong in the repo when the generator is right here.
 exports/
+
+# External reference datasets (NFL Big Data Bowl, ~10GB) — local analysis only.
+data/datasets/

@@ -1,8 +1,10 @@
 .git
 .gitignore
 .venv
-__pycache__
-*.pyc
+# Docker anchors patterns at the context root: a bare `*.pyc` matches only top-level
+# files, so the nested bytecode under api/ and managers/ shipped anyway.
+**/__pycache__
+**/*.pyc
 data/*.db*
 data/avatars/
 # Local test / backup / scratch data — never ship to the image. The prod DB
@@ -20,3 +22,7 @@ examples/
 *.md
 .vscode/
 .claude/
+# External reference datasets (NFL Big Data Bowl tracking CSVs + zips, ~10GB). Used by
+# local analysis harnesses only; nothing at runtime reads them. Without this every
+# `fly deploy` uploaded them as build context.
+data/datasets/
