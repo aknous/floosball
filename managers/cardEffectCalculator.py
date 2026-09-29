@@ -200,6 +200,10 @@ class CardCalcContext:
     # _secondPassEqIds.
     _secondPassBreakdowns: Optional[List] = None
     _secondPassEqIds: Optional[List[int]] = None
+    # effectName -> bool for the stat amplifiers (doubler / surveyor / sharpshooter):
+    # did the pre-pass actually scale a roster stat this week? Read by Group Project,
+    # which credits an amplifier only when it amplified something.
+    _statAmpFired: Dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass
@@ -485,7 +489,8 @@ def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
     if effectName == "chain_reaction":
         return fpTriggered > 0
     if effectName == "bonus_round":
-        return fpTriggered >= 4
+        from managers.cardEffects import _BONUS_ROUND_THRESHOLD
+        return _firstPassTriggerCount(firstPassBreakdowns, firstPassBreakdowns, ctx) >= _BONUS_ROUND_THRESHOLD
     if effectName == "last_resort":
         # Modern config (baseFP) always pays out → triggered.
         # Legacy config (rewardValue only) fires only when nothing else
@@ -498,7 +503,8 @@ def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
     if effectName == "copycat":
         return any(b.totalFP > 0 for b in firstPassBreakdowns)
     if effectName == "double_down":
-        return any(b.totalFP > 0 and b.effectName != "double_down" for b in firstPassBreakdowns)
+        # Triggered = it has a card to multiply, by the rule _applyTradeoffEffects uses.
+        return _lemonsTarget(firstPassBreakdowns) is not None
     if effectName == "high_roller":
         return any(b.chanceTriggered for b in firstPassBreakdowns)
     if effectName == "charmed":
@@ -1129,7 +1135,24 @@ def calculateWeekCardBonuses(
         fp = ((ctx.weekPlayerStats or {}).get(tmpl.player_id, {}) or {}).get("fantasyPoints", 0) or 0
         return fp >= thr
 
+    # Did an active stat amplifier have anything of the roster's to scale? Group Project
+    # credits it as a trigger only then (see _amplifierDidWork). Reset per calculation:
+    # the context is reused across re-derivations.
+    ctx._statAmpFired = {}
+
+    def _rosterHas(catKey, fields):
+        for pid in (ctx.rosterPlayerIds or ()):
+            stats = ((ctx.weekPlayerStats or {}).get(pid, {}) or {}).get(catKey)
+            if isinstance(stats, dict) and any((stats.get(f) or 0) > 0 for f in fields):
+                return True
+        return False
+
     if "surveyor" in equippedNames and _amplifierActive("surveyor"):
+        ctx._statAmpFired["surveyor"] = any(
+            _rosterHas(k, f) for k, f in (("passing_stats", ("passYards",)),
+                                          ("rushing_stats", ("runYards",)),
+                                          ("receiving_stats", ("rcvYards", "yac")),
+                                          ("kicking_stats", ("fgYards",))))
         yardMult = _ampFactor("surveyor", 1.5, "yardMult")
         for ps in (ctx.weekPlayerStats or {}).values():
             for catKey, fields in [
@@ -1146,6 +1169,7 @@ def calculateWeekCardBonuses(
                         stats[f] = int(round(stats[f] * yardMult))
 
     if "sharpshooter" in equippedNames and _amplifierActive("sharpshooter"):
+        ctx._statAmpFired["sharpshooter"] = _rosterHas("kicking_stats", ("fgs",))
         fgMult = _ampFactor("sharpshooter", 2.0, "fgMult")
         for ps in (ctx.weekPlayerStats or {}).values():
             kStats = ps.get("kicking_stats")
@@ -1185,6 +1209,7 @@ def calculateWeekCardBonuses(
             ctx.rosterTotalTds += fgsMade
 
     if "doubler" in equippedNames and _amplifierActive("doubler"):
+        ctx._statAmpFired["doubler"] = (ctx.rosterTotalTds or 0) > 0
         tdMult = _ampFactor("doubler", 2.0, "tdMult")
         ctx.rosterTotalTds = int(round((ctx.rosterTotalTds or 0) * tdMult))
         for ps in (ctx.weekPlayerStats or {}).values():
@@ -1251,6 +1276,16 @@ def calculateWeekCardBonuses(
             eq.id: (b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
             for eq, b in zip(secondPassCards, secondPassBreakdowns)
         }
+        # ⚠️ Lemons' own output is only a MARKER (its multiplier, zeroed after the fact by
+        # _applyTradeoffEffects), so reading it as a trigger credited Lemons whether or not
+        # it had anything to multiply. It triggered iff it has a target — by the rule it
+        # applies — and Group Project is excluded as a target so the two cannot justify
+        # each other. See _amplifierDidWork.
+        _lemonsPool = firstPassBreakdowns + [b for b in secondPassBreakdowns
+                                             if b.effectName != "bonus_round"]
+        for eq, b in zip(secondPassCards, secondPassBreakdowns):
+            if b.effectName == "double_down":
+                actualTriggers[eq.id] = _lemonsTarget(_lemonsPool) is not None
         savedPreTriggers = ctx._secondPassPreTriggers
         ctx._secondPassPreTriggers = actualTriggers
         ctx._secondPassBreakdowns = secondPassBreakdowns
@@ -1426,6 +1461,105 @@ def _applyGlitchSurges(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
             b.primaryMult = round(b.primaryMult + extraMult, 3)
 
 
+# ── What each amplifier would touch ──────────────────────────────────────────
+# ⚠️ ONE DEFINITION PER AMPLIFIER, READ BY TWO CALLERS: the boost that applies it, and
+# Group Project's trigger count. An amplifier produces nothing of its own, so the only
+# honest meaning of "it triggered" is "it amplified something" — and the amplifiers run
+# AFTER Group Project counts, so the count has to ask the same question in advance. Two
+# copies of the rule would let the count credit a boost that never happened.
+
+def _lemonsTarget(breakdowns) -> Optional[CardBreakdown]:
+    """The card Lemons multiplies: the lowest-earning flat-FP card, by its own effect
+    output (primaryFP) — never a tradeoff card, never an FPx or Floobit card."""
+    cands = [b for b in breakdowns
+             if b.effectName not in _TRADEOFF_EFFECTS and b.primaryFP > 0 and b.outputType == "fp"]
+    return min(cands, key=lambda b: b.primaryFP) if cands else None
+
+
+def _conductorTargets(breakdowns) -> List[CardBreakdown]:
+    """Every other flat-FP card with effect output — what Conductor lifts."""
+    return [b for b in breakdowns
+            if b.effectName != "conductor" and b.outputType == "fp" and b.primaryFP > 0]
+
+
+def _captainTargets(breakdowns, ctx) -> List[tuple]:
+    """(breakdown, overshoot) for every other card with output whose player scored OVER
+    its power bar — what Captain lifts."""
+    stats = getattr(ctx, "weekPlayerStats", None) or {}
+    out = []
+    for b in breakdowns:
+        if b.effectName == "captain":
+            continue
+        hasOutput = ((b.outputType == "fp" and b.primaryFP > 0)
+                     or (b.outputType == "floobits" and b.floobitsEarned > 0)
+                     or (b.outputType == "mult" and b.primaryMult > 1.0))
+        if not hasOutput:
+            continue
+        playerFP = (stats.get(b.playerId, {}) or {}).get("fantasyPoints", 0) or 0
+        overshoot = max(0.0, playerFP - (b.gateThreshold or 0))
+        if overshoot > 0:
+            out.append((b, overshoot))
+    return out
+
+
+# Cards that produce nothing of their own and only amplify others.
+_AMPLIFIER_EFFECTS = frozenset({
+    "captain", "conductor", "double_down", "doubler", "surveyor", "sharpshooter",
+    "advantage",
+})
+
+
+def _amplifierDidWork(ampBreakdown, others, ctx) -> bool:
+    """Whether an amplifier amplified something this week, by the same rule it applies.
+    `others` must exclude the card asking (Group Project), or it would count itself."""
+    name = ampBreakdown.effectName
+    if name == "double_down":
+        return _lemonsTarget(others) is not None
+    if name == "conductor":
+        return ampBreakdown.gateActive is not False and bool(_conductorTargets(others))
+    if name == "captain":
+        return ampBreakdown.gateActive is not False and bool(_captainTargets(others, ctx))
+    if name == "advantage":
+        # Every chance card rolls with it (best of N, set in the pre-scan with no bar
+        # check), so it has boosted something whenever a chance card hit.
+        return any(b.chanceTriggered for b in others)
+    if name in ("doubler", "surveyor", "sharpshooter"):
+        # Stat amplifiers scale the roster's stats in the pre-pass, before any card
+        # computes; the pre-pass records whether it actually scaled something.
+        return bool((getattr(ctx, "_statAmpFired", None) or {}).get(name))
+    return False
+
+
+def _producedOutput(b) -> bool:
+    return b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0
+
+
+def _firstPassTriggerCount(firstPassBreakdowns, others, ctx) -> int:
+    count = 0
+    for b in firstPassBreakdowns or []:
+        if b.effectName in _AMPLIFIER_EFFECTS:
+            count += _amplifierDidWork(b, others, ctx)
+        else:
+            count += _producedOutput(b)
+    return count
+
+
+def groupProjectTriggerCount(ctx, firstPassBreakdowns, eqId) -> int:
+    """How many of Group Project's OTHER cards triggered: produced output, or (for an
+    amplifier) amplified something. Second-pass cards come from the pre-trigger map,
+    which the calculator fills with this same amplifier rule for Lemons."""
+    first = list(firstPassBreakdowns or [])
+    spBds = getattr(ctx, "_secondPassBreakdowns", None) or []
+    spIds = getattr(ctx, "_secondPassEqIds", None) or []
+    # Group Project is never a target when judging whether an amplifier worked: a boost
+    # that only lands on Group Project would let the two cards justify each other.
+    others = first + [b for i, b in zip(spIds, spBds) if i != eqId and b.effectName != "bonus_round"]
+    count = _firstPassTriggerCount(first, others, ctx)
+    preTriggers = getattr(ctx, "_secondPassPreTriggers", None) or {}
+    count += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
+    return count
+
+
 def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     """Mutate breakdowns in-place for tradeoff effects like Lemons and Feast or Famine."""
     tradeoffNames = {b.effectName for b in breakdowns if b.effectName in _TRADEOFF_EFFECTS}
@@ -1444,9 +1578,8 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
         # free, and keeps flat-FP only so FPx/floobits cards aren't mistreated.
         ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
         multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
-        nonZeroFP = [b for b in normalBreakdowns if b.primaryFP > 0 and b.outputType == "fp"]
-        if nonZeroFP:
-            lowest = min(nonZeroFP, key=lambda b: b.primaryFP)
+        lowest = _lemonsTarget(normalBreakdowns)
+        if lowest is not None:
             originalFP = lowest.primaryFP
             bonusFP = round(originalFP * (multValue - 1), 1)
             lowest.primaryFP = round(lowest.primaryFP + bonusFP, 1)
@@ -1489,16 +1622,10 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
             break
     factor = 1.0 + (boostPct / 100.0)
     boosted = 0
-    for b in breakdowns:
-        if b.effectName == "conductor":
-            continue
-        if b.outputType != "fp":
-            continue
-        # Boost the card's own effect output (primaryFP), not totalFP — the
-        # position-conditional performance bonus isn't part of the effect, and
-        # this skips pure markers (0 effect output) for free.
-        if b.primaryFP <= 0:
-            continue
+    # Boost the card's own effect output (primaryFP), not totalFP — the
+    # position-conditional performance bonus isn't part of the effect, and
+    # this skips pure markers (0 effect output) for free.
+    for b in _conductorTargets(breakdowns):
         bonus = round(b.primaryFP * (factor - 1.0), 1)
         b.primaryFP = round(b.primaryFP + bonus, 1)
         b.totalFP = round(b.totalFP + bonus, 1)
@@ -1538,16 +1665,8 @@ def _applyCaptainBoost(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
             break
     if perPct <= 0:
         return
-    stats = getattr(ctx, "weekPlayerStats", None) or {}
     boosted = 0
-    for b in breakdowns:
-        if b.effectName == "captain":
-            continue
-        thr = b.gateThreshold or 0
-        playerFP = (stats.get(b.playerId, {}) or {}).get("fantasyPoints", 0) or 0
-        overshoot = max(0.0, playerFP - thr)
-        if overshoot <= 0:
-            continue
+    for b, overshoot in _captainTargets(breakdowns, ctx):
         factor = min(overshoot * perPct, 1.0)  # cap at +100% (2x)
         if factor <= 0:
             continue
