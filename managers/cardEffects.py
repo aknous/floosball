@@ -987,7 +987,7 @@ EFFECT_TOOLTIPS = {
     "stacked_deck": "Multiply the multipliers. FPx for every other FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other cards produced a non-zero bonus.",
-    "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
+    "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered this week. A card that only boosts others, like Captain or Lemons, counts when it boosted something.",
     "winners_circle": "Back the winners. Floobits whenever this player's real team wins their game this week.",
     "no_passengers": "Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more.",
     "franchise": "Build around your guy. FPx when this player is your single highest scorer this week.",
@@ -1180,7 +1180,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "stacked_deck": "+{perCardMult} FPx for each other FPx card in your hand",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "+{perCardXMult} FPx for every other card in your lineup that produced a non-zero bonus this week",
-    "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
+    "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a bonus or boosted another card this week",
     "winners_circle": "{winFloobits} Floobits when this player's team wins this week",
     "no_passengers": "+{perFloorFP} FPx per FP scored by your lowest roster player (max +{maxDelta})",
     "franchise": "+{topScorerDelta} FPx when this player is your top scorer this week",
@@ -5205,14 +5205,18 @@ _FULL_HOUSE_MIN_CARDS = 4   # first-pass gated (effect) cards that must be prese
 
 
 def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
-    """Large FP if 6+ other cards triggered a non-zero bonus."""
+    """Group Project: FP when 4+ OTHER cards triggered this week.
+
+    ⚠️ AN AMPLIFIER TRIGGERS WHEN IT AMPLIFIED SOMETHING (owner, 2026-09-28). Captain,
+    Conductor, Lemons and the stat amplifiers produce nothing of their own, so "produced
+    output" left them dead seats — except Lemons, which counted almost every week because
+    its marker multiplier read as output. In a high-end hand the amplifiers ARE the
+    build, so leaving them out made the card unusable there. The rule lives in
+    cardEffectCalculator._amplifierDidWork, beside the boosts it mirrors."""
+    from managers.cardEffectCalculator import groupProjectTriggerCount
     rewardValue = primary.get("rewardValue", 8)
     threshold = _BONUS_ROUND_THRESHOLD
-    breakdowns = ctx._firstPassBreakdowns or []
-    triggeredCount = sum(1 for b in breakdowns
-                         if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
-    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
-    triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
+    triggeredCount = groupProjectTriggerCount(ctx, ctx._firstPassBreakdowns, eqId)
     if triggeredCount >= threshold:
         eq = f"+{rewardValue} FP ({triggeredCount}/{threshold}+ cards triggered)"
         return EffectResult(fpBonus=rewardValue, equation=eq)
