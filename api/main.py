@@ -8414,9 +8414,14 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                         key=lambda tid: _teamWinPct(teamsById.get(tid)))
         ownerByOrigin = {r.original_team_id: r.current_owner_id for r in
                          session.query(DraftPick).filter_by(season=season, used=False).all()}
+        def recordOf(teamId):
+            st = getattr(teamsById.get(teamId), 'seasonTeamStats', None) or {}
+            return {"wins": int(st.get('wins', 0) or 0),
+                    "losses": int(st.get('losses', 0) or 0),
+                    "ties": int(st.get('ties', 0) or 0)}
+
         for slot, originId in enumerate(ranked, start=1):
             ownerId = ownerByOrigin.get(originId, originId)
-            originStats = getattr(teamsById.get(originId), 'seasonTeamStats', None) or {}
             order.append({
                 "slot": slot,
                 "originalTeam": teamBlob(originId),
@@ -8428,11 +8433,12 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                 # where THAT club finishes, so the owner's record explains nothing about
                 # why the pick sits here. Without it the order is a list of names in an
                 # order a reader cannot account for.
-                "record": {
-                    "wins": int(originStats.get('wins', 0) or 0),
-                    "losses": int(originStats.get('losses', 0) or 0),
-                    "ties": int(originStats.get('ties', 0) or 0),
-                },
+                "record": recordOf(originId),
+                # The PICKING club's own record, shown beside its name (owner, 2026-09-30):
+                # with only the original club's record in that spot, a traded pick read as
+                # the owner's record. The page shows this in the Rec column and moves
+                # `record` next to the "via" tag. Equal to `record` when not traded.
+                "ownerRecord": recordOf(ownerId),
             })
 
         trades = (session.query(Trade)
@@ -8458,6 +8464,9 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             "teamA": teamBlob(t.team_a_id), "teamB": teamBlob(t.team_b_id),
             "aGave": withRatings((t.assets_json or {}).get('aGave', [])),
             "bGave": withRatings((t.assets_json or {}).get('bGave', [])),
+            # The roster moves the trade forced (the buyer's cut, the seller's signing or
+            # promotion). Empty for trades settled before they were recorded, and for swaps.
+            "moves": _tradeMoves(t, teamBlob),
             # Why each side did it. Null on trades settled before the columns existed.
             "trigger": getattr(t, 'trigger', None),
             "sellerWhy": getattr(t, 'seller_why', None),
@@ -8871,10 +8880,24 @@ def get_team_trades(team_id: int, limit: int = Query(default=40, ge=1, le=200)):
                 "got": _tradeAssetsWithRatings(got, ratingById),
                 "why": why,
                 "trigger": getattr(t, 'trigger', None),
+                # Both teams' forced moves, each naming its team: the partner's cut or
+                # signing is part of the story of this team's trade too.
+                "moves": _tradeMoves(t, teamBlob),
             })
     finally:
         session.close()
     return build_success_response({"teamId": team_id, "trades": rows})
+
+
+def _tradeMoves(trade, teamBlob) -> list:
+    """The roster moves a trade forced (`tradeManager._tradeMove`), with each team as a
+    blob the ledger can draw a crest for."""
+    out = []
+    for m in (trade.assets_json or {}).get('moves') or []:
+        out.append({"kind": m.get('kind'), "team": teamBlob(m.get('teamId')),
+                    "id": m.get('id'), "name": m.get('name'), "detail": m.get('detail'),
+                    "rating": m.get('rating'), "fee": m.get('fee'), "note": m.get('note')})
+    return out
 
 
 @app.get("/api/teams/{team_id}/picks")

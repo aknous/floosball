@@ -2080,6 +2080,10 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     # backfill nor a cut nor a fee — the seller gives a quarterback and receives a
     # quarterback. Every other shape needs both halves arranged separately.
     swap = _swapPieceOf(winner.pieces, buyer, player)
+    # The roster moves the trade FORCED, beyond the assets themselves: the buyer's cut and
+    # the seller's replacement. Saved on the trade so a fan can see how each roster stayed
+    # whole.
+    moves = []
 
     if swap is None:
         backfill = _findBackfill(seasonManager, seller, player, week=week)
@@ -2099,7 +2103,7 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
             # NEVER has an open slot, and a settlement that requires one shuts every
             # contender out of the market. Measured before this existed: 728 listings and
             # 709 clearing bids across a season, and ZERO trades.
-            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player, week=week)
+            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player, week=week, moves=moves)
             if buyerSlot is None:
                 return None
     else:
@@ -2147,6 +2151,11 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     # ⚠️ Only when nobody came back the other way. A swap already filled the slot.
     if backfill is not None:
         _installBackfill(seasonManager, seller, slot, backfill)
+        kind, person = backfill
+        moves.append(_tradeMove(
+            'promotion' if kind == 'prospect' else 'signing', seller, person,
+            reason=(f"to replace {player.name}" if kind == 'prospect'
+                    else f"from free agency to replace {player.name}")))
 
     # ---- 4. sentiment -----------------------------------------------------
     # ⚠️ NOTHING IS DELETED. "His sentiment does not follow him" is expressed by scoping
@@ -2176,12 +2185,31 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
         # man for a locker-room problem and nothing says why anyone wanted him.
         'sellerWhy': getattr(listing, 'why', None),
         'buyerWhy': getattr(winner, 'why', None),
+        'moves': moves,
     }
     tradeId = _persistTrade(manifest)
     manifest['tradeId'] = tradeId
     _recordTrade(seasonManager, manifest, tradeId)
     _publishTrade(seasonManager, manifest)
     return manifest
+
+
+def _tradeMove(kind, team, player, fee=None, reason=None) -> dict:
+    """One roster move a trade forced: `cut` (the buyer made room), `signing` or
+    `promotion` (the seller filled the hole). Same shape as a traded asset plus the team,
+    so the ledger can render it beside the trade. The rating is the one at the time,
+    since the move is a record of what happened. `note` is the REASON only ("to make room
+    for X"): the ledger labels the verb itself."""
+    pos = getattr(player, 'position', None)
+    move = {'kind': kind,
+            'teamId': getattr(team, 'id', None), 'teamName': getattr(team, 'name', None),
+            'id': getattr(player, 'id', None), 'name': getattr(player, 'name', None),
+            'detail': getattr(pos, 'name', None),
+            'rating': getattr(player, 'playerRating', None),
+            'note': reason}
+    if fee:
+        move['fee'] = int(fee)
+    return move
 
 
 def _stampAcquired(player, season: int, asPiece: bool = False,
@@ -2268,7 +2296,7 @@ def _openSlotFor(team, player):
     return None
 
 
-def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
+def _cutToMakeRoom(seasonManager, buyer, incoming, week=None, moves=None):
     """Cut the weakest incumbent at the incoming player's position. Returns the freed
     slot, or None.
 
@@ -2358,6 +2386,12 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None):
         logger.warning(f"Could not release {getattr(worst, 'name', '?')}: {e}")
         return None
     logger.info(f"{buyer.name} cut {worst.name} ({fee}F) to make room for {incoming.name}")
+    # ⚠️ REPORTED TO THE CALLER, or the cut is invisible: this used to go to the log and
+    # nowhere else, so a fan saw a team trade for a quarterback and never learned it had
+    # released one to make room (owner, 2026-09-30). `settleTrade` persists it on the trade.
+    if moves is not None:
+        moves.append(_tradeMove('cut', buyer, worst, fee=fee,
+                                reason=f"to make room for {incoming.name}"))
     return worstSlot
 
 
@@ -2637,7 +2671,8 @@ def _persistTrade(manifest) -> int:
         row = Trade(season=manifest['season'], week=manifest['week'],
                     phase=manifest['phase'],
                     team_a_id=manifest['teamAId'], team_b_id=manifest['teamBId'],
-                    assets_json={'aGave': manifest['aGave'], 'bGave': manifest['bGave']},
+                    assets_json={'aGave': manifest['aGave'], 'bGave': manifest['bGave'],
+                                 'moves': manifest.get('moves') or []},
                     price=float(manifest['price']), reserve=float(manifest['reserve']),
                     # ⚠️ The manifest has carried these all along and this row dropped them.
                     trigger=manifest.get('trigger'),
@@ -2672,6 +2707,21 @@ def _recordTrade(seasonManager, manifest, tradeId: int) -> None:
             teamId=manifest[f'{side}Id'], teamName=manifest[f'{side}Name'],
             detail=f"sent {names} to {manifest[f'{other}Name']}",
             tradeId=tradeId)
+    # ⚠️ THE MOVES A TRADE FORCED ARE TRANSACTIONS TOO, and they reach the moves feed only
+    # through these rows. Keyed by the trade id, so a player cut here and again in the
+    # offseason is two rows rather than one swallowed by the (season, type, player) dedupe.
+    # A mid-season signing is recorded as `fa_pick`, which the feed labels "Signed".
+    verbs = {'cut': 'released', 'signing': 'signed', 'promotion': 'promoted'}
+    for move in manifest.get('moves') or []:
+        detail = f"{verbs.get(move['kind'], move['kind'])} {move.get('note') or ''}".strip()
+        if move.get('fee'):
+            detail += f" ({move['fee']}F)"
+        seasonManager._recordOffseasonEvent(
+            {'signing': 'fa_pick'}.get(move['kind'], move['kind']),
+            teamId=move.get('teamId'), teamName=move.get('teamName'),
+            playerId=move.get('id'), playerName=move.get('name'),
+            position=move.get('detail'), rating=move.get('rating'),
+            detail=detail, tradeId=tradeId)
 
 
 def _publishTrade(seasonManager, manifest) -> None:
