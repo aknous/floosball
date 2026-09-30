@@ -920,7 +920,10 @@ def _computeCardPass(
     # FP power-bar gate outcome for this card — computeEffect (above) stashed the
     # on/off ratio on ctx._gateRatios[eq.id] for gated cards.
     _gate = effectConfig.get("gate") or {}
-    _gateThreshold = _gate.get("threshold", 0) or 0
+    # The bar IN FORCE (live format applied) — the breakdown, the lineup snapshot and
+    # Captain's overshoot all read this, and it must match what gateRatio judged against.
+    from managers.cardEffects import effectiveGateThreshold
+    _gateThreshold = effectiveGateThreshold(_gate.get("threshold", 0) or 0)
     _gateInverse = bool(_gate.get("inverse"))
     _gateAllPro = bool(_gate.get("allPro"))
     _gateActive = None
@@ -1138,7 +1141,10 @@ def calculateWeekCardBonuses(
             return False
         tmpl = eq.user_card.card_template
         ec = tmpl.effect_config or {}
-        thr = (ec.get("gate") or {}).get("threshold", CARD_GATE_FP_THRESHOLDS.get(tmpl.position, 0))
+        from managers.cardEffects import effectiveGateThreshold
+        # The bar in force, like every other card's: an Innings week raises it for all.
+        thr = effectiveGateThreshold(
+            (ec.get("gate") or {}).get("threshold", CARD_GATE_FP_THRESHOLDS.get(tmpl.position, 0)))
         fp = ((ctx.weekPlayerStats or {}).get(tmpl.player_id, {}) or {}).get("fantasyPoints", 0) or 0
         return fp >= thr
 
@@ -1647,7 +1653,9 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
         # amplifies it. This also excludes pure markers (0 effect output) for
         # free, and keeps flat-FP only so FPx/floobits cards aren't mistreated.
         ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
-        multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
+        # Rounded to 2 dp so the applied multiplier is the one the card text and the
+        # lineup pill print (tierScaledStrength rounds the same expression).
+        multValue = round(float(ddBreakdown.primaryMult), 2) if ddBreakdown and ddBreakdown.primaryMult else 2.5
         lowest = _lemonsTarget(normalBreakdowns)
         if lowest is not None:
             originalFP = lowest.primaryFP
@@ -1658,6 +1666,12 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
         # Clear the marker mult so it doesn't stack on the global FPx aggregation
         if ddBreakdown:
             ddBreakdown.primaryMult = 0
+            # Lemons' OWN row states the multiplier actually applied. Its compute writes
+            # the untiered value and the tier rescale leaves "× 2.5 on …" alone (a number
+            # followed by a word reads as context), so a tier II card's row said x2.5
+            # beside a boosted card tagged "x 2.72 (Lemons)".
+            if (ddBreakdown.equation or "").startswith("× "):
+                ddBreakdown.equation = f"× {multValue} on your lowest-earning FP card"
 
 
 def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None:

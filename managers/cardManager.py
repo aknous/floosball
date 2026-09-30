@@ -9,7 +9,7 @@ from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEf
                                   effectValidPositions as _effectValidPositions,
                                   effectPoolFor as _effectPoolFor,
                                   trackedStatsFor as _trackedStatsFor,
-                                  withLiveCategory)
+                                  withLiveCategory, withEffectiveGate)
 
 logger = get_logger("floosball.cardManager")
 
@@ -879,7 +879,10 @@ class CardManager:
             template.edition, isActive=isActive,
             isSynthetic=getattr(template, 'is_synthetic', False))
 
-        effectConfig = template.effect_config or {}
+        # ⚠️ The gate goes out at the bar IN FORCE, not the one frozen at mint — the live
+        # format moves it (see cardEffects.effectiveGateThreshold). The card face, the
+        # lineup meter and the "Unlocks once…" line all read this.
+        effectConfig = withEffectiveGate(template.effect_config or {})
         classification = template.classification
 
         # Rookie classification doubles sell value
@@ -983,7 +986,8 @@ class CardManager:
                 tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
                 bigR = rebuildPrimaryParams(effectName, template.player_rating, edScale * 2.0) or {}
                 MULT_VAL = {"xMultValue", "baseXMult", "baseMult", "enhancedMult", "maxMult", "q4MultFactor"}
-                rewardIsMult = effectName in ("bandwagon", "stack", "backfield_buddies", "full_roster")
+                from managers.cardEffects import REWARDVALUE_IS_MULT_EFFECTS
+                rewardIsMult = effectName in REWARDVALUE_IS_MULT_EFFECTS
 
                 def _fmt(v):
                     if float(v).is_integer():
@@ -1669,6 +1673,8 @@ class CardManager:
             # otherwise see a payable price and be refused at the till.
             "componentsRequired": 1 if synthesizing else 0,
             "componentsHeld": _components.balance(session, userId, currentSeason),
+            # The tier the result will carry: the DONOR's (see transplantEffect).
+            "tier": getattr(donor, "tier", 1) or 1,
             "donorEffect": self._effectName(donor),
             "targetEffect": self._effectName(target),
             "donorPlayer": donor.card_template.player_name,
@@ -1678,10 +1684,17 @@ class CardManager:
     def transplantEffect(self, session, userId: int, donorCardId: int,
                          targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
         """Graft the donor card's effect onto the target player card (same edition +
-        position). The target keeps its identity, upgrade tier and vault state and
-        takes on the donor's effect (re-scaled to the target's rating, so a high-rating
-        donor can't dump strong params on a weaker player); the donor is consumed.
-        Costs Floobits scaling with edition."""
+        position). The target keeps its identity and vault state and takes on the
+        donor's effect (re-scaled to the target's rating, so a high-rating donor can't
+        dump strong params on a weaker player) AND the donor's upgrade tier; the donor
+        is consumed. Costs Floobits scaling with edition.
+
+        ⚠️ THE TIER TRAVELS WITH THE EFFECT (owner, 2026-09-30). It used to stay with the
+        TARGET, which made a tier transferable between effects: level a card to IV on an
+        easy-to-duplicate effect, then graft anything onto it at IV without feeding that
+        effect a single copy of itself — and repeat. A tier is earned by consuming
+        duplicates of ONE effect, so it belongs to that effect. It also stops a leveled
+        donor's upgrades being thrown away."""
         from database.models import CardUpgradeLog
         from database.repositories.card_repositories import (
             UserCardRepository, CurrencyRepository,
@@ -1739,8 +1752,10 @@ class CardManager:
                                                    currentSeason=currentSeason,
                                                    synthetic=synthesizing)
         # Assign the relationship (not just the FK) so the in-session view + serialized
-        # result reflect the new template immediately. Keeps tier + vault + identity.
+        # result reflect the new template immediately. Keeps vault + identity; the tier
+        # comes from the donor (see docstring). Read it before the donor is deleted.
         target.card_template = newTemplate
+        target.tier = getattr(donor, "tier", 1) or 1
         UserCardRepository(session).deleteBatch([donor])
         session.add(CardUpgradeLog(
             user_id=userId,
@@ -3050,7 +3065,7 @@ class CardManager:
             t = row.card_template
             buyPrice = self._featuredBuyPrice(t)
             effName = (t.effect_config or {}).get("effectName") or ""
-            effCfg = withLiveCategory(t.effect_config)
+            effCfg = withEffectiveGate(withLiveCategory(t.effect_config))
             card = {
                 "templateId": t.id,
                 "playerId": t.player_id,
