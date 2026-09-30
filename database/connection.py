@@ -62,6 +62,7 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
+    _backfillTradeMoves()
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -3910,6 +3911,112 @@ def _backfillProspectContracts():
     except Exception as e:
         session.rollback()
         logger.warning(f"Prospect-contract backfill failed: {e}")
+    finally:
+        session.close()
+
+
+_TRADE_MOVES_MARKER = 'trade_moves_backfilled'
+_POSITION_BY_NAME = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+
+
+def _backfillTradeMoves():
+    """ONE-SHOT: reconstruct the roster moves of in-season trades settled before trades
+    recorded them (`tradeManager.settleTrade` writes `assets_json.moves` from 2026-09-30).
+
+    ⚠️ RECOVERED FROM THE GAME LOG, AND ONLY IN-SEASON. Mid-season nothing but a trade
+    changes a roster, so at the traded position the buyer's cut is the player whose games
+    for the buyer stop at the trade week, and the seller's replacement is the player whose
+    games for the seller start right after it. Measured on production before writing this:
+    every in-season trade that was not a swap had exactly one of each. The offseason is
+    skipped: the FA draft, promotions and cuts move rosters in the same window, so nothing
+    can be attributed to a trade.
+
+    ⚠️ ONLY AN UNAMBIGUOUS READ IS WRITTEN — at most one cut and one replacement, else the
+    trade is left alone. A replacement with no game anywhere before the trade was a
+    prospect (a promotion); otherwise a free-agent signing. A same-position swap gets an
+    empty list, which is correct: it forces no moves.
+
+    Not recoverable, so left out: the cut FEE (it only lowered the treasury balance) and
+    the rating at the time (never stored). Marked `backfilled` for anyone reading the row.
+    Not written to the recap log either: the moves feed is current-season and newest-first,
+    so week-15 moves would land at the top of it.
+    """
+    from database.models import AppSetting, Trade, Game, GamePlayerStats, Player, Team
+    session = SessionLocal()
+    try:
+        if session.query(AppSetting).filter(AppSetting.key == _TRADE_MOVES_MARKER).first():
+            return
+        teamNames = dict(session.query(Team.id, Team.name).all())
+        written, skipped = 0, []
+        for trade in (session.query(Trade).filter(Trade.phase == 'in_season')
+                      .order_by(Trade.id).all()):
+            assets = dict(trade.assets_json or {})
+            if 'moves' in assets:
+                continue
+            sold = next((x for x in assets.get('aGave') or [] if x.get('kind') == 'player'), None)
+            pos = _POSITION_BY_NAME.get((sold or {}).get('detail'))
+            if not sold or not pos:
+                continue
+            pieceIds = {x.get('id') for x in assets.get('bGave') or [] if x.get('kind') == 'player'}
+            if pieceIds and session.query(Player).filter(
+                    Player.id.in_(list(pieceIds)), Player.position == pos).first():
+                assets['moves'] = []                     # a swap forces nothing
+                trade.assets_json = assets
+                written += 1
+                continue
+            seller, buyer, week = trade.team_a_id, trade.team_b_id, int(trade.week or 0)
+            rows = (session.query(GamePlayerStats.player_id, GamePlayerStats.team_id, Game.week)
+                    .join(Game, Game.id == GamePlayerStats.game_id)
+                    .join(Player, Player.id == GamePlayerStats.player_id)
+                    .filter(Game.season == trade.season, Game.is_playoff.isnot(True),
+                            GamePlayerStats.team_id.in_((seller, buyer)), Player.position == pos)
+                    .all())
+            weeksFor = {}
+            for pid, tid, wk in rows:
+                weeksFor.setdefault((pid, tid), []).append(int(wk or 0))
+            exclude = {sold.get('id')} | pieceIds
+            cuts = [pid for (pid, tid), wks in weeksFor.items()
+                    if tid == buyer and pid not in exclude and week - 1 <= max(wks) <= week]
+            fills = [pid for (pid, tid), wks in weeksFor.items()
+                     if tid == seller and pid not in exclude and week < min(wks) <= week + 2]
+            if len(cuts) > 1 or len(fills) > 1 or not (cuts or fills):
+                skipped.append(trade.id)
+                continue
+            names = dict(session.query(Player.id, Player.name)
+                         .filter(Player.id.in_(cuts + fills)).all())
+            posName = sold.get('detail')
+            moves = []
+            for pid in cuts:
+                moves.append({'kind': 'cut', 'teamId': buyer, 'teamName': teamNames.get(buyer),
+                              'id': pid, 'name': names.get(pid), 'detail': posName,
+                              'rating': None, 'note': f"to make room for {sold.get('name')}",
+                              'backfilled': True})
+            for pid in fills:
+                prior = (session.query(GamePlayerStats.id)
+                         .join(Game, Game.id == GamePlayerStats.game_id)
+                         .filter(GamePlayerStats.player_id == pid,
+                                 (Game.season < trade.season)
+                                 | ((Game.season == trade.season) & (Game.week <= week)))
+                         .first())
+                promoted = prior is None
+                moves.append({'kind': 'promotion' if promoted else 'signing',
+                              'teamId': seller, 'teamName': teamNames.get(seller),
+                              'id': pid, 'name': names.get(pid), 'detail': posName,
+                              'rating': None,
+                              'note': (f"to replace {sold.get('name')}" if promoted
+                                       else f"from free agency to replace {sold.get('name')}"),
+                              'backfilled': True})
+            assets['moves'] = moves
+            trade.assets_json = assets               # reassign: a JSON column is not mutable-tracked
+            written += 1
+        session.add(AppSetting(key=_TRADE_MOVES_MARKER, value=str(written)))
+        session.commit()
+        if written or skipped:
+            logger.info(f"Backfilled roster moves on {written} in-season trade(s)"
+                        + (f"; left {skipped} alone (ambiguous)" if skipped else ""))
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"Trade-moves backfill failed: {e}")
     finally:
         session.close()
 
