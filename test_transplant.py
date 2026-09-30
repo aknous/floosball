@@ -1,6 +1,6 @@
 """Effect transplant — graft a donor card's effect onto a target player card.
 
-Same edition + position; target keeps identity + tier, donor consumed, Floobits charged.
+Same edition + position; target keeps identity and takes the DONOR's tier, donor consumed, Floobits charged.
 Run: DATABASE_DIR=/tmp/floo_transplant .venv/bin/python test_transplant.py
 """
 import sys, os, shutil
@@ -40,7 +40,7 @@ def mkTemplate(player, effect):
 
 tDonor = mkTemplate(p1, 'possession')
 tTarget = mkTemplate(p2, 'slippery')
-donor = UserCard(user_id=u.id, card_template_id=tDonor.id, acquired_via='test')
+donor = UserCard(user_id=u.id, card_template_id=tDonor.id, acquired_via='test', tier=2)
 target = UserCard(user_id=u.id, card_template_id=tTarget.id, acquired_via='test', tier=3)
 s.add_all([donor, target]); s.flush()
 donorId, targetId, oldTargetTemplateId = donor.id, target.id, tTarget.id
@@ -57,7 +57,7 @@ expect(f"target carries the donor's effect (possession)  got={newTpl.effect_conf
        newTpl.effect_config.get('effectName') == 'possession')
 expect("target keeps its own player (Keeper Guy)", newTpl.player_id == p2.id and newTpl.player_name == 'Keeper Guy')
 expect("target keeps its edition (holographic)", newTpl.edition == HOLO)
-expect("target keeps its upgrade tier (III)", target.tier == 3)
+expect(f"target takes the donor's tier (II, not its own III)  got={target.tier}", target.tier == 2)
 expect("donor card is consumed", s.get(UserCard, donorId) is None)
 cost = TRANSPLANT_COST_BY_EDITION[HOLO]
 s.refresh(s.get(UserCurrency, u.id)); balAfter = s.get(UserCurrency, u.id).balance

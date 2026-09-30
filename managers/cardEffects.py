@@ -256,6 +256,12 @@ def tierScaledStrength(effectName: str, primary: dict, tierMult: float) -> dict:
         return {"yardMult": round(1 + (p["yardMult"] - 1) * tierMult, 2)}
     if effectName == "sharpshooter" and "fgMult" in p:
         return {"fgMult": round(1 + (p["fgMult"] - 1) * tierMult, 2)}
+    # ⚠️ Lemons scales its DELTA like every other multiplier. The calc already did
+    # (step 1b scales multBonus as 1 + (m - 1) * tierMult), but the card text scaled the
+    # WHOLE value and the lineup pill did not scale at all, so one tier II card read
+    # x2.5 on the pill, x2.9 in its description and x2.72 in the breakdown.
+    if effectName == "double_down" and "rewardValue" in p:
+        return {"rewardValue": round(1 + (p["rewardValue"] - 1) * tierMult, 2)}
     if effectName == "catalyst":
         out = {}
         for _k in ("fpPer1PctSolo", "fpPer1Pct"):   # Solo is current; the other is legacy
@@ -2641,6 +2647,15 @@ _EFFECT_BUILDER_OVERRIDES = {
 }
 
 
+# Effects whose `rewardValue` is a FULL multiplier (1 + delta). Everything else that
+# stores a rewardValue stores a bare amount — including backfield_buddies, whose compute
+# does `1 + rewardValue`. ⚠️ One definition, shared by the mint-time text and
+# serializeCard's tier scaling: the tier code kept its own copy that wrongly included
+# backfield_buddies, so a +0.40 FPx card previewed tier II as "+0.31 FPx"
+# (1 + (0.40 - 1) x 1.15) — a LOWER number for an upgrade.
+REWARDVALUE_IS_MULT_EFFECTS = frozenset({'bandwagon', 'stack', 'full_roster'})
+
+
 # ─── Output Type Derivation ──────────────────────────────────────────────────
 
 # Effects that return multBonus (FPx factors)
@@ -3066,10 +3081,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     # rewardValue can be either a flat FP value OR a full-mult value
     # depending on the effect. For the handful of FPx-output effects that
     # store rewardValue as 1+delta, compute a rewardDelta variant too.
-    # NOTE: backfield_buddies stores rewardValue as a bare delta (compute does
-    # 1 + rewardValue), so it is NOT in this set — its template uses {rewardValue}.
-    _REWARDVALUE_IS_MULT_EFFECTS = {'bandwagon', 'stack', 'full_roster'}
-    if effectName in _REWARDVALUE_IS_MULT_EFFECTS and 'rewardValue' in primary:
+    if effectName in REWARDVALUE_IS_MULT_EFFECTS and 'rewardValue' in primary:
         rv = primary['rewardValue']
         if isinstance(rv, (int, float)) and rv >= 1.0:
             primary['rewardDelta'] = round(rv - 1, 2)
@@ -6673,12 +6685,101 @@ def buildGateSpec(effectName: str, position: int, classification: str = None,
     if effectName == "all_in":
         threshold = allInStudLine(position, classification)
     inverse = effectName in _INVERSE_GATE_EFFECTS
-    apNote = " (All-Pro)" if allPro else ""
-    if inverse:
-        text = f"Active while this player stays under {threshold} FP{apNote}"
-    else:
-        text = f"Unlocks once this player reaches {threshold} FP{apNote}"
+    text = gateText(threshold, inverse, allPro)
     return {'threshold': threshold, 'inverse': inverse, 'text': text, 'allPro': allPro}
+
+
+def gateText(threshold, inverse: bool = False, allPro: bool = False) -> str:
+    """The power bar's one-line requirement. One definition, so the text minted into a
+    card and the text re-rendered for the live format cannot word it differently.
+
+    ⚠️ It does NOT name the format (owner, 2026-09-30): "(Innings)" means nothing to a
+    user, so the text simply states the bar in force."""
+    note = " (All-Pro)" if allPro else ""
+    if inverse:
+        return f"Active while this player stays under {threshold} FP{note}"
+    return f"Unlocks once this player reaches {threshold} FP{note}"
+
+
+_FORMAT_GATE_CACHE = {"at": 0.0, "info": (1.0, None)}
+_FORMAT_GATE_TTL_SECONDS = 2.0
+
+
+def formatGateInfo() -> tuple:
+    """(scale, label) for the live game format's effect on the power bar: (1.0, None) in
+    a standard week, else the format's `fpScale` and its display label.
+
+    Cached for a couple of seconds because a collection serializes hundreds of cards and
+    each would otherwise open a session to read the same row; the format changes weekly.
+    Fails soft to (1.0, None) exactly as `formatGateScale` always has."""
+    import time
+    now = time.monotonic()
+    if now - _FORMAT_GATE_CACHE["at"] < _FORMAT_GATE_TTL_SECONDS:
+        return _FORMAT_GATE_CACHE["info"]
+    info = (1.0, None)
+    try:
+        from game_rules import loadRuleOverrides
+        from game_formats import getFormat
+        fmt = getFormat(loadRuleOverrides().get('gameFormat'))
+        scale = float(getattr(fmt, 'fpScale', 1.0))
+        if scale > 0 and scale != 1.0:
+            info = (scale, getattr(fmt, 'label', None))
+    except Exception:
+        pass
+    _FORMAT_GATE_CACHE["at"], _FORMAT_GATE_CACHE["info"] = now, info
+    return info
+
+
+def effectiveGateThreshold(threshold, scale: float = None):
+    """The bar actually in force this week: the frozen threshold moved by the live format.
+
+    ⚠️ THE ONLY DEFINITION, and every reader of a card's bar must use it — scoring, the
+    breakdown, the amplifiers' own bar checks, Captain's overshoot, and every surface that
+    shows a card. The scale used to be applied inside `gateRatio` alone, so in an Innings
+    season (x1.32) a card printed "reaches 9 FP", drew its bar as cleared at 10, and paid
+    nothing because the bar in force was 12 — reported as an Eminence dead on a 10-FP week.
+    Floored at 1 so no format can make a gate free."""
+    if not threshold or threshold <= 0:
+        return threshold
+    if scale is None:
+        scale = formatGateInfo()[0]
+    if scale == 1.0:
+        return threshold
+    return max(1, round(threshold * scale))
+
+
+def effectiveGate(gate: dict, info: tuple = None) -> dict:
+    """A COPY of a stored gate spec with its threshold and text moved to the live format
+    (see `effectiveGateThreshold`). The frozen value rides along as `baseThreshold` so a
+    surface can say where the bar came from. Returns the gate untouched in a standard week.
+    Never mutates the argument: it may be a SQLAlchemy JSON attribute."""
+    if not gate or not gate.get('threshold'):
+        return gate
+    scale = (info if info is not None else formatGateInfo())[0]
+    if scale == 1.0:
+        return gate
+    thr = effectiveGateThreshold(gate['threshold'], scale)
+    out = dict(gate)
+    out['baseThreshold'] = gate['threshold']
+    out['threshold'] = thr
+    out['text'] = gateText(thr, bool(gate.get('inverse')), bool(gate.get('allPro')))
+    return out
+
+
+def withEffectiveGate(effectConfig: dict) -> dict:
+    """A stored effect_config with its gate (and `gateText`) moved to the live format.
+    Returns a copy when anything changes. Pair with `withLiveCategory` on any path that
+    hands a stored config to a client."""
+    if not effectConfig or not effectConfig.get('gate'):
+        return effectConfig
+    eff = effectiveGate(effectConfig['gate'])
+    if eff is effectConfig['gate']:
+        return effectConfig
+    out = dict(effectConfig)
+    out['gate'] = eff
+    if out.get('gateText'):
+        out['gateText'] = eff['text']
+    return out
 
 
 def formatGateScale() -> float:
@@ -6697,13 +6798,7 @@ def formatGateScale() -> float:
     Fails soft to 1.0: a missing table, an unknown format or a DB hiccup must leave the bar
     exactly where it is, never at zero.
     """
-    try:
-        from game_rules import loadRuleOverrides
-        from game_formats import getFormat
-        scale = float(getattr(getFormat(loadRuleOverrides().get('gameFormat')), 'fpScale', 1.0))
-        return scale if scale > 0 else 1.0
-    except Exception:
-        return 1.0
+    return formatGateInfo()[0]
 
 
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
@@ -6745,9 +6840,7 @@ def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
         return 1.0
     # ⚠️ THE LIVE FORMAT MOVES THE BAR, because it moves the FP supply the bar is measured
     # against. See `formatGateScale`. Floored at 1 so no format can make a gate free.
-    scale = formatGateScale()
-    if scale != 1.0:
-        threshold = max(1, round(threshold * scale))
+    threshold = effectiveGateThreshold(threshold)
     inverse = bool(gate.get('inverse'))
     if getattr(ctx, 'isProjection', False):
         if getattr(ctx, 'projectionVariant', 'expected') == 'optimistic':

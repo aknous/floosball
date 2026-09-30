@@ -210,6 +210,13 @@ def _amplifierStatus(eq, hand, breakdowns=None) -> Optional[Dict[str, Any]]:
     if not check:
         return None
     primary = (_effectConfig(eq).get("primary", {}) or {})
+    # The pill quotes the card's strength, so it has to be the TIERED strength —
+    # a tier II Lemons read x2.5 here while the calc applied x2.72.
+    tier = getattr(getattr(eq, "user_card", None), "tier", 1) or 1
+    if tier > 1:
+        from constants import CARD_TIER_MULT
+        from managers.cardEffects import tierScaledStrength
+        primary = {**primary, **tierScaledStrength(effectName, primary, CARD_TIER_MULT.get(tier, 1.0))}
     active = bool(check(hand, eq))
     return {
         "description": _amplifierDescription(effectName, primary, active, breakdowns),
