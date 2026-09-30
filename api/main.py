@@ -8466,7 +8466,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             "bGave": withRatings((t.assets_json or {}).get('bGave', [])),
             # The roster moves the trade forced (the buyer's cut, the seller's signing or
             # promotion). Empty for trades settled before they were recorded, and for swaps.
-            "moves": _tradeMoves(t, teamBlob),
+            "moves": _tradeMoves(t, teamBlob, ratingById),
             # Why each side did it. Null on trades settled before the columns existed.
             "trigger": getattr(t, 'trigger', None),
             "sellerWhy": getattr(t, 'seller_why', None),
@@ -8882,21 +8882,31 @@ def get_team_trades(team_id: int, limit: int = Query(default=40, ge=1, le=200)):
                 "trigger": getattr(t, 'trigger', None),
                 # Both teams' forced moves, each naming its team: the partner's cut or
                 # signing is part of the story of this team's trade too.
-                "moves": _tradeMoves(t, teamBlob),
+                "moves": _tradeMoves(t, teamBlob, ratingById),
             })
     finally:
         session.close()
     return build_success_response({"teamId": team_id, "trades": rows})
 
 
-def _tradeMoves(trade, teamBlob) -> list:
+def _tradeMoves(trade, teamBlob, ratingById=None) -> list:
     """The roster moves a trade forced (`tradeManager._tradeMove`), with each team as a
-    blob the ledger can draw a crest for."""
+    blob the ledger can draw a crest for.
+
+    The rating is the one stored at the time of the move. A move BACKFILLED from the game
+    log has none (it was never stored), so it falls back to the player's CURRENT rating,
+    the same read `_tradeAssetsWithRatings` gives traded players, flagged `ratingNow` so
+    the page can say which it is."""
     out = []
     for m in (trade.assets_json or {}).get('moves') or []:
+        rating, ratingNow = m.get('rating'), False
+        if rating is None and ratingById:
+            rating = ratingById.get(m.get('id'))
+            ratingNow = rating is not None
         out.append({"kind": m.get('kind'), "team": teamBlob(m.get('teamId')),
                     "id": m.get('id'), "name": m.get('name'), "detail": m.get('detail'),
-                    "rating": m.get('rating'), "fee": m.get('fee'), "note": m.get('note')})
+                    "rating": rating, "ratingNow": ratingNow,
+                    "fee": m.get('fee'), "note": m.get('note')})
     return out
 
 
