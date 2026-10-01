@@ -5782,8 +5782,9 @@ class SeasonManager:
         # teams (worst-first). On resume it's restored wholesale from the
         # persisted snapshot below, so skip the rebuild here.
         if not resuming:
+            from seeding import draftOrderKey
             self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
-            list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
+            list.sort(self.currentSeason.freeAgencyOrder, key=draftOrderKey)
         import floosball_methods as FloosMethods
         numOfRounds = FloosMethods.getPower(2, len(self.leagueManager.teams)/2)
 
@@ -6150,6 +6151,11 @@ class SeasonManager:
                     description='Favorite team won the Floos Bowl!',
                     season=self.currentSeason.seasonNumber)
             else:
+                # ⚠️ THIS ROUND'S LOSERS ENTER THE DRAFT ORDER TOGETHER, worst record first
+                # (seeding.draftOrderKey). They used to be appended in the order the games
+                # were processed — one league, then the other, in bracket order — so a 20-8
+                # team out in round 1 could pick ahead of a 15-13 team out the same round.
+                roundLosers = []
                 for league in self.leagueManager.leagues:
                     for game in playoffGamesDict[league.name]:
                         game: FloosGame.Game
@@ -6163,9 +6169,11 @@ class SeasonManager:
                                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _playoffElimText}})
                                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_playoffElimText))
-                                self.currentSeason.freeAgencyOrder.append(team)
+                                roundLosers.append(team)
                                 playoffTeams[league.name].remove(team)
                                 break
+                from seeding import draftOrderKey
+                self.currentSeason.freeAgencyOrder.extend(sorted(roundLosers, key=draftOrderKey))
 
                 
 

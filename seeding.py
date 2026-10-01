@@ -83,6 +83,20 @@ def _sharedDivision(group):
     return only or None
 
 
+def draftOrderKey(team):
+    """Rookie / FA draft order within a group, WORST FIRST: regular-season win% then
+    point differential, both ascending (`winPerc` and `scoreDiff` only accumulate in
+    regular-season games, so a playoff run does not move them).
+
+    ⚠️ THE ONE DEFINITION, used by the real order (`seasonManager`: the non-playoff teams,
+    and each playoff round's losers) and by the transactions page's projection, so the
+    page cannot disagree with the draft. Same-round playoff losers used to go in in the
+    order the games were processed (owner, 2026-10-01: by record, then point
+    differential)."""
+    s = getattr(team, 'seasonTeamStats', {}) or {}
+    return (s.get('winPerc', 0) or 0, s.get('scoreDiff', 0) or 0)
+
+
 def _baseKey(team):
     s = getattr(team, 'seasonTeamStats', {}) or {}
     return s.get('winPerc', 0) or 0
