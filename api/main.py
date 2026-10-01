@@ -10260,6 +10260,19 @@ def getCardCollection(
         equippedCardIds = equippedRepo.getEquippedCardIds(user.id, currentSeason, currentWeek)
 
         result = []
+        # Same-effect copies per effect across the WHOLE scope (collection or vault),
+        # ignoring every other filter — the duplicate finder needs the real count, and the
+        # page's own list is already narrowed by edition / position / equipped.
+        effectCounts = {}
+        for card in cards:
+            tpl = card.card_template
+            if tpl.edition == 'base':
+                continue
+            if vaulted is not None and bool(getattr(card, "vaulted", False)) != vaulted:
+                continue
+            eName = (tpl.effect_config or {}).get("effectName") or ""
+            if eName and eName != 'none':
+                effectCounts[eName] = effectCounts.get(eName, 0) + 1
         for card in cards:
             tpl = card.card_template
             # ⚠️ THE BASE POOL IS NOT A COLLECTION. Floor prints are available to
@@ -10352,7 +10365,8 @@ def getCardCollection(
         else:  # "recent"
             result.sort(key=lambda d: _num(d, "id"), reverse=True)
 
-        return build_success_response({"cards": result, "currentSeason": currentSeason})
+        return build_success_response({"cards": result, "currentSeason": currentSeason,
+                                       "effectCounts": effectCounts})
     finally:
         session.close()
 
