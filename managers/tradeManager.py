@@ -825,14 +825,18 @@ class TradeMarket:
         bundle piece, or None if it has none (owner, 2026-10-01: a top-3 pick costs "a 4-5
         star rated roster player in their prime"). Qualifies: rated at least
         `TRADE_TOP_PICK_STAR_RATING`, on the PRIME arc, at least
-        `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract, not retiring, not acquired
-        this season. Among several, the one the BUYER minds losing least goes.
+        `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract, not a kicker, not retiring,
+        not acquired this season. Among several, the one the BUYER minds losing least goes.
         """
         from constants import TRADE_TOP_PICK_STAR_RATING, TRADE_TOP_PICK_STAR_MIN_TERM
         from managers.frontOfficeBrain import ARC_PRIME
         candidates = []
         for slot, p in (getattr(buyer, 'rosterDict', None) or {}).items():
             if p is None or getattr(p, 'willRetire', False):
+                continue
+            # ⚠️ NEVER A KICKER (owner, 2026-10-01), for the reason a top pick never drafts
+            # one: a kicker is not the kind of player a headline pick is worth.
+            if getattr(getattr(p, 'position', None), 'value', None) == 5:
                 continue
             if float(getattr(p, 'playerRating', 0) or 0) < TRADE_TOP_PICK_STAR_RATING:
                 continue

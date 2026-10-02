@@ -176,6 +176,8 @@ def test_a_top_pick_costs_a_prime_four_star_under_contract():
                    arcs={'Old': 'regressing'}) is None, "a declining star qualified"
     assert _starOf([FakePlayer(5, 90, Position.QB, termRemaining=3, name='Kid')],
                    arcs={'Kid': 'developing'}) is None, "a still-developing player qualified"
+    assert _starOf([FakePlayer(6, 95, Position.K, termRemaining=3)]) is None, \
+        "a kicker qualified as the star (owner: never a kicker)"
 
 
 def test_the_star_is_always_in_the_package():
