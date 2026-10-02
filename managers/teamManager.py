@@ -232,6 +232,9 @@ class TeamManager:
             team.leagueChampionships = db_team.league_championships or []
             team.floosbowlChampionships = db_team.floosbowl_championships or []
             team.regularSeasonChampions = db_team.top_seeds or []  # top_seeds = regular season champions
+            # ⚠️ `saveTeamData` writes `top_seeds` from `topSeeds`, so it must load into it
+            # too; reading only into the legacy name saved an empty list every season.
+            team.topSeeds = list(db_team.top_seeds or [])
             team.playoffAppearances = db_team.playoff_appearances if isinstance(db_team.playoff_appearances, int) else 0
             
             # Roster history if available

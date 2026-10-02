@@ -6394,6 +6394,17 @@ class SeasonManager:
 
         # Save season statistics (team stats, season record, championships)
         self.saveSeasonStats()
+        # ⚠️ And the team rows NOW. Their title lists, playoff appearances and all-time
+        # record were only written when the whole offseason finished, so a restart in the
+        # offseason reloaded last season's and the final save would have dropped this
+        # season's titles (prod, season 8: the Raccoons' Floos Bowl). See
+        # `connection._reconcileTeamTitles`.
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                teamManager.saveTeamData()
+        except Exception as e:
+            logger.warning(f"Could not persist team titles at season end: {e}")
         
         # Add to season history
         self.seasonHistory.append(self.currentSeason)
