@@ -131,6 +131,26 @@ def test_a_poor_scout_sees_less_of_the_future():
     assert abs(m._futureRatingFor(teams[0], norman) - 74) < 1e-6
 
 
+def test_a_rising_star_is_judged_on_his_projection_not_the_blended_read():
+    """Owner, 2026-10-02: a rising star is bought with quality, not volume. Norman reads 83
+    through a 0.6-vision scout, a point under the line; the test is his projection (88)."""
+    norman = _player(1, 74, 'Norman', 2, expected=88)
+    modest = _player(2, 74, 'Modest', 2, expected=78)
+    prime = _player(3, 86, 'Prime', 2)
+
+    class GoodScout(ProjectingBrain):
+        def scoutingVision(self, coach, team=None):
+            return 0.6
+
+    brain = GoodScout(arcs={'Norman': 'developing', 'Modest': 'developing'},
+                      ceilings={'Norman': 90, 'Modest': 80})
+    m, teams = _market(brain, [norman, modest, prime])
+    assert m._futureRatingFor(teams[0], norman) < 84 <= m._projectedRatingFor(teams[0], norman)
+    assert m._isRisingStar(teams[0], norman)
+    assert not m._isRisingStar(teams[0], modest), "a modest ceiling counted as a rising star"
+    assert not m._isRisingStar(teams[0], prime), "a prime star is not a RISING star"
+
+
 if __name__ == '__main__':
     import sys, pytest
     sys.exit(pytest.main(['-q', __file__]))

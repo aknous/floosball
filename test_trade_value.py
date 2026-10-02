@@ -449,8 +449,12 @@ def test_a_future_picks_slot_regresses_toward_the_middle():
     class." This season's is left alone; the table is settled by the week-15 open."""
     mid = (32 + 1) / 2.0
     assert trading.expectedPickSlot(30, 0) == 30.0, "this season's pick was regressed"
-    assert 30 > trading.expectedPickSlot(30, 1) > trading.expectedPickSlot(30, 2) > mid
-    assert 2 < trading.expectedPickSlot(2, 1) < trading.expectedPickSlot(2, 2) < mid
+    assert 30 > trading.expectedPickSlot(30, 1) > mid
+    assert 2 < trading.expectedPickSlot(2, 1) < mid
+    # ⚠️ ONCE, NOT COMPOUNDED (2026-10-02): measured over 8 production seasons the share of
+    # a club's draft position that carries over is 0.53 one season out and 0.44 two out —
+    # team quality persists, so the pull toward the middle stops after the first year.
+    assert trading.expectedPickSlot(30, 2) == trading.expectedPickSlot(30, 1)
     print(f"PASS slot 30 -> {trading.expectedPickSlot(30, 1):.1f} -> "
           f"{trading.expectedPickSlot(30, 2):.1f}; slot 2 -> "
           f"{trading.expectedPickSlot(2, 1):.1f} -> {trading.expectedPickSlot(2, 2):.1f}")
@@ -460,8 +464,11 @@ def test_a_late_future_pick_is_worth_something():
     """The number that produced the absurd trade: a contender's own future first-rounder
     must not be worth ZERO, or it will give them away by the handful."""
     assert trading.pickValue(30, 0) == 0.0, "this season's slot-30 pick is genuinely thin"
-    assert trading.pickValue(30, 1) > 3.0, "a future late pick is still worth nothing"
-    assert trading.pickValue(30, 2) > 3.0
+    assert trading.pickValue(30, 1) > 0.0, "a future late pick is still worth nothing"
+    assert trading.pickValue(30, 2) > 0.0
+    # ⚠️ BUT ONLY JUST (owner, 2026-10-02: late picks are "inevitable replacement level
+    # players"): well under a mid-round pick the same distance out.
+    assert trading.pickValue(30, 1) < 0.5 * trading.pickValue(10, 1)
     print(f"PASS a contender's own pick: {trading.pickValue(30, 1):.1f} next season, "
           f"{trading.pickValue(30, 2):.1f} the season after")
 

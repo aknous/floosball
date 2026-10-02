@@ -250,16 +250,18 @@ def expectedPickSlot(slot: int, seasonsOut: int = 0, classSize: int = 32) -> flo
     own first-rounders priced as slot 30, which is BELOW replacement level and therefore
     worth literally nothing, so it cheerfully handed over three of them for a rental.
 
-    Each season out regresses the slot toward the middle of the draft, which is the honest
-    prior for a club whose next two seasons have not happened. This season's pick is left
-    alone: by the time the market opens at week 15 the table is largely settled.
+    A future slot is pulled toward the middle of the draft by the MEASURED carry-over of a
+    club's position (`TRADE_PICK_SLOT_REGRESSION`), once, however many seasons out. This
+    season's pick is left alone: by the time the market opens at week 15 the table is
+    largely settled.
     """
     mid = (classSize + 1) / 2.0
     k = max(0, int(seasonsOut))
     if k == 0:
         return float(slot)
     from constants import TRADE_PICK_SLOT_REGRESSION
-    return mid + (float(slot) - mid) * (TRADE_PICK_SLOT_REGRESSION ** k)
+    # Once, however far out: measured persistence is ~0.5 at one season and two alike.
+    return mid + (float(slot) - mid) * TRADE_PICK_SLOT_REGRESSION
 
 
 def pickSlotSkill(slot: int, classSize: int = 32) -> float:

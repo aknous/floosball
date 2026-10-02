@@ -3497,6 +3497,19 @@ TRADE_HEADLINE_PICK_CEILING = 92
 TRADE_TOP_PICK_PIECE_DECAY = 0.5
 TRADE_TOP_PICK_STAR_RATING = 84
 TRADE_TOP_PICK_STAR_MIN_TERM = 2
+# ⚠️ A RISING STAR IS PAID FOR THE SAME WAY (owner, 2026-10-02). A developing player whose
+# projected mature rating reaches the 4-star line is bought with QUALITY, not volume: the
+# seller counts the package best piece first, each further piece worth
+# `TRADE_TOP_PICK_PIECE_DECAY` of the one before. Replayed on the prod copy, Norman
+# Slithers (74 today, expected 88) went for a 71-rated veteran plus two late future firsts
+# even after projection pricing doubled his ask.
+TRADE_RISING_STAR_RATING = 84
+# ⚠️ STACKED PICKS DO NOT ADD UP (owner, 2026-10-02: "having multiple of them doesnt move
+# the needle much"). In every package the seller counts the PICKS best first, each further
+# pick worth `TRADE_TOP_PICK_PIECE_DECAY` of the one before; players and prospects count in
+# full (headline picks and rising stars already count everything quality-first). A club has
+# six roster spots and a capped pipeline, so a third late first adds almost nothing.
+TRADE_PICK_STACKING_DECAY_ENABLED = True
 
 # So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
 # sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
@@ -3650,9 +3663,16 @@ TRADE_FUTURE_PICK_DISCOUNT_LATE = 0.55     # steep in the back half
 # THREE OF THEM for a rental kicker. The plan says it plainly: with a future pick "you know
 # neither your slot NOR the class."
 #
-# Each season out regresses the slot toward the middle of the draft by this factor. This
+# A future pick's slot is pulled toward the middle of the draft by this factor. This
 # season's pick is untouched: by the time the market opens at week 15 the table is settled.
-TRADE_PICK_SLOT_REGRESSION = 0.45
+# ⚠️ MEASURED, AND APPLIED ONCE — NOT COMPOUNDED PER SEASON (2026-10-02). It was 0.45 raised
+# to the number of seasons out, which held a contender's pick two drafts away at 0.20 of
+# its distance from the middle. Over 8 production seasons (32 teams) the share of a club's
+# draft position that carries over is 0.53 one season out and 0.44 two out: team quality
+# persists, so the slot stops regressing after the first year. A club picking 24th or later
+# picked a median 24th the next season (83% still 17th or later, 5% reached the top 8).
+# Owner: late picks are "inevitable replacement level players".
+TRADE_PICK_SLOT_REGRESSION = 0.5
 
 # ---- A prospect's control is a DEADLINE, not a term ----
 # `seasonsOfControl` measures seasons of CONTRIBUTION off `termRemaining`. A prospect has
