@@ -1712,6 +1712,56 @@ class PlayerManager:
         except Exception as e:
             logger.error(f"Failed to restore player season stats: {e}")
 
+    def restoreArchivedSeasonStats(self, seasonNumber: int) -> None:
+        """Rebuild this season's `seasonStatsArchive` entry from `PlayerSeasonStats` after an
+        offseason restart. Add-only: a player already holding an entry for the season is
+        left alone, and `seasonStatsDict` (blank since the season-end reset) is untouched.
+
+        ⚠️ The season-end step archives each player's season and resets the live dict, and
+        that archive lived in memory only. A restart in the offseason emptied it, so every
+        surface reading a finished season through `api.main._seasonStatsFor` (the stats
+        leaders, the player list) fell back to the blank dict and showed zeros (prod,
+        season 8). The rows are saved immediately before the reset, so they are complete.
+        """
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import PlayerSeasonStats
+            from floosball_player import mergeStatDefaults
+            rows = {r.player_id: r for r in self.db_session.query(PlayerSeasonStats)
+                    .filter_by(season=seasonNumber).all()}
+            restored = 0
+            for player in self.activePlayers:
+                row = rows.get(player.id)
+                if row is None:
+                    continue
+                archive = getattr(player, 'seasonStatsArchive', None)
+                if archive is None:
+                    archive = player.seasonStatsArchive = []
+                if any(isinstance(a, dict) and a.get('season') == seasonNumber for a in archive):
+                    continue
+                entry = {
+                    'gamesPlayed': row.games_played or 0,
+                    'fantasyPoints': row.fantasy_points or 0,
+                    'passing': row.passing_stats or {},
+                    'rushing': row.rushing_stats or {},
+                    'receiving': row.receiving_stats or {},
+                    'kicking': row.kicking_stats or {},
+                    'defense': row.defense_stats or {},
+                    'returning': row.returning_stats or {},
+                }
+                mergeStatDefaults(entry)
+                team = getattr(player, 'team', None)
+                entry['season'] = seasonNumber
+                entry['gp'] = row.games_played or 0
+                entry['team'] = team.name if hasattr(team, 'name') else (team if isinstance(team, str) else 'FA')
+                entry['color'] = getattr(team, 'color', '#94a3b8') if hasattr(team, 'name') else '#94a3b8'
+                archive.append(entry)
+                restored += 1
+            logger.info(f"Restored season {seasonNumber} archived stats for {restored} players")
+        except Exception as e:
+            logger.error(f"Failed to restore archived season stats: {e}")
+
     def savePlayerData(self) -> None:
         """Save player data to database or JSON files"""
         # Use database if enabled
