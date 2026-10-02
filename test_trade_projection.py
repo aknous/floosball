@@ -1,11 +1,12 @@
-"""The trade market prices a player's future at his projection, not today's rating, and a
-club's projected stars are part of its core.
+"""The trade market prices a player's future at his projection, not today's rating — a
+developing player at what he becomes.
 
 Reported on production (owner, 2026-10-02): Broads sent Norman Slithers (two seasons in,
 rated 74, projected expected 88 / ceiling 90) to Waffles for Martha Fright (nine seasons
 in, 81 -> 74, one season left) plus a mid first. The market priced every season at
-today's rating, so the two were the same asset to the seller and the pick tipped it; and
-the core only counted CURRENT stars, so Norman was on the block at all.
+today's rating, so the two were the same asset to the seller and the pick tipped it.
+Owner: such players stay tradeable, "but the GM should value them at their possible future
+skill, so the return would just need to be more valuable".
 
 Run: .venv/bin/python -m pytest -q test_trade_projection.py
 """
@@ -49,7 +50,7 @@ def test_a_fading_veterans_future_below_replacement_is_worth_nothing():
 # ------------------------------------------------------------- the market
 
 class ProjectingBrain(StubBrain):
-    """Forward ratings, arcs and ceilings by name; perfect scouting."""
+    """Forward ratings, arcs and ceilings by name; perfect scouting, full development."""
 
     def __init__(self, forward=None, arcs=None, ceilings=None):
         self.forward = forward or {}
@@ -68,6 +69,15 @@ class ProjectingBrain(StubBrain):
     def _ceilingRating(self, player, team=None):
         return self.ceilings.get(player.name, player.playerRating)
 
+    def _attrLean(self, coach, attr, bonus=0.0):
+        return 1.0
+
+
+def _player(pid, rating, name, term, expected=None):
+    p = FakePlayer(pid, rating, Position.WR, termRemaining=term, name=name)
+    p.computeExpectedRating = lambda: expected if expected is not None else rating
+    return p
+
 
 def _market(brain, roster):
     teams = [FakeTeam(1, 'Sellers', wins=19, losses=9), FakeTeam(2, 'Other', wins=14, losses=14)]
@@ -77,37 +87,48 @@ def _market(brain, roster):
     return TradeMarket(FakePlayerManager([]), FakeTeamManager(teams), brain, SEASON, None), teams
 
 
+def test_a_developing_player_is_priced_at_what_he_becomes():
+    """Norman's shape: 74 today, expected 88, ceiling 90. His later seasons are read at
+    his mature skill (expected + the credited share of the ceiling gap), not at today's
+    74 and not at next season's small step."""
+    norman = _player(1, 74, 'Norman', 3, expected=88)
+    brain = ProjectingBrain(forward={'Norman': 79}, arcs={'Norman': 'developing'},
+                            ceilings={'Norman': 90})
+    m, teams = _market(brain, [norman])
+    from constants import FO_CEILING_CREDIT
+    assert abs(m._futureRatingFor(teams[0], norman) - (88 + 2 * FO_CEILING_CREDIT)) < 1e-6
+
+
 def test_the_seller_prices_a_rising_player_above_a_fading_one():
     """Norman's shape against Martha's: same rating today, three seasons of control."""
-    rising = FakePlayer(1, 74, Position.WR, termRemaining=3, name='Rising')
-    fading = FakePlayer(2, 74, Position.WR, termRemaining=3, name='Fading')
-    brain = ProjectingBrain(forward={'Rising': 80, 'Fading': 65},
-                            arcs={'Rising': 'developing', 'Fading': 'regressing'})
+    rising = _player(1, 74, 'Rising', 3, expected=88)
+    fading = _player(2, 74, 'Fading', 3)
+    brain = ProjectingBrain(forward={'Fading': 65},
+                            arcs={'Rising': 'developing', 'Fading': 'regressing'},
+                            ceilings={'Rising': 90})
     m, teams = _market(brain, [rising, fading])
     askRising, _ = m._priceListing(teams[0], rising)
     askFading, _ = m._priceListing(teams[0], fading)
-    assert askRising > askFading, (askRising, askFading)
+    assert askRising > 2 * askFading, (askRising, askFading)
 
 
-def test_a_projected_star_is_core_and_never_listed():
-    """A developing player whose ceiling is at the 4-star line is part of the core."""
-    norman = FakePlayer(1, 74, Position.WR, termRemaining=1, name='Norman')
-    plain = FakePlayer(2, 74, Position.WR, termRemaining=1, name='Plain')
-    brain = ProjectingBrain(arcs={'Norman': 'developing', 'Plain': 'developing'},
-                            ceilings={'Norman': 90, 'Plain': 79})
-    m, teams = _market(brain, [norman, plain])
-    core = m._coreOf(teams[0])
-    assert id(norman) in core, "a projected 4-star was not protected"
-    assert id(plain) not in core, "a modest ceiling was protected"
+def test_a_projected_star_is_still_tradeable():
+    """Not untouchable: priced higher, still on the market."""
+    norman = _player(1, 74, 'Norman', 2, expected=88)
+    brain = ProjectingBrain(arcs={'Norman': 'developing'}, ceilings={'Norman': 90})
+    m, teams = _market(brain, [norman])
+    assert id(norman) not in m._coreOf(teams[0])
 
 
-def test_projected_stars_are_capped():
-    from constants import TRADE_CORE_SIZE
-    kids = [FakePlayer(i, 70, Position.WR, termRemaining=2, name=f'Kid{i}') for i in range(4)]
-    brain = ProjectingBrain(arcs={k.name: 'developing' for k in kids},
-                            ceilings={k.name: 85 + i for i, k in enumerate(kids)})
-    m, teams = _market(brain, kids)
-    assert len(m._projectedStarsOf(teams[0])) == int(TRADE_CORE_SIZE)
+def test_a_poor_scout_sees_less_of_the_future():
+    norman = _player(1, 74, 'Norman', 3, expected=88)
+
+    class Blind(ProjectingBrain):
+        def scoutingVision(self, coach, team=None):
+            return 0.0
+
+    m, teams = _market(Blind(arcs={'Norman': 'developing'}, ceilings={'Norman': 90}), [norman])
+    assert abs(m._futureRatingFor(teams[0], norman) - 74) < 1e-6
 
 
 if __name__ == '__main__':

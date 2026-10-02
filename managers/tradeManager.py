@@ -990,47 +990,41 @@ class TradeMarket:
         return base + self.needTilt(team) * (dfn - off) / 2.0
 
     def _futureRatingFor(self, team, player) -> float:
-        """THIS club's read of the player's rating in the seasons after this one: its
-        `ratingFor` today, moved toward `brain.trueForwardRating` by its scouting vision —
-        the same blend `perceivedValue` uses, without the per-player scout error. A
-        developing player rises, one past his longevity falls, a prime one holds.
+        """THIS club's read of the player's rating in the seasons after this one, blended
+        from today's `ratingFor` by its scouting vision (the blend `perceivedValue` uses,
+        without the per-player scout error).
+
+        ⚠️ A DEVELOPING PLAYER IS PRICED AT WHAT HE BECOMES, NOT AT NEXT SEASON'S STEP
+        (owner, 2026-10-02: "these players can still be offered in trades, but the GM should
+        value them at their possible future skill, so the return would just need to be
+        more valuable"). His mature skill is `computeExpectedRating` (the overall at true
+        skill, his natural development — the "expected" on his page) plus the share of the
+        gap to his ceiling this GM credits itself with (`FO_CEILING_CREDIT` x its
+        player-development lean, the same credit `trueForwardRating` uses). Anyone else
+        uses `trueForwardRating`: a prime player holds, one past his longevity falls.
 
         ⚠️ THE MARKET PRICED EVERY SEASON AT TODAY'S RATING, and only the BUYER looked
-        forward (through `perceivedValue`). So a seller saw a rising player at today's
-        number while buyers saw more, which is exactly the gap that let Broads sell Norman
-        Slithers (74, projected 88) for a fading 74 and a mid first."""
+        forward (through `perceivedValue`), so a seller saw a rising player at today's
+        number while buyers saw more — the gap that let Broads sell Norman Slithers (74,
+        expected 88) for a fading 74 and a mid first."""
+        from constants import FO_CEILING_CREDIT
+        from managers.frontOfficeBrain import ARC_DEVELOPING
         present = self.ratingFor(team, player)
         coach = getattr(team, 'coach', None)
         try:
             current = float(getattr(player, 'playerRating', 0) or 0)
-            forward = float(self.brain.trueForwardRating(player, coach, team))
             vision = float(self.brain.scoutingVision(coach, team))
+            if self.brain.classifyArc(player) == ARC_DEVELOPING:
+                expected = float(player.computeExpectedRating())
+                ceiling = float(self.brain._ceilingRating(player, team))
+                devLean = float(self.brain._attrLean(coach, 'playerDevelopment'))
+                forward = max(current, expected + max(0.0, ceiling - expected)
+                              * FO_CEILING_CREDIT * devLean)
+            else:
+                forward = float(self.brain.trueForwardRating(player, coach, team))
         except Exception:
             return present
         return present + (forward - current) * vision
-
-    def _projectedStarsOf(self, team) -> set:
-        """Young players this club sees becoming stars: on the developing arc with a
-        ceiling at or above `TRADE_CORE_MIN_RATING` (the 4-star line), up to
-        `TRADE_CORE_SIZE` of them, highest ceiling first. Part of the core, so never
-        listed (owner, 2026-10-02: Broads listed Norman Slithers, two seasons in and
-        projected to 88, because the core only counted CURRENT stars)."""
-        from constants import TRADE_CORE_SIZE, TRADE_CORE_MIN_RATING
-        from managers.frontOfficeBrain import ARC_DEVELOPING
-        found = []
-        for p in (getattr(team, 'rosterDict', None) or {}).values():
-            if p is None:
-                continue
-            try:
-                if self.brain.classifyArc(p) != ARC_DEVELOPING:
-                    continue
-                ceiling = float(self.brain._ceilingRating(p, team))
-            except Exception:
-                continue
-            if ceiling >= float(TRADE_CORE_MIN_RATING):
-                found.append((ceiling, p))
-        found.sort(key=lambda cp: -cp[0])
-        return {id(p) for _, p in found[:int(TRADE_CORE_SIZE)]}
 
     def _coreOf(self, team) -> set:
         """The players this club is building around. Not trade assets.
@@ -1084,9 +1078,6 @@ class TradeMarket:
                 except Exception:
                     pass
             core.add(id(p))
-        # ⚠️ AND THE STARS IT IS DEVELOPING. A core of current stars alone left a rising
-        # young player on the block because he was not a star YET.
-        core |= self._projectedStarsOf(team)
         self._coreCache[id(team)] = core
         return core
 
