@@ -50,12 +50,44 @@ def test_the_finished_season_is_archived_again_and_the_live_dict_left_blank():
     assert other.seasonStatsArchive == [], "a player with no row got an entry"
 
 
+def test_the_mvp_and_all_pro_team_come_back_from_the_season_row():
+    """Prod, season 8: after the restart the awards page had the votes and tally but no
+    winner, so it never showed the result; /api/season had no MVP or All-Pro team."""
+    import json
+    import managers.seasonManager as SM
+    ballot = [{'id': 110, 'name': 'Jomes Roberston', 'mvpScore': 2.18},
+              {'id': 86, 'name': 'Frig Lagotis', 'mvpScore': 1.66}]
+    row = types.SimpleNamespace(mvp_player_id=86, mvp_ballot=json.dumps(ballot),
+                                all_pro_team=json.dumps([{'id': 110, 'side': 'offense',
+                                                          'position': 'RB', 'value': 2.18}]))
+    query = types.SimpleNamespace(filter_by=lambda **k: types.SimpleNamespace(first=lambda: row))
+    team = types.SimpleNamespace(name='Residents', abbr='LVR', color='#FFD700', id=17)
+    rb = types.SimpleNamespace(id=110, name='Jomes Roberston', team=team, playerRating=90,
+                               position=types.SimpleNamespace(name='RB'))
+    sm = SM.SeasonManager.__new__(SM.SeasonManager)
+    sm.db_session = types.SimpleNamespace(query=lambda model: query)
+    sm.playerManager = types.SimpleNamespace(activeQbs=[], activeRbs=[rb], activeWrs=[],
+                                             activeTes=[], activeKs=[])
+    sm.currentSeason = SM.Season(8)
+    saved = (SM.DB_IMPORTS_AVAILABLE, SM.USE_DATABASE)
+    SM.DB_IMPORTS_AVAILABLE, SM.USE_DATABASE = True, True
+    try:
+        sm._restoreSeasonAwards(8)
+    finally:
+        SM.DB_IMPORTS_AVAILABLE, SM.USE_DATABASE = saved
+    assert sm.currentSeason.mvp['id'] == 86 and sm.currentSeason.mvp['name'] == 'Frig Lagotis'
+    assert [a['id'] for a in sm.currentSeason.allPro] == [110]
+    assert sm.currentSeason.allPro[0]['teamAbbr'] == 'LVR'
+    assert sm.currentSeason.allProPlayerIds == {110}
+
+
 def test_the_offseason_resume_calls_both_restores():
     src = open(os.path.join(os.path.dirname(__file__), 'managers', 'seasonManager.py')).read()
     body = src[src.index('async def restoreForOffseasonResume'):]
     body = body[:body.index('\n    def ')]
     assert 'loadSeasonTeamStats(seasonNumber)' in body
     assert 'restoreArchivedSeasonStats(seasonNumber)' in body
+    assert '_restoreSeasonAwards(seasonNumber)' in body
 
 
 if __name__ == '__main__':

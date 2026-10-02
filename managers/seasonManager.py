@@ -6483,6 +6483,9 @@ class SeasonManager:
                 teamManager.loadSeasonTeamStats(seasonNumber)
         except Exception as e:
             logger.warning(f"restoreForOffseasonResume: team season stats reload failed: {e}")
+        # The MVP and All-Pro team, read from the in-memory season by the awards page and
+        # /api/season (prod season 8: the MVP result vanished after a restart).
+        self._restoreSeasonAwards(seasonNumber)
         # And each player's finished season, which the season-end step archived in memory
         # only (stats leaders and the player list read it; prod season 8 showed zeros).
         try:
@@ -13288,6 +13291,72 @@ class SeasonManager:
                 await broadcaster.broadcast_season_event(
                     SeasonEvent.allProAnnouncement(allProList, seasonNum)
                 )
+
+    def _restoreSeasonAwards(self, seasonNumber: int) -> None:
+        """Restore this season's MVP and All-Pro team onto `currentSeason` from the season
+        row after an offseason restart.
+
+        ⚠️ Both were set in memory at season end and read from there: `/api/awards/mvp/
+        ballot` takes its `winner` from `currentSeason.mvp` (null keeps the Awards page on
+        the voting view with no result) and `/api/season` serves `mvp` / `allPro`. A
+        restart in the offseason dropped them while the votes, the frozen ballot and
+        `seasons.mvp_player_id` were all safe (prod, season 8: 10 votes, Frig Lagotis 5).
+        The winner is taken from the frozen ballot so it is the entry fans voted on.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session and self.currentSeason):
+            return
+        try:
+            import json
+            from database.models import Season as DBSeason
+            row = self.db_session.query(DBSeason).filter_by(season_number=seasonNumber).first()
+            if not row:
+                return
+
+            def _playerEntry(pid):
+                player = self._defenderById(pid) if self.playerManager else None
+                if player is None:
+                    return None
+                team = getattr(player, 'team', None)
+                hasTeam = hasattr(team, 'name')
+                from api_response_builders import PlayerResponseBuilder
+                return {
+                    'id': pid, 'name': player.name,
+                    'position': getattr(getattr(player, 'position', None), 'name', None),
+                    'team': team.name if hasTeam else None,
+                    'teamAbbr': getattr(team, 'abbr', None) if hasTeam else None,
+                    'teamColor': getattr(team, 'color', None) if hasTeam else None,
+                    'teamId': getattr(team, 'id', None) if hasTeam else None,
+                    'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
+                }
+
+            ballot = []
+            if getattr(row, 'mvp_ballot', None):
+                try:
+                    ballot = json.loads(row.mvp_ballot) or []
+                except Exception:
+                    ballot = []
+            if ballot and not getattr(self.currentSeason, 'mvpBallot', None):
+                self.currentSeason.mvpBallot = ballot
+            if row.mvp_player_id and not getattr(self.currentSeason, 'mvp', None):
+                entry = next((c for c in ballot if c.get('id') == row.mvp_player_id), None)
+                self.currentSeason.mvp = dict(entry) if entry else _playerEntry(row.mvp_player_id)
+
+            if getattr(row, 'all_pro_team', None) and not getattr(self.currentSeason, 'allPro', None):
+                try:
+                    team = json.loads(row.all_pro_team) or []
+                except Exception:
+                    team = []
+                allPro = []
+                for e in team:
+                    base = _playerEntry(e.get('id')) or {'id': e.get('id')}
+                    allPro.append({**base, 'position': e.get('position') or base.get('position'),
+                                   'side': e.get('side', 'offense'), 'value': e.get('value')})
+                if allPro:
+                    self.currentSeason.allPro = allPro
+                    self.currentSeason.allProTeam = team
+                    self.currentSeason.allProPlayerIds = {e['id'] for e in allPro}
+        except Exception as e:
+            logger.warning(f"Could not restore season awards: {e}")
 
     def _defenderById(self, playerId: int):
         """Resolve an active player object by id across every roster position
