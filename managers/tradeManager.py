@@ -483,6 +483,33 @@ class TradeMarket:
         self._needsCache[id(team)] = needs
         return needs
 
+    def _pipelineAt(self, team, posValue):
+        """(prospect, believed rating) for this club's best prospect at a position, or None.
+
+        ⚠️ A CLUB'S OWN PROSPECT IS ITS PLAN AT THAT POSITION (owner, 2026-10-02: "needs
+        should consider current prospects"). The market measured holes and priced upgrades
+        off the rostered starter alone, so a club with a weak starter and a 90-rated
+        prospect about to be promoted read the position as a hole and would trade for a
+        player who blocks him. Rated on the club's read of what he becomes
+        (`_futureRatingFor`), the same read the seller side prices a developing player on.
+
+        ⚠️ OFFSEASON ONLY. Promotions happen at the FA draft kickoff, so that is when a
+        prospect is a real alternative. In-season the starter plays the rest of the year
+        whatever the pipeline holds, and a contender's need for this season is real.
+        """
+        if self.week is not None:
+            return None
+        best, bestRead = None, 0.0
+        for p in (getattr(team, 'prospects', None) or []):
+            if p is None or not getattr(p, 'is_prospect', True):
+                continue
+            if getattr(getattr(p, 'position', None), 'value', None) != posValue:
+                continue
+            read = float(self._futureRatingFor(team, p))
+            if best is None or read > bestRead:
+                best, bestRead = p, read
+        return (best, bestRead) if best is not None else None
+
     def _positionalGaps(self, team, deficitOnly: bool = False) -> list:
         """Where this club falls furthest behind the LEAGUE, worst first, as (slot, player).
 
@@ -499,11 +526,23 @@ class TradeMarket:
         kicker without the weight deciding the ranking on its own.
         """
         out = []
+        # The club's own prospect stands in for ONE slot at his position (the weaker one
+        # where there are two), whichever of him and the starter it rates higher.
+        reads = {}
+        for slot, player in (getattr(team, 'rosterDict', None) or {}).items():
+            if player is not None:
+                reads[slot] = self.ratingFor(team, player)
+        for posValue, slots in POSITION_SLOTS.items():
+            held = [sl for sl in slots if sl in reads]
+            pipe = self._pipelineAt(team, posValue) if held else None
+            if pipe:
+                weakest = min(held, key=lambda sl: reads[sl])
+                reads[weakest] = max(reads[weakest], pipe[1])
         for slot, player in (getattr(team, 'rosterDict', None) or {}).items():
             if player is None:
                 continue
             posValue = getattr(getattr(player, 'position', None), 'value', None)
-            deficit = self._leagueMeanAt(posValue) - self.ratingFor(team, player)
+            deficit = self._leagueMeanAt(posValue) - reads[slot]
             # ⚠️ A POSITION THE CLUB IS GOOD AT IS NOT A HOLE, AND WITHOUT THIS EVERY CLUB
             # HAS THREE. The sort ranks by deficit but nothing required the deficit to be
             # POSITIVE, so a club above the league mean everywhere still had a "weakest"
@@ -583,6 +622,10 @@ class TradeMarket:
                 continue
             posValue = getattr(getattr(incumbent, 'position', None), 'value', None)
             mine = self.ratingFor(buyer, incumbent)
+            # A target has to beat the club's own plan there, prospect included.
+            pipe = self._pipelineAt(buyer, posValue)
+            if pipe:
+                mine = max(mine, pipe[1])
             best, bestSeen = None, 0.0
             for holder in (getattr(self.teamManager, 'teams', None) or []):
                 if getattr(holder, 'id', None) == getattr(buyer, 'id', None):
@@ -1743,8 +1786,9 @@ class TradeMarket:
         # roster sanity check disagree about who is leaving — and they would drift silently,
         # since nothing compares them.
         weakest = self._weakestAt(buyer, incoming)
+        pipelineValue = self._pipelineValue(buyer, incoming)
         if weakest is None:
-            return 0.0, 0
+            return pipelineValue, 0
         weakestRating = self.ratingFor(buyer, weakest)
         value = trading.playerValue(weakestRating,
                                     getattr(weakest, 'termRemaining', 0),
@@ -1752,7 +1796,30 @@ class TradeMarket:
                                     self._positionWeight(weakest),
                                     futureRating=self._futureRatingFor(buyer, weakest))
 
-        return value, cutFeeFor(weakest)
+        # ⚠️ THE ALTERNATIVE IS THE BETTER OF THE TWO. Without the trade the club would
+        # promote its prospect into this slot if he beats the man it would cut, so the
+        # incoming player is worth only what he adds over that plan. The fee stays the
+        # incumbent's: making room for the prospect would cut him too.
+        return max(value, pipelineValue), cutFeeFor(weakest)
+
+    def _pipelineValue(self, buyer, incoming) -> float:
+        """What the club's own prospect at the incoming player's position is worth in that
+        slot, on the same scale `_displacedBy` prices the cut man. 0 when it has none (and
+        always in-season, see `_pipelineAt`)."""
+        posValue = getattr(getattr(incoming, 'position', None), 'value', None)
+        pipe = self._pipelineAt(buyer, posValue)
+        if not pipe:
+            return 0.0
+        prospect, read = pipe
+        try:
+            term = int(self.playerManager.promotionTerm(prospect))
+        except Exception:
+            from constants import PROSPECT_DEVELOPMENT_WINDOW
+            term = max(1, PROSPECT_DEVELOPMENT_WINDOW
+                       - int(getattr(prospect, 'prospect_seasons', 0) or 0))
+        return trading.playerValue(self.ratingFor(buyer, prospect), term, self.week,
+                                   self.nowWeight(buyer), self._positionWeight(prospect),
+                                   futureRating=read)
 
     @staticmethod
     def _basePositionAppetite(player) -> float:
