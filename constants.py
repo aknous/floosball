@@ -2569,7 +2569,15 @@ BLUE_CHIP_NEED_WEIGHTS = {'QB': 1.0, 'RB': 0.9, 'WR': 0.9, 'TE': 0.5, 'K': 0.0}
 # Modelled at 8 a season: pool settles ~31 in a league with no retirements yet, ~18
 # through the ramp, and is fully absorbed once retirements reach ~8.6 a season. Above
 # ~20 it bloats into the holding pen this is meant to avoid.
-FA_INJECTION_ENABLED = True
+# ⚠️ OFF SINCE THE ROOKIE DRAFT CAME BACK (owner, 2026-10-02: new free agents "should only
+# be generated if there is still a lack of supply at a position after the rookie draft").
+# The scheduled class was built on 2026-08-31 as the ONLY way new players could enter,
+# while the draft was excised; the draft returned on 2026-09-15 and this kept running
+# beside it, adding 8 players a season (7-8 of each batch ending up rostered) on top of a
+# 32-player draft class. The blue-chip guarantee rides on this class and is dormant with
+# it. New players now come from the draft, and the supply floor runs once, AFTER the
+# draft, counting the drafted class (`ensurePositionSupply(countProspects=True)`).
+FA_INJECTION_ENABLED = False
 # ⚠️ 12 WAS TRIED AND IS WORSE. The theory was that a deeper pool would put a SECOND
 # qualifying free agent at a position, which is what `upgradeConfidence` needs before
 # anyone past pick 2 can act. It did raise cutting (5.2 -> 7.8 a season) but bought

@@ -106,7 +106,7 @@ def test_washout_release_runs_before_the_fa_draft():
     src = _seasonManagerSource()
     release = src.index('self.playerManager._advanceProspectWindow()')
     faDraft = src.index('await self._processFreeAgency()')
-    supply = src.index("_ensurePositionSupply(reason='pre-FA-draft guarantee')")
+    supply = src.index("_ensurePositionSupply(reason='pre-FA-draft guarantee'")
     predraft = src.index('await self._runPreDraftPass(faOrderForPredraft, gmResults)')
 
     assert release < faDraft, "washout release still runs after the FA draft"

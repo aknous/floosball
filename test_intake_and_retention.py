@@ -194,6 +194,13 @@ class FreeAgentInjectionTests(unittest.TestCase):
 
     def setUp(self):
         self.pm = bareManager()
+        # ⚠️ The scheduled intake is OFF in production since the rookie draft returned
+        # (FA_INJECTION_ENABLED); these tests exercise the machinery itself, so enable it.
+        self._injectionWas = constants.FA_INJECTION_ENABLED
+        constants.FA_INJECTION_ENABLED = True
+
+    def tearDown(self):
+        constants.FA_INJECTION_ENABLED = self._injectionWas
 
     def testItAddsAClass(self):
         before = len(self.pm.freeAgents)
@@ -253,6 +260,13 @@ class BlueChipTargetingTests(unittest.TestCase):
 
     def setUp(self):
         self.pm = bareManager()
+        # ⚠️ The scheduled intake is OFF in production since the rookie draft returned
+        # (FA_INJECTION_ENABLED); these tests exercise the machinery itself, so enable it.
+        self._injectionWas = constants.FA_INJECTION_ENABLED
+        constants.FA_INJECTION_ENABLED = True
+
+    def tearDown(self):
+        constants.FA_INJECTION_ENABLED = self._injectionWas
 
     def testTheClassContainsTheTargetPosition(self):
         """The target is worthless as a preference: with five positions a random draw
@@ -296,6 +310,47 @@ class BlueChipTargetingTests(unittest.TestCase):
         for pos in ('QB', 'RB', 'WR'):
             self.assertGreater(w[pos], w['TE'],
                                f"{pos} should be weighted above TE")
+
+
+class SupplyAfterTheDraftTests(unittest.TestCase):
+    """Owner, 2026-10-02: new free agents "should only be generated if there is still a
+    lack of supply at a position after the rookie draft". The check after the draft counts
+    the drafted class; without that it generated players for holes the class fills."""
+
+    def setUp(self):
+        self.pm = bareManager()
+        # One club, no cushion: each position needs exactly its own slots.
+        for pos in (FloosPlayer.Position.QB, FloosPlayer.Position.RB,
+                    FloosPlayer.Position.WR, FloosPlayer.Position.WR,
+                    FloosPlayer.Position.TE, FloosPlayer.Position.K):
+            p = self.pm.createPlayer(pos, 78, 78)
+            p.willRetire = False
+            p.is_prospect = False
+            self.pm.activePlayers.append(p)
+        # The QB retires; a drafted QB prospect is in the pipeline.
+        self.qb = next(p for p in self.pm.activePlayers if p.position == FloosPlayer.Position.QB)
+        self.qb.willRetire = True
+        prospect = self.pm.createPlayer(FloosPlayer.Position.QB, 78, 78)
+        prospect.is_prospect = True
+        prospect.willRetire = False
+        self.pm.activePlayers.append(prospect)
+
+    def testTheDraftedClassCountsAfterTheDraft(self):
+        self.assertEqual({}, self.pm.ensurePositionSupply(1, buffer=0, countProspects=True))
+
+    def testWithoutTheClassAPlayerIsGenerated(self):
+        made = self.pm.ensurePositionSupply(1, buffer=0, countProspects=False)
+        self.assertEqual(1, sum(made.values()))
+
+    def testAStillShortPositionIsTopped(self):
+        """The drafted QB does not cover a missing kicker."""
+        k = next(p for p in self.pm.activePlayers if p.position == FloosPlayer.Position.K)
+        k.willRetire = True
+        made = self.pm.ensurePositionSupply(1, buffer=0, countProspects=True)
+        self.assertEqual(1, sum(made.values()))
+
+    def testTheIntakeIsOffInProduction(self):
+        self.assertFalse(constants.FA_INJECTION_ENABLED)
 
 
 class IncumbentKnowledgeTests(unittest.TestCase):

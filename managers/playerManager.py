@@ -4015,7 +4015,8 @@ class PlayerManager:
         )
         return newPlayer
 
-    def ensurePositionSupply(self, numTeams: int, buffer: int = None) -> dict:
+    def ensurePositionSupply(self, numTeams: int, buffer: int = None,
+                             countProspects: bool = False) -> dict:
         """Guarantee enough living players AT EACH POSITION to fill every roster
         slot, generating only the per-position deficit into the free-agent pool.
 
@@ -4055,11 +4056,18 @@ class PlayerManager:
         #    generate enough genuine free agents (over-generating slightly when
         #    prospects do get promoted, which is harmless — the extra FAs just
         #    sit in the pool).
+        # ⚠️ `countProspects` IS FOR THE CHECK AFTER THE ROOKIE DRAFT (owner, 2026-10-02):
+        # generation only covers what the drafted class still leaves short. A prospect
+        # fills only his own club's hole, so a hole elsewhere at that position can still
+        # come up empty; the FA draft's last-resort generation covers exactly that case,
+        # which keeps generation to a genuine shortage either way.
         supply = {pos: 0 for pos in slotsPerPosition}
         for p in self.activePlayers:
             if getattr(p, 'willRetire', False):
                 continue
-            if getattr(p, 'is_prospect', False):
+            if getattr(p, 'is_upcoming_rookie', False):
+                continue
+            if getattr(p, 'is_prospect', False) and not countProspects:
                 continue
             pos = getattr(p, 'position', None)
             if pos in supply:
