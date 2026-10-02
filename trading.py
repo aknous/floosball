@@ -141,7 +141,8 @@ def laterWeight(now: float) -> float:
 # ---------------------------------------------------------------- assets
 
 def playerValue(rating: float, termRemaining: int, week: int = None,
-                weight: float = 1.0, positionWeight: float = 1.0) -> float:
+                weight: float = 1.0, positionWeight: float = 1.0,
+                futureRating: float = None) -> float:
     """Surplus over replacement x seasons of control, each season weighted by WHEN it
     arrives. `weight` is the holder's `nowWeight`.
 
@@ -168,20 +169,41 @@ def playerValue(rating: float, termRemaining: int, week: int = None,
     worth nothing in a trade — not a liability — because the alternative to holding him
     is signing his equal for free.
     """
-    surplus = float(rating or 0.0) - REPLACEMENT_RATING
-    if surplus <= 0:
-        return 0.0
+    return _valueOverBase(rating, futureRating, REPLACEMENT_RATING, termRemaining, week,
+                          weight, positionWeight)
+
+
+def _controlSplit(termRemaining: int, week: int = None) -> tuple:
+    """(present, future) seasons of control. In the offseason the first whole season of the
+    contract IS the season about to be played, so it counts as present; everything after
+    it is future."""
     control = seasonsOfControl(termRemaining, week)
     if control <= 0:
-        return 0.0
-    surplus *= max(0.0, float(positionWeight))
-    now = max(0.0, float(weight))
-    # The part of his control that lands in the season being played right now. In the
-    # offseason the first whole season of the contract IS the season about to be played,
-    # so it counts as present; everything after it is future.
+        return 0.0, 0.0
     present = min(control, seasonRemainingFraction(week) if week is not None else 1.0)
-    future = max(0.0, control - present)
-    return surplus * (present * now + future * laterWeight(now))
+    return present, max(0.0, control - present)
+
+
+def _valueOverBase(rating, futureRating, base, termRemaining, week, weight,
+                   positionWeight) -> float:
+    """Surplus over `base` across his control: this season at `rating`, later seasons at
+    `futureRating`, each weighted by when it arrives.
+
+    ⚠️ THE FUTURE IS THE PROJECTION, NOT TODAY'S NUMBER (owner, 2026-10-02). Pricing every
+    season at today's rating made a rising 74 and a fading 74 the same asset: Broads sent
+    Norman Slithers (two seasons in, 74, projected to 88) to Waffles for Martha Fright
+    (nine seasons in, 81 -> 74) plus a mid first. `futureRating` None reproduces the flat
+    reading exactly, so a caller with no projection is unchanged.
+    """
+    present, future = _controlSplit(termRemaining, week)
+    if present + future <= 0:
+        return 0.0
+    posW = max(0.0, float(positionWeight))
+    now = max(0.0, float(weight))
+    later = float(futureRating if futureRating is not None else rating or 0.0)
+    presentSurplus = max(0.0, float(rating or 0.0) - base) * posW
+    futureSurplus = max(0.0, later - base) * posW
+    return presentSurplus * present * now + futureSurplus * future * laterWeight(now)
 
 
 def averagePositionWeight() -> float:
@@ -228,16 +250,18 @@ def expectedPickSlot(slot: int, seasonsOut: int = 0, classSize: int = 32) -> flo
     own first-rounders priced as slot 30, which is BELOW replacement level and therefore
     worth literally nothing, so it cheerfully handed over three of them for a rental.
 
-    Each season out regresses the slot toward the middle of the draft, which is the honest
-    prior for a club whose next two seasons have not happened. This season's pick is left
-    alone: by the time the market opens at week 15 the table is largely settled.
+    A future slot is pulled toward the middle of the draft by the MEASURED carry-over of a
+    club's position (`TRADE_PICK_SLOT_REGRESSION`), once, however many seasons out. This
+    season's pick is left alone: by the time the market opens at week 15 the table is
+    largely settled.
     """
     mid = (classSize + 1) / 2.0
     k = max(0, int(seasonsOut))
     if k == 0:
         return float(slot)
     from constants import TRADE_PICK_SLOT_REGRESSION
-    return mid + (float(slot) - mid) * (TRADE_PICK_SLOT_REGRESSION ** k)
+    # Once, however far out: measured persistence is ~0.5 at one season and two alike.
+    return mid + (float(slot) - mid) * TRADE_PICK_SLOT_REGRESSION
 
 
 def pickSlotSkill(slot: int, classSize: int = 32) -> float:
@@ -505,7 +529,7 @@ def reserveDecay(week: int = None) -> float:
 
 def askAndFloor(rating: float, backfillRating: float, termRemaining: int,
                 week: int = None, weight: float = 1.0,
-                positionWeight: float = 1.0) -> tuple:
+                positionWeight: float = 1.0, futureRating: float = None) -> tuple:
     """(ask, floor) — and ⚠️ CONFLATING THESE IS THE MISTAKE.
 
         ask     what the seller currently demands. Measured against REPLACEMENT.
@@ -528,13 +552,13 @@ def askAndFloor(rating: float, backfillRating: float, termRemaining: int,
 
     ✅ Both ends decay together, so a late seller is never squeezed into a giveaway.
     """
-    ask = playerValue(rating, termRemaining, week, weight, positionWeight)
-    floor = ask
+    ask = playerValue(rating, termRemaining, week, weight, positionWeight, futureRating)
+    # The walk-away is the same path measured over WHO REPLACES HIM instead of over
+    # replacement — identical to the old `ask * overBackfill / surplus` when there is no
+    # projection, and per-season when there is.
     backfill = max(float(backfillRating or 0.0), REPLACEMENT_RATING)
-    surplus = float(rating or 0.0) - REPLACEMENT_RATING
-    if surplus > 0:
-        overBackfill = float(rating or 0.0) - backfill
-        floor = ask * max(0.0, overBackfill) / surplus
+    floor = _valueOverBase(rating, futureRating, backfill, termRemaining, week, weight,
+                           positionWeight)
     return ask, floor
 
 

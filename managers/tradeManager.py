@@ -639,7 +639,14 @@ class TradeMarket:
         if not (TRADE_PICK_SWAP_ENABLED and TRADE_INQUIRY_ENABLED) or self.week is not None:
             return []
         self.pickFail['called'] = self.pickFail.get('called', 0) + 1
-        mine = self.picksOwnedBy(buyer)
+        # ⚠️ ONLY THE UPCOMING DRAFT (owner, 2026-10-02). You move up in a draft whose
+        # class you can see. Once a future pick's slot was priced on the measured
+        # carry-over (a bad club's pick two drafts out stays high), speculative moves up
+        # in drafts with no class yet doubled offseason trade volume (6-7 -> 11-12 a run,
+        # ~8 of 10 pick swaps for season+1 or +2). Future picks still change hands as
+        # PAYMENT, where stacking keeps them cheap.
+        mine = [p for p in self.picksOwnedBy(buyer)
+                if int(p.get('season', 0)) == int(self.season)]
         if not mine:
             self.pickFail['no_pick_to_swap'] = self.pickFail.get('no_pick_to_swap', 0) + 1
             # ⚠️ A CLUB WITH NO PICK CANNOT MOVE UP — it has nothing to move up FROM, and
@@ -852,7 +859,8 @@ class TradeMarket:
             def worth(team):
                 return trading.playerValue(getattr(p, 'playerRating', 0),
                                            getattr(p, 'termRemaining', 0), self.week,
-                                           self.nowWeight(team), self._positionWeight(p))
+                                           self.nowWeight(team), self._positionWeight(p),
+                                           futureRating=self._futureRatingFor(team, p))
             candidates.append({'kind': 'player', 'id': getattr(p, 'id', None),
                                'name': getattr(p, 'name', '?'), 'detail': {'slot': slot},
                                'value': worth(seller), 'buyerValue': worth(buyer)})
@@ -987,6 +995,66 @@ class TradeMarket:
         if off <= 0 or dfn <= 0:
             return base             # nothing to tilt toward
         return base + self.needTilt(team) * (dfn - off) / 2.0
+
+    def _futureRatingFor(self, team, player) -> float:
+        """THIS club's read of the player's rating in the seasons after this one, blended
+        from today's `ratingFor` by its scouting vision (the blend `perceivedValue` uses,
+        without the per-player scout error).
+
+        ⚠️ A DEVELOPING PLAYER IS PRICED AT WHAT HE BECOMES, NOT AT NEXT SEASON'S STEP
+        (owner, 2026-10-02: "these players can still be offered in trades, but the GM should
+        value them at their possible future skill, so the return would just need to be
+        more valuable"). His mature skill is `computeExpectedRating` (the overall at true
+        skill, his natural development — the "expected" on his page) plus the share of the
+        gap to his ceiling this GM credits itself with (`FO_CEILING_CREDIT` x its
+        player-development lean, the same credit `trueForwardRating` uses). Anyone else
+        uses `trueForwardRating`: a prime player holds, one past his longevity falls.
+
+        ⚠️ THE MARKET PRICED EVERY SEASON AT TODAY'S RATING, and only the BUYER looked
+        forward (through `perceivedValue`), so a seller saw a rising player at today's
+        number while buyers saw more — the gap that let Broads sell Norman Slithers (74,
+        expected 88) for a fading 74 and a mid first."""
+        present = self.ratingFor(team, player)
+        coach = getattr(team, 'coach', None)
+        try:
+            current = float(getattr(player, 'playerRating', 0) or 0)
+            vision = float(self.brain.scoutingVision(coach, team))
+            forward = self._projectedRatingFor(team, player)
+        except Exception:
+            return present
+        return present + (forward - current) * vision
+
+    def _projectedRatingFor(self, team, player) -> float:
+        """Where this club expects the player to end up, BEFORE its scouting blend: a
+        developing player's mature skill (`computeExpectedRating` plus the credited share
+        of the gap to his ceiling), anyone else's `trueForwardRating`."""
+        from constants import FO_CEILING_CREDIT
+        from managers.frontOfficeBrain import ARC_DEVELOPING
+        coach = getattr(team, 'coach', None)
+        current = float(getattr(player, 'playerRating', 0) or 0)
+        if self.brain.classifyArc(player) == ARC_DEVELOPING:
+            expected = float(player.computeExpectedRating())
+            ceiling = float(self.brain._ceilingRating(player, team))
+            devLean = float(self.brain._attrLean(coach, 'playerDevelopment'))
+            return max(current, expected + max(0.0, ceiling - expected)
+                       * FO_CEILING_CREDIT * devLean)
+        return float(self.brain.trueForwardRating(player, coach, team))
+
+    def _isRisingStar(self, team, player) -> bool:
+        """A developing player this club projects to the 4-star line
+        (`TRADE_RISING_STAR_RATING`). Bought with quality, not volume (see the constant).
+
+        ⚠️ The PROJECTION, not the scouting-blended read the price uses: a good scout
+        reads Norman Slithers' later seasons at 83 (vision 0.6 of the way to 88), and a
+        blended test would put a player expected to reach 88 a point under the line."""
+        from constants import TRADE_RISING_STAR_RATING
+        from managers.frontOfficeBrain import ARC_DEVELOPING
+        try:
+            if self.brain.classifyArc(player) != ARC_DEVELOPING:
+                return False
+            return self._projectedRatingFor(team, player) >= float(TRADE_RISING_STAR_RATING)
+        except Exception:
+            return False
 
     def _coreOf(self, team) -> set:
         """The players this club is building around. Not trade assets.
@@ -1342,7 +1410,8 @@ class TradeMarket:
             term,
             self.week,
             self.nowWeight(team),
-            self._positionWeight(player))
+            self._positionWeight(player),
+            futureRating=self._futureRatingFor(team, player))
         return ask, floor
 
     def _bestAvailableAt(self, team, player, week=None):
@@ -1564,7 +1633,10 @@ class TradeMarket:
                                 displaced,
                                 swapPosition=getattr(getattr(player, 'position', None),
                                                      'value', None),
-                                maxPieces=self._maxPiecesFor(listing, player))
+                                maxPieces=self._maxPiecesFor(listing, player),
+                                # A rising star is paid for with quality, not volume
+                                # (`TRADE_RISING_STAR_RATING`), judged by the SELLER.
+                                qualityOverVolume=self._isRisingStar(listing.team, player))
         if not pieces:
             return None
 
@@ -1677,7 +1749,8 @@ class TradeMarket:
         value = trading.playerValue(weakestRating,
                                     getattr(weakest, 'termRemaining', 0),
                                     self.week, self.nowWeight(buyer),
-                                    self._positionWeight(weakest))
+                                    self._positionWeight(weakest),
+                                    futureRating=self._futureRatingFor(buyer, weakest))
 
         return value, cutFeeFor(weakest)
 
@@ -1830,11 +1903,20 @@ class TradeMarket:
         mandatoryIds = {(m['kind'], m['id']) for m in pieces}
         buyerAssets = [a for a in buyerAssets if (a['kind'], a['id']) not in mandatoryIds]
 
+        from constants import TRADE_PICK_STACKING_DECAY_ENABLED
+
         def seen(ps):
-            # What the SELLER counts the payment as. A plain sum, except when it is giving
-            # up a top-3 pick: then quality, not volume (`_qualityValue`).
-            return (self._qualityValue([p['value'] for p in ps]) if qualityOverVolume
-                    else sum(p['value'] for p in ps))
+            # What the SELLER counts the payment as. For a headline pick or a rising star,
+            # quality, not volume (`_qualityValue`) over everything. Otherwise players and
+            # prospects count in full and PICKS do not stack: best pick first, each further
+            # one worth half the one before (`TRADE_PICK_STACKING_DECAY_ENABLED`).
+            if qualityOverVolume:
+                return self._qualityValue([p['value'] for p in ps])
+            if TRADE_PICK_STACKING_DECAY_ENABLED:
+                picks = [p['value'] for p in ps if p['kind'] == 'pick']
+                return (sum(p['value'] for p in ps if p['kind'] != 'pick')
+                        + self._qualityValue(picks))
+            return sum(p['value'] for p in ps)
 
         for asset in buyerAssets:
             if seen(pieces) >= bar:
@@ -1972,7 +2054,8 @@ class TradeMarket:
                     'value': trading.playerValue(
                         getattr(held, 'playerRating', 0),
                         getattr(held, 'termRemaining', 0), self.week, nowW,
-                        self._positionWeight(held)),
+                        self._positionWeight(held),
+                        futureRating=self._futureRatingFor(valuer, held)),
                 })
         return out
 

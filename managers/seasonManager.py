@@ -856,9 +856,9 @@ class SeasonManager:
                         # season with no new players is a worse league, not a broken
                         # one, and the supply floor below still guarantees rosters fill.
                         logger.warning(f"Free agent intake failed: {_inj}", exc_info=True)
-                    # Top up any thin position into the FA pool BEFORE fans ballot
-                    # the FA draft (so they can rank the new players).
-                    self._ensurePositionSupply(reason='week-22 supply check')
+                    # ⚠️ NO SUPPLY TOP-UP HERE (owner, 2026-10-02). It ran before the rookie
+                    # draft, so it generated players for holes the draft class was about to
+                    # fill. The one check now runs after the draft (pre-FA-draft guarantee).
                     # CRITICAL ordering: commit willRetire (set in-memory above) to
                     # the DB BEFORE the fan snapshot. The snapshot is the once-per-
                     # season marker and commits IMMEDIATELY on its own session, but
@@ -7107,11 +7107,10 @@ class SeasonManager:
             logger.info("Step 5.75: Apply prospect promotions")
             await self._applyFanVotedPromotions()
 
-            # STEP 5.9: Final supply guarantee — now that FA retirements, cuts,
-            # expiries and the rookie draft are all resolved, top up any position
-            # still short of filling every roster slot. Catches FA retirements
-            # decided after the week-22 check. Idempotent with that earlier pass.
-            self._ensurePositionSupply(reason='pre-FA-draft guarantee')
+            # STEP 5.9: THE supply guarantee — the only one. FA retirements, cuts,
+            # expiries and the rookie draft are all resolved, so this tops up only a
+            # position still short WITH the drafted class counted (owner, 2026-10-02).
+            self._ensurePositionSupply(reason='pre-FA-draft guarantee', countProspects=True)
 
             # STEP 5.95: Every team builds its own board off the FINAL pool.
             # Two things are settled here and never revisited mid-draft: which
@@ -9142,14 +9141,14 @@ class SeasonManager:
             logger.warning(f"Blue chip targeting failed, falling back to untargeted: {e}")
             return None
 
-    def _ensurePositionSupply(self, reason: str = '') -> dict:
+    def _ensurePositionSupply(self, reason: str = '', countProspects: bool = False) -> dict:
         """Guarantee enough living players at each position to fill all roster
         slots (see playerManager.ensurePositionSupply). No-op unless a position
         is genuinely short. Surfaces a league-news note when it has to generate."""
         teamManager = self.serviceContainer.getService('team_manager')
         numTeams = len(teamManager.teams) if teamManager else 24
         try:
-            generated = self.playerManager.ensurePositionSupply(numTeams)
+            generated = self.playerManager.ensurePositionSupply(numTeams, countProspects=countProspects)
         except Exception as e:
             logger.error(f"ensurePositionSupply failed ({reason}): {e}")
             return {}

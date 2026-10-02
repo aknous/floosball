@@ -137,10 +137,21 @@ def test_a_top_pick_is_not_bought_with_volume():
     """Owner, 2026-10-01: "a 'first' means nothing because there's only one round".
     Three ordinary pieces clear a plain-sum bar of 25; counted best-first they are worth
     17.5, and the same bar refuses them."""
-    ordinary = [{'kind': 'pick', 'id': i, 'name': f'pick {i}', 'value': 10.0} for i in range(4)]
+    ordinary = [{'kind': 'prospect', 'id': i, 'name': f'prospect {i}', 'value': 10.0} for i in range(4)]
     assert _assembleWith(ordinary, 25.0, quality=False), "a plain sum should clear"
     assert _assembleWith(ordinary, 25.0, quality=True) == [], \
         "a pile of ordinary picks bought a top-3 pick"
+
+
+def test_stacked_picks_do_not_add_up():
+    """Owner, 2026-10-02: late picks are "inevitable replacement level players. having
+    multiple of them doesnt move the needle much". In any package the picks count best
+    first, each further one half the one before; players and prospects count in full."""
+    picks = [{'kind': 'pick', 'id': i, 'name': f'pick {i}', 'value': 10.0} for i in range(4)]
+    assert _assembleWith(picks, 25.0, quality=False) == [], "four late picks bought a 25"
+    mixed = [{'kind': 'prospect', 'id': 9, 'name': 'prospect', 'value': 18.0},
+             {'kind': 'pick', 'id': 1, 'name': 'pick', 'value': 10.0}]
+    assert {a['id'] for a in _assembleWith(mixed, 25.0, quality=False)} == {9, 1}
 
 
 def test_a_real_centerpiece_still_buys_a_top_pick():
@@ -190,6 +201,26 @@ def test_the_star_is_always_in_the_package():
     got = m._assemble(teams[0], teams[1], 25.0, gross=1000.0, displaced=0.0, maxPieces=5,
                       qualityOverVolume=True, mandatory=[star])
     assert [p['id'] for p in got] == [1], got
+
+
+def test_a_club_only_moves_up_in_the_upcoming_draft():
+    """Owner, 2026-10-02: trading up is for the draft whose class you can see. A move up
+    two drafts out is not offered; the same jump in the upcoming draft is."""
+    m, teams = _market({})
+    buyer, holder = teams[3], teams[0]
+
+    def owned(future):
+        season = SEASON + 1 if future else SEASON
+        def picks(team):
+            slot = 2 if team is holder else 20
+            return [{'id': team.id * 10, 'season': season, 'round': 1, 'slot': slot,
+                     'classSize': 32}]
+        return picks
+
+    m.picksOwnedBy = owned(future=True)
+    assert m.pickInquiriesFor(buyer) == [], "a move up two drafts out was offered"
+    m.picksOwnedBy = owned(future=False)
+    assert m.pickInquiriesFor(buyer), "the same move up in the upcoming draft was not offered"
 
 
 if __name__ == '__main__':

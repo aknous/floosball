@@ -2569,7 +2569,15 @@ BLUE_CHIP_NEED_WEIGHTS = {'QB': 1.0, 'RB': 0.9, 'WR': 0.9, 'TE': 0.5, 'K': 0.0}
 # Modelled at 8 a season: pool settles ~31 in a league with no retirements yet, ~18
 # through the ramp, and is fully absorbed once retirements reach ~8.6 a season. Above
 # ~20 it bloats into the holding pen this is meant to avoid.
-FA_INJECTION_ENABLED = True
+# ⚠️ OFF SINCE THE ROOKIE DRAFT CAME BACK (owner, 2026-10-02: new free agents "should only
+# be generated if there is still a lack of supply at a position after the rookie draft").
+# The scheduled class was built on 2026-08-31 as the ONLY way new players could enter,
+# while the draft was excised; the draft returned on 2026-09-15 and this kept running
+# beside it, adding 8 players a season (7-8 of each batch ending up rostered) on top of a
+# 32-player draft class. The blue-chip guarantee rides on this class and is dormant with
+# it. New players now come from the draft, and the supply floor runs once, AFTER the
+# draft, counting the drafted class (`ensurePositionSupply(countProspects=True)`).
+FA_INJECTION_ENABLED = False
 # ⚠️ 12 WAS TRIED AND IS WORSE. The theory was that a deeper pool would put a SECOND
 # qualifying free agent at a position, which is what `upgradeConfidence` needs before
 # anyone past pick 2 can act. It did raise cutting (5.2 -> 7.8 a season) but bought
@@ -3489,6 +3497,19 @@ TRADE_HEADLINE_PICK_CEILING = 92
 TRADE_TOP_PICK_PIECE_DECAY = 0.5
 TRADE_TOP_PICK_STAR_RATING = 84
 TRADE_TOP_PICK_STAR_MIN_TERM = 2
+# ⚠️ A RISING STAR IS PAID FOR THE SAME WAY (owner, 2026-10-02). A developing player whose
+# projected mature rating reaches the 4-star line is bought with QUALITY, not volume: the
+# seller counts the package best piece first, each further piece worth
+# `TRADE_TOP_PICK_PIECE_DECAY` of the one before. Replayed on the prod copy, Norman
+# Slithers (74 today, expected 88) went for a 71-rated veteran plus two late future firsts
+# even after projection pricing doubled his ask.
+TRADE_RISING_STAR_RATING = 84
+# ⚠️ STACKED PICKS DO NOT ADD UP (owner, 2026-10-02: "having multiple of them doesnt move
+# the needle much"). In every package the seller counts the PICKS best first, each further
+# pick worth `TRADE_TOP_PICK_PIECE_DECAY` of the one before; players and prospects count in
+# full (headline picks and rising stars already count everything quality-first). A club has
+# six roster spots and a capped pipeline, so a third late first adds almost nothing.
+TRADE_PICK_STACKING_DECAY_ENABLED = True
 
 # So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
 # sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
@@ -3642,9 +3663,16 @@ TRADE_FUTURE_PICK_DISCOUNT_LATE = 0.55     # steep in the back half
 # THREE OF THEM for a rental kicker. The plan says it plainly: with a future pick "you know
 # neither your slot NOR the class."
 #
-# Each season out regresses the slot toward the middle of the draft by this factor. This
+# A future pick's slot is pulled toward the middle of the draft by this factor. This
 # season's pick is untouched: by the time the market opens at week 15 the table is settled.
-TRADE_PICK_SLOT_REGRESSION = 0.45
+# ⚠️ MEASURED, AND APPLIED ONCE — NOT COMPOUNDED PER SEASON (2026-10-02). It was 0.45 raised
+# to the number of seasons out, which held a contender's pick two drafts away at 0.20 of
+# its distance from the middle. Over 8 production seasons (32 teams) the share of a club's
+# draft position that carries over is 0.53 one season out and 0.44 two out: team quality
+# persists, so the slot stops regressing after the first year. A club picking 24th or later
+# picked a median 24th the next season (83% still 17th or later, 5% reached the top 8).
+# Owner: late picks are "inevitable replacement level players".
+TRADE_PICK_SLOT_REGRESSION = 0.5
 
 # ---- A prospect's control is a DEADLINE, not a term ----
 # `seasonsOfControl` measures seasons of CONTRIBUTION off `termRemaining`. A prospect has
