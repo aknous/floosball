@@ -6462,6 +6462,23 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"restoreForOffseasonResume: schedule reload failed: {e}")
         self._restoreFreeAgencyOrder()
+        # ⚠️ The offseason only exists after the Floos Bowl, so this season HAS a champion,
+        # and the fresh Season above knows nothing about it. Without this the header fell
+        # back to last season's winner and no team held the reigning-champion flag
+        # (prod, season 8 offseason: Midnights shown, Raccoons the real champion).
+        self._restoreReigningChampion(seasonNumber)
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            champ = next((t for t in (getattr(teamManager, 'teams', None) or [])
+                          if getattr(t, 'floosbowlChampion', False)), None)
+            from database.models import Season as DBSeason
+            row = self.db_session.query(DBSeason).filter_by(season_number=seasonNumber).first() \
+                if self.db_session else None
+            if champ and row and row.champion_team_id == champ.id:
+                self.currentSeason.champion = champ
+                self.currentSeason.isComplete = True
+        except Exception as e:
+            logger.warning(f"restoreForOffseasonResume: champion restore failed: {e}")
         # Mark the season as in the offseason week.
         self.currentSeason.currentWeek = 0
         self.currentSeason.currentWeekText = 'Offseason'

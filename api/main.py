@@ -4858,17 +4858,21 @@ async def get_reigning_champion(response: Response):
             if champTeam:
                 return build_success_response(TeamResponseBuilder.buildBasicTeamDict(champTeam))
 
-        # Otherwise look at the previous season
+        # Otherwise read the database: THIS season's champion once the Bowl has been
+        # played, else last season's. ⚠️ The current season comes first because a restart
+        # in the offseason rebuilds the in-memory season without its champion, and reading
+        # only the previous season then crowned last year's winner in the header.
         seasonNum = currentSeason.seasonNumber
-        if seasonNum < 2:
-            return build_success_response(None)
-        prevSeason = session.query(DBSeason).filter_by(season_number=seasonNum - 1).first()
-        if not prevSeason or not prevSeason.champion_team_id:
-            return build_success_response(None)
-        champTeam = teamManager.getTeamById(prevSeason.champion_team_id) if teamManager else None
-        if not champTeam:
-            return build_success_response(None)
-        return build_success_response(TeamResponseBuilder.buildBasicTeamDict(champTeam))
+        for num in (seasonNum, seasonNum - 1):
+            if num < 1:
+                continue
+            row = session.query(DBSeason).filter_by(season_number=num).first()
+            if row and row.champion_team_id:
+                champTeam = teamManager.getTeamById(row.champion_team_id) if teamManager else None
+                if champTeam:
+                    return build_success_response(TeamResponseBuilder.buildBasicTeamDict(champTeam))
+                break
+        return build_success_response(None)
     except Exception as e:
         logger.error(f"Error getting reigning champion: {e}")
         return build_success_response(None)

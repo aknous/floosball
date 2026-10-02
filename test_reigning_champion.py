@@ -65,6 +65,27 @@ class ReigningChampionTest(unittest.TestCase):
         sm._restoreReigningChampion(7)
         self.assertEqual([t.id for t in teams if t.floosbowlChampion], [3])
 
+    def test_an_offseason_restart_restores_this_seasons_champion(self):
+        """Prod, season 8 offseason: after a restart the header showed last season's
+        winner (Midnights) and no team held the flag; the Raccoons had won the Bowl."""
+        sm, teams = _manager({7: 2, 8: 3})
+        sm.loadOffseasonFlowFromDb = lambda: None
+        sm._restoreSeasonStartDate = lambda n: None
+        sm._restoreFreeAgencyOrder = lambda: None
+        sm.game_repo = None
+        sm.playerManager = types.SimpleNamespace(activePlayers=[])
+        import asyncio
+        asyncio.run(sm.restoreForOffseasonResume(8))
+        self.assertEqual([t.id for t in teams if t.floosbowlChampion], [3])
+        self.assertIs(sm.currentSeason.champion, teams[2])
+        self.assertTrue(sm.currentSeason.isComplete)
+
+    def test_the_header_reads_this_seasons_champion_first(self):
+        src = open(os.path.join(HERE, 'api', 'main.py')).read()
+        body = src[src.index('async def get_reigning_champion'):]
+        body = body[:body.index('\n@app.')]
+        self.assertIn('for num in (seasonNum, seasonNum - 1)', body)
+
     def test_crowning_clears_the_old_champion(self):
         src = open(os.path.join(HERE, 'managers', 'seasonManager.py')).read()
         i = src.index('game.winningTeam.floosbowlChampion = True')
