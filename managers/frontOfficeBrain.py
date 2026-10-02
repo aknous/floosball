@@ -975,7 +975,7 @@ class FrontOfficeBrain:
         return int(index * FO_FA_CONTENTION)
 
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
-                             pickDepth=0, team=None, teamsAhead=0):
+                             pickDepth=0, team=None, teamsAhead=0, internal=None):
         """Rank walk-year incumbents by how much they beat the best replacement
         at their own position ("surplus").
 
@@ -988,8 +988,39 @@ class FrontOfficeBrain:
         Returns [(player, surplus)] sorted best-first, already filtered to
         those clearing FO_RESIGN_SURPLUS_MARGIN.
         """
+        # ⚠️ THE CLUB'S OWN REPLACEMENTS COME FIRST (owner, 2026-10-02). `internal` is its
+        # prospects plus the rookies it expects to draft before free agency. One that beats
+        # a walk-year player by the margin makes him certainly replaceable: the club does
+        # not need the market, it already has the man. Reported: the Strangers held the
+        # #1 pick with two top QBs in the class (89 and 93 today) and re-signed a 74 QB
+        # for three seasons, which then left the rookie no slot to be promoted into. Each
+        # alternative covers ONE incumbent at his position, the weakest first.
+        coveredIds = set()
+        byPos = {}
+        for alt in internal or []:
+            posV = getattr(getattr(alt, 'position', None), 'value', None)
+            byPos.setdefault(posV, []).append(
+                (self.decisionValue(alt, coach, rng=rng, team=team), alt))
+        for posV, altValues in byPos.items():
+            altValues.sort(key=lambda va: -va[0])
+            incumbents = sorted(
+                [pl for pl in expiring
+                 if getattr(getattr(pl, 'position', None), 'value', None) == posV],
+                key=lambda pl: self.decisionValue(pl, coach, rng=rng, team=team))
+            for pl, (altValue, alt) in zip(incumbents, altValues):
+                # ⚠️ AND AT LEAST AS GOOD TODAY. Walking a starter cannot be undone, and a
+                # prospect's edge here is a projection, a belief. Without this the Sodas
+                # let a 76 QB walk for a 66 prospect they projected higher.
+                if (altValue >= self.decisionValue(pl, coach, rng=rng, team=team)
+                        + FO_RESIGN_SURPLUS_MARGIN
+                        and float(getattr(alt, 'playerRating', 0) or 0)
+                        >= float(getattr(pl, 'playerRating', 0) or 0)):
+                    coveredIds.add(id(pl))
+
         ranked = []
         for player in expiring:
+            if id(player) in coveredIds:
+                continue
             incumbent = self.decisionValue(player, coach, rng=rng, team=team)
             # ⚠️ WHAT WOULD I ACTUALLY LOSE, not "does one named free agent beat him".
             # This used to price `bestReplacementValue` — the pickDepth-th best on the
@@ -1018,7 +1049,7 @@ class FrontOfficeBrain:
         return ranked
 
     def chooseResigns(self, expiring, limit, coach=None, pool=None, rng=None,
-                      pickDepth=0, team=None, teamsAhead=0):
+                      pickDepth=0, team=None, teamsAhead=0, internal=None):
         """The re-sign decision: at most `limit` keepers, best surplus first.
 
         `limit` is the caller's — RESIGN_LIMIT_PER_OFFSEASON is a parity
@@ -1033,7 +1064,8 @@ class FrontOfficeBrain:
             return []
         return [p for p, _priority in self.rankResignCandidates(
             expiring, coach=coach, pool=pool, rng=rng,
-            pickDepth=pickDepth, team=team, teamsAhead=teamsAhead)[:limit]]
+            pickDepth=pickDepth, team=team, teamsAhead=teamsAhead,
+            internal=internal)[:limit]]
 
     # -------------------------------------------------------------- cuts
 

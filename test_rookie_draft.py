@@ -88,6 +88,7 @@ class Harness:
     forfeitPayoutFor = PlayerManager.forfeitPayoutFor
     payForfeitedSlot = PlayerManager.payForfeitedSlot
     rookieCeiling = PlayerManager.rookieCeiling
+    bpaChoice = PlayerManager.bpaChoice
     rookieBoardValue = PlayerManager.rookieBoardValue
     rookieNeedValue = PlayerManager.rookieNeedValue
     rookieNeedWeight = staticmethod(PlayerManager.rookieNeedWeight)

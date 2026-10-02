@@ -4652,6 +4652,56 @@ class PlayerManager:
                                      rookieTerm=trading.rookieTermForSkill(ceiling),
                                      positionWeight=posW)
 
+    def bpaChoice(self, brain, team, eligible):
+        """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
+        club's own board, whatever the position or need (owner, 2026-10-01), kickers
+        excluded unless a kicker is all it can take. Ties go to the better player today,
+        then a position the club is thin at. ONE definition, shared by the draft and by
+        `expectedDraftees`, so the prediction cannot drift from the pick."""
+        pool = [r for r in eligible if r.position != FloosPlayer.Position.K] or eligible
+        if not pool:
+            return None
+        return max(pool, key=lambda r: (
+            self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
+            -self.countTeamProspectsAtPosition(team, r.position)))
+
+    def expectedDraftees(self, brain, team, slotOwners) -> list:
+        """The rookies this club will take with its top picks in the upcoming draft.
+
+        `slotOwners` is the draft order as owning teams (slot 1 first). The top
+        `ROOKIE_DRAFT_BPA_SLOTS` slots are SIMULATED: each owner in turn takes `bpaChoice`
+        off its own board, exactly as the draft will, so this club sees who the clubs
+        ahead take rather than assuming they take its own favorites. Their reads are
+        deterministic (`prospect_scouting`), so the prediction matches the draft unless a
+        trade moves a pick in between. Used by re-sign decisions, which run before the
+        draft.
+
+        ⚠️ TOP SLOTS ONLY (owner, 2026-10-02: "when you have a top 3-5 pick, you should
+        have a good idea of which players will be available to you"). Later slots shade
+        toward need and depend on every club ahead, so a team there does not plan its
+        roster around a rookie it may not get. A first version read slot k as the k-th
+        best on the club's own board and was wrong at #3: the clubs ahead pick off their
+        own boards, so the Bees let a 74 QB walk for a QB who was already gone.
+        """
+        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        available = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
+        teamId = getattr(team, 'id', None)
+        out = []
+        try:
+            for owner in list(slotOwners or [])[:int(ROOKIE_DRAFT_BPA_SLOTS)]:
+                if not available:
+                    break
+                eligible = [r for r in available if self.hasOpenProspectSlot(owner, r.position)]
+                pick = self.bpaChoice(brain, owner, eligible)
+                if pick is None:
+                    continue
+                available.remove(pick)
+                if getattr(owner, 'id', None) == teamId:
+                    out.append(pick)
+        except Exception:
+            return []
+        return out
+
     @staticmethod
     def rookieNeedWeight(slot: int, draftLength: int) -> float:
         """How much a pick weighs NEED against asset value (owner, 2026-10-01: early
@@ -5017,14 +5067,7 @@ class PlayerManager:
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
             if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
-                # ⚠️ A TOP PICK TAKES THE BEST PROSPECT AVAILABLE (owner, 2026-10-01): the
-                # highest ceiling on this club's own board, whatever the position or need,
-                # kickers excluded (unless a kicker is all it can take). Ties go to the
-                # better player today.
-                pool = [r for r in eligible if r.position != Position.K] or eligible
-                pick = max(pool, key=lambda r: (
-                    self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
-                    -self.countTeamProspectsAtPosition(team, r.position)))
+                pick = self.bpaChoice(brain, team, eligible)
             else:
                 # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
                 # `prospectValue` readings, one above replacement and one above what this
