@@ -3468,6 +3468,27 @@ TRADE_PICK_SWAP_MIN_ABS = 8.0
 # relationship rather than the number.
 TRADE_PICK_PREMIUM_TOP = 1.20
 TRADE_PICK_PREMIUM_TOP_SLOTS = 3
+# ⚠️ A HEADLINE PICK — one of the top `TRADE_HEADLINE_PICK_SLOTS` in the upcoming draft
+# where the prospect the holder expects to land there projects as a 5-star (believed
+# ceiling at least `TRADE_HEADLINE_PICK_CEILING`, the 5-star line) — is protected three
+# ways (owner, 2026-10-01). It keys on the PLAYER, not the slot number: "if its a weak
+# draft class then it could still be possible" to move one for a package, and then it
+# trades like any other pick.
+#   1. it is never offered as a piece inside a bundle for something else
+#      (`_tradeableAssets`); it can still be bought on purpose with a move-up;
+#   2. the seller counts the payment for it QUALITY FIRST — best piece in full, each
+#      further piece `TRADE_TOP_PICK_PIECE_DECAY` of the one before ("a 'first' means
+#      nothing because there's only one round"). Simulated before: Beans traded #2, a
+#      99-ceiling QB on the board, for #9 plus two future firsts and two prospects;
+#   3. the payment must include an established STAR ("a 4-5 star rated roster player in
+#      their prime"): rated at least `TRADE_TOP_PICK_STAR_RATING` (the 4-star line), on
+#      the PRIME arc, with `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract.
+# Future-draft picks are unaffected: their class does not exist yet.
+TRADE_HEADLINE_PICK_SLOTS = 5
+TRADE_HEADLINE_PICK_CEILING = 92
+TRADE_TOP_PICK_PIECE_DECAY = 0.5
+TRADE_TOP_PICK_STAR_RATING = 84
+TRADE_TOP_PICK_STAR_MIN_TERM = 2
 
 # So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
 # sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
