@@ -736,6 +736,16 @@ class PlayerManager:
                 logger.warning(f"Player {player.name} has team_id {team_id} but team not found")
                 continue
 
+            # ⚠️ ALREADY PLACED: `teamManager._rebuildTeamRosters` fills the rosters first at
+            # boot (via `generateTeams`) and this runs over them again. For a single-slot
+            # position that is harmless, but a team with ONE receiver had him in `wr1`, so
+            # this saw `wr1` taken and put him in `wr2` as well. Found on prod in the season-8
+            # offseason: ten teams with the same WR in both slots, which also hides the hole
+            # from the FA draft (it only fills empty slots).
+            if any(slotPlayer is player for slotPlayer in team.rosterDict.values()):
+                player.team = team
+                continue
+
             # Determine which roster position to fill based on player's position
             position = player.position.value
 
