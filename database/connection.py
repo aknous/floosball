@@ -63,6 +63,7 @@ def init_db():
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
     _backfillTradeMoves()
+    _reconcileTeamTitles()
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -3917,6 +3918,79 @@ def _backfillProspectContracts():
 
 _TRADE_MOVES_MARKER = 'trade_moves_backfilled'
 _POSITION_BY_NAME = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+
+
+def _reconcileTeamTitles():
+    """Every boot: put back on the team row any title the `championships` table holds and
+    the row's list does not. Idempotent and add-only.
+
+    ⚠️ The team row's title lists (`floosbowl_championships`, `league_championships`,
+    `division_titles`, `top_seeds`) were written only by `saveTeamData`, which ran when the
+    whole offseason finished, while the `championships` table is written the moment the
+    Floos Bowl ends. A restart in between reloaded last season's lists, and the end-of-
+    offseason save would have written them back without the new titles. Found on prod,
+    season 8 offseason: all 13 season-8 titles (the Raccoons' Floos Bowl among them) were
+    on the table and on no team row. `top_seeds` was also missing every season's entry,
+    from a separate load bug (read into `regularSeasonChampions`, saved from `topSeeds`).
+
+    A division title is written in the dict form with the team's CURRENT division, since
+    the table does not record which one; divisions are stable (`divisionDistribution`).
+    """
+    import json
+    from sqlalchemy import text
+    session = SessionLocal()
+    try:
+        columns = {'floosbowl': 'floosbowl_championships', 'league': 'league_championships',
+                   'division': 'division_titles', 'regular_season': 'top_seeds'}
+        teams = {}
+        for row in session.execute(text(
+                'SELECT id, division, floosbowl_championships, league_championships, '
+                'division_titles, top_seeds FROM teams')):
+            def _load(v):
+                if isinstance(v, str):
+                    try:
+                        return json.loads(v) or []
+                    except Exception:
+                        return []
+                return list(v or [])
+            teams[row[0]] = {'division': row[1], 'floosbowl_championships': _load(row[2]),
+                             'league_championships': _load(row[3]),
+                             'division_titles': _load(row[4]), 'top_seeds': _load(row[5])}
+
+        def _seasonOf(entry):
+            s = entry.get('season') if isinstance(entry, dict) else entry
+            try:
+                return int(str(s).split()[-1])
+            except Exception:
+                return None
+
+        changed = {}
+        for teamId, season, kind in session.execute(text(
+                'SELECT team_id, season, championship_type FROM championships')):
+            col = columns.get(kind)
+            team = teams.get(teamId)
+            if not col or not team or season is None:
+                continue
+            if any(_seasonOf(e) == int(season) for e in team[col]):
+                continue
+            label = f'Season {int(season)}'
+            team[col].append({'season': label, 'division': team['division']}
+                             if kind == 'division' and team['division'] else label)
+            team[col].sort(key=lambda e: _seasonOf(e) or 0)
+            changed.setdefault(teamId, set()).add(col)
+        for teamId, cols in changed.items():
+            for col in cols:
+                session.execute(text(f'UPDATE teams SET {col} = :v WHERE id = :id'),
+                                {'v': json.dumps(teams[teamId][col]), 'id': teamId})
+        session.commit()
+        if changed:
+            logger.info(f"Reconciled team titles from the championships table: "
+                        f"{sum(len(c) for c in changed.values())} list(s) on {len(changed)} team(s)")
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"Team title reconcile skipped: {e}")
+    finally:
+        session.close()
 
 
 def _backfillTradeMoves():
