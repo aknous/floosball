@@ -852,7 +852,8 @@ class TradeMarket:
             def worth(team):
                 return trading.playerValue(getattr(p, 'playerRating', 0),
                                            getattr(p, 'termRemaining', 0), self.week,
-                                           self.nowWeight(team), self._positionWeight(p))
+                                           self.nowWeight(team), self._positionWeight(p),
+                                           futureRating=self._futureRatingFor(team, p))
             candidates.append({'kind': 'player', 'id': getattr(p, 'id', None),
                                'name': getattr(p, 'name', '?'), 'detail': {'slot': slot},
                                'value': worth(seller), 'buyerValue': worth(buyer)})
@@ -988,6 +989,49 @@ class TradeMarket:
             return base             # nothing to tilt toward
         return base + self.needTilt(team) * (dfn - off) / 2.0
 
+    def _futureRatingFor(self, team, player) -> float:
+        """THIS club's read of the player's rating in the seasons after this one: its
+        `ratingFor` today, moved toward `brain.trueForwardRating` by its scouting vision —
+        the same blend `perceivedValue` uses, without the per-player scout error. A
+        developing player rises, one past his longevity falls, a prime one holds.
+
+        ⚠️ THE MARKET PRICED EVERY SEASON AT TODAY'S RATING, and only the BUYER looked
+        forward (through `perceivedValue`). So a seller saw a rising player at today's
+        number while buyers saw more, which is exactly the gap that let Broads sell Norman
+        Slithers (74, projected 88) for a fading 74 and a mid first."""
+        present = self.ratingFor(team, player)
+        coach = getattr(team, 'coach', None)
+        try:
+            current = float(getattr(player, 'playerRating', 0) or 0)
+            forward = float(self.brain.trueForwardRating(player, coach, team))
+            vision = float(self.brain.scoutingVision(coach, team))
+        except Exception:
+            return present
+        return present + (forward - current) * vision
+
+    def _projectedStarsOf(self, team) -> set:
+        """Young players this club sees becoming stars: on the developing arc with a
+        ceiling at or above `TRADE_CORE_MIN_RATING` (the 4-star line), up to
+        `TRADE_CORE_SIZE` of them, highest ceiling first. Part of the core, so never
+        listed (owner, 2026-10-02: Broads listed Norman Slithers, two seasons in and
+        projected to 88, because the core only counted CURRENT stars)."""
+        from constants import TRADE_CORE_SIZE, TRADE_CORE_MIN_RATING
+        from managers.frontOfficeBrain import ARC_DEVELOPING
+        found = []
+        for p in (getattr(team, 'rosterDict', None) or {}).values():
+            if p is None:
+                continue
+            try:
+                if self.brain.classifyArc(p) != ARC_DEVELOPING:
+                    continue
+                ceiling = float(self.brain._ceilingRating(p, team))
+            except Exception:
+                continue
+            if ceiling >= float(TRADE_CORE_MIN_RATING):
+                found.append((ceiling, p))
+        found.sort(key=lambda cp: -cp[0])
+        return {id(p) for _, p in found[:int(TRADE_CORE_SIZE)]}
+
     def _coreOf(self, team) -> set:
         """The players this club is building around. Not trade assets.
 
@@ -1040,6 +1084,9 @@ class TradeMarket:
                 except Exception:
                     pass
             core.add(id(p))
+        # ⚠️ AND THE STARS IT IS DEVELOPING. A core of current stars alone left a rising
+        # young player on the block because he was not a star YET.
+        core |= self._projectedStarsOf(team)
         self._coreCache[id(team)] = core
         return core
 
@@ -1342,7 +1389,8 @@ class TradeMarket:
             term,
             self.week,
             self.nowWeight(team),
-            self._positionWeight(player))
+            self._positionWeight(player),
+            futureRating=self._futureRatingFor(team, player))
         return ask, floor
 
     def _bestAvailableAt(self, team, player, week=None):
@@ -1677,7 +1725,8 @@ class TradeMarket:
         value = trading.playerValue(weakestRating,
                                     getattr(weakest, 'termRemaining', 0),
                                     self.week, self.nowWeight(buyer),
-                                    self._positionWeight(weakest))
+                                    self._positionWeight(weakest),
+                                    futureRating=self._futureRatingFor(buyer, weakest))
 
         return value, cutFeeFor(weakest)
 
@@ -1972,7 +2021,8 @@ class TradeMarket:
                     'value': trading.playerValue(
                         getattr(held, 'playerRating', 0),
                         getattr(held, 'termRemaining', 0), self.week, nowW,
-                        self._positionWeight(held)),
+                        self._positionWeight(held),
+                        futureRating=self._futureRatingFor(valuer, held)),
                 })
         return out
 
