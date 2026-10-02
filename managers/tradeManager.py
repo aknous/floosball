@@ -166,6 +166,8 @@ class TradeMarket:
         # league was a big enough upgrade on the man it already has.
         self.inquiryFail = {}
         self.pickFail = {}
+        self._classCache = None
+        self._classBoardCache = {}
         self._computeContention()
 
     # ------------------------------------------------------------ context
@@ -712,8 +714,49 @@ class TradeMarket:
         return f"a pick expected around {exp:.0f} ({out} draft{'s' if out > 1 else ''} out)"
 
     def _pickValueTo(self, team, pick) -> float:
-        return trading.pickValue(pick['slot'], pick['season'] - self.season,
-                                 weight=trading.laterWeight(self.nowWeight(team)))
+        """What a pick is worth to THIS club.
+
+        ⚠️ A PICK IN THE UPCOMING DRAFT IS PRICED OFF THE REAL CLASS (owner, 2026-10-01).
+        The class is generated at season start and scouted all year, yet `pickValue` prices
+        a slot by what that slot USUALLY yields — so #1 in a class with a 98-ceiling
+        quarterback at the top was worth exactly what #1 is worth in a weak one, and a
+        contender holding it would let it go as generic change. Here the slot is worth the
+        prospect this club would expect to get there on its own board (`_classBoard`).
+        A future draft's class does not exist yet, so it keeps the generic yield.
+        """
+        weight = trading.laterWeight(self.nowWeight(team))
+        out = int(pick['season']) - int(self.season)
+        if out == 0:
+            board = self._classBoard(team)
+            if board:
+                k = max(1, int(pick.get('slot') or len(board)))
+                return board[min(k, len(board)) - 1] * weight
+        return trading.pickValue(pick['slot'], out, weight=weight)
+
+    def _upcomingClass(self) -> list:
+        """The class the upcoming draft will pick from: generated at season start, still
+        flagged `is_upcoming_rookie` until the draft runs."""
+        if self._classCache is None:
+            self._classCache = [p for p in (getattr(self.playerManager, 'activePlayers', None) or [])
+                                if getattr(p, 'is_upcoming_rookie', False)]
+        return self._classCache
+
+    def _classBoard(self, team) -> list:
+        """This club's draft-day values for the upcoming class, best first — the same
+        `rookieBoardValue` the draft itself picks with. Slot k is then priced at the k-th
+        value: the club expects the k-1 it rates higher to be gone."""
+        key = getattr(team, 'id', None)
+        if key not in self._classBoardCache:
+            vals = []
+            boardFn = getattr(self.playerManager, 'rookieBoardValue', None)
+            if boardFn is not None:
+                for r in self._upcomingClass():
+                    try:
+                        vals.append(float(boardFn(self.brain, team, r)))
+                    except Exception:
+                        continue
+            self._classBoardCache[key] = sorted(vals, reverse=True)
+        return self._classBoardCache[key]
 
     def _pricePick(self, holder, pick, swapFor=None):
         """What a club quotes to DROP from this slot to another — not to hand it over.
@@ -746,6 +789,42 @@ class TradeMarket:
         # FLOOR, so a premium on the ask alone is a number nobody pays.
         return value * premium, value * premium
 
+    def _starPaymentFor(self, buyer, seller):
+        """The roster star this club would give up to move into a top-3 slot, as a
+        bundle piece, or None if it has none (owner, 2026-10-01: a top-3 pick costs "a 4-5
+        star rated roster player in their prime"). Qualifies: rated at least
+        `TRADE_TOP_PICK_STAR_RATING`, on the PRIME arc, at least
+        `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract, not retiring, not acquired
+        this season. Among several, the one the BUYER minds losing least goes.
+        """
+        from constants import TRADE_TOP_PICK_STAR_RATING, TRADE_TOP_PICK_STAR_MIN_TERM
+        from managers.frontOfficeBrain import ARC_PRIME
+        candidates = []
+        for slot, p in (getattr(buyer, 'rosterDict', None) or {}).items():
+            if p is None or getattr(p, 'willRetire', False):
+                continue
+            if float(getattr(p, 'playerRating', 0) or 0) < TRADE_TOP_PICK_STAR_RATING:
+                continue
+            if (getattr(p, 'termRemaining', 0) or 0) < TRADE_TOP_PICK_STAR_MIN_TERM:
+                continue
+            if wasAcquiredThisSeason(p, self.season):
+                continue
+            try:
+                if self.brain.classifyArc(p) != ARC_PRIME:
+                    continue
+            except Exception:
+                continue
+            def worth(team):
+                return trading.playerValue(getattr(p, 'playerRating', 0),
+                                           getattr(p, 'termRemaining', 0), self.week,
+                                           self.nowWeight(team), self._positionWeight(p))
+            candidates.append({'kind': 'player', 'id': getattr(p, 'id', None),
+                               'name': getattr(p, 'name', '?'), 'detail': {'slot': slot},
+                               'value': worth(seller), 'buyerValue': worth(buyer)})
+        if not candidates:
+            return None
+        return min(candidates, key=lambda c: c['buyerValue'])
+
     def bidForPick(self, listing, buyer):
         """What this club offers for a draft slot, or None.
 
@@ -769,9 +848,19 @@ class TradeMarket:
         # `_assemble` takes the CHEAPEST assets that clear, so left to itself it would
         # happily pay with prospects and keep the pick — which is not a move up, it is
         # buying a second pick. Excluded from the pool so it cannot be offered twice.
+        isTopPick = (int(listing.pick.get('season', 0)) == int(self.season)
+                     and int(listing.pick.get('slot') or 99) <= TRADE_PICK_PREMIUM_TOP_SLOTS)
+        star = None
+        if isTopPick:
+            star = self._starPaymentFor(buyer, listing.team)
+            if star is None:
+                self.pickFail['no_star'] = self.pickFail.get('no_star', 0) + 1
+                return None
         extras = self._assemble(buyer, listing.team, listing.floor, gain, 0.0,
                                 maxPieces=TRADE_INQUIRY_MAX_PIECES,
-                                excludeIds={('pick', swapFor['id'])})
+                                excludeIds={('pick', swapFor['id'])},
+                                qualityOverVolume=isTopPick,
+                                mandatory=[star] if star else None)
         if not extras:
             self.pickFail['cannot_cover'] = self.pickFail.get('cannot_cover', 0) + 1
             return None
@@ -1656,8 +1745,21 @@ class TradeMarket:
             return TRADE_INQUIRY_MAX_PIECES
         return None
 
+    @staticmethod
+    def _qualityValue(values) -> float:
+        """A payment counted best piece first, each further piece worth
+        `TRADE_TOP_PICK_PIECE_DECAY` of the one before — what a club giving up a top-3
+        pick believes it received. See the constant."""
+        from constants import TRADE_TOP_PICK_PIECE_DECAY
+        total, factor = 0.0, 1.0
+        for v in sorted(values, reverse=True):
+            total += v * factor
+            factor *= float(TRADE_TOP_PICK_PIECE_DECAY)
+        return total
+
     def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
-                  swapPosition=None, maxPieces=None, excludeIds=None) -> list:
+                  swapPosition=None, maxPieces=None, excludeIds=None,
+                  qualityOverVolume: bool = False, mandatory=None) -> list:
         """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
@@ -1684,10 +1786,24 @@ class TradeMarket:
             buyerAssets = [a for a in buyerAssets
                            if (a['kind'], a['id']) not in excludeIds]
         buyerAssets.sort(key=lambda a: a['value'])
-        pieces, toSeller, toBuyer = [], 0.0, 0.0
-        usedPlayer = False
+        # Pieces the payment MUST include (a top-3 pick's star), counted before anything
+        # cheaper is added and never dropped as redundant. Each carries `buyerValue`, its
+        # cost on the buyer's own scale.
+        pieces = [dict(m) for m in (mandatory or [])]
+        toSeller = sum(m['value'] for m in pieces)
+        toBuyer = sum(m.get('buyerValue', m['value']) for m in pieces)
+        usedPlayer = any(m['kind'] == 'player' for m in pieces)
+        mandatoryIds = {(m['kind'], m['id']) for m in pieces}
+        buyerAssets = [a for a in buyerAssets if (a['kind'], a['id']) not in mandatoryIds]
+
+        def seen(ps):
+            # What the SELLER counts the payment as. A plain sum, except when it is giving
+            # up a top-3 pick: then quality, not volume (`_qualityValue`).
+            return (self._qualityValue([p['value'] for p in ps]) if qualityOverVolume
+                    else sum(p['value'] for p in ps))
+
         for asset in buyerAssets:
-            if toSeller >= bar:
+            if seen(pieces) >= bar:
                 break
             if len(pieces) >= (maxPieces or TRADE_MAX_PIECES):
                 break
@@ -1705,7 +1821,7 @@ class TradeMarket:
             pieces.append(dict(asset, value=worthToSeller))
             toSeller += worthToSeller
             toBuyer += asset['value']
-        if toSeller < bar:
+        if seen(pieces) < bar:
             self.assembleFail['barNotCleared'] = self.assembleFail.get('barNotCleared', 0) + 1
             if not buyerAssets:
                 self.assembleFail['noAssets'] = self.assembleFail.get('noAssets', 0) + 1
@@ -1723,7 +1839,9 @@ class TradeMarket:
         for piece in sorted(pieces, key=lambda p: -p['value']):
             if len(pieces) <= 1:
                 break
-            if toSeller - piece['value'] < bar:
+            if (piece['kind'], piece['id']) in mandatoryIds:
+                continue        # required by the deal, not change
+            if seen([p for p in pieces if p is not piece]) < bar:
                 continue
             if piece['kind'] == 'player':
                 continue        # the swap is structural, not change
@@ -1770,15 +1888,23 @@ class TradeMarket:
         # sides at the holder's now-weight cancels it.
         valuer = valuingTeam if valuingTeam is not None else team
         weight = trading.laterWeight(self.nowWeight(valuer))
+        from constants import TRADE_PICK_PROTECTED_SLOTS
         for pick in self.picksOwnedBy(team):
+            # ⚠️ A TOP PICK IN THE UPCOMING DRAFT IS NEVER BUNDLE CHANGE: it can still be
+            # traded on purpose (a move-up, priced on the drop), just not thrown in for
+            # something else. A trade-up's own swap pick travels separately (`bidForPick`),
+            # so this does not stop a club moving up from a protected slot.
+            if (int(pick['season']) == int(self.season)
+                    and int(pick.get('slot') or 99) <= int(TRADE_PICK_PROTECTED_SLOTS)):
+                continue
             out.append({
                 'kind': 'pick',
                 'id': pick['id'],
                 'name': f"S{pick['season']} R{pick['round']} pick",
                 'detail': pick,
-                'value': trading.pickValue(
-                    pick['slot'], pick['season'] - self.season,
-                    pick['classSize'], weight=weight),
+                # The same valuation as everywhere else in the market — class-aware for
+                # the upcoming draft — so a bundle and a move-up cannot disagree.
+                'value': self._pickValueTo(valuer, pick),
             })
         for prospect in getattr(team, 'prospects', None) or []:
             if wasAcquiredThisSeason(prospect, self.season):
@@ -1991,9 +2117,36 @@ def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
 
     seller, buyer = listing.team, winner.team
     pickId = listing.pick.get('id')
+    moves = []
 
     # ⚠️ RE-CHECK OWNERSHIP AT SETTLEMENT. An earlier trade in this same pass may already
     # have moved it — the pass settles sequentially for exactly this reason.
+    session = get_session()
+    try:
+        row = session.get(DraftPick, pickId)
+        if row is None or row.used or row.current_owner_id != getattr(seller, 'id', None):
+            return None
+    finally:
+        session.close()
+
+    # ⚠️ A STAR IN THE PAYMENT NEEDS A SLOT ON THE SELLER'S ROSTER, found BEFORE anything
+    # moves: its open slot at his position, else its weakest player there is cut (fee and
+    # move recorded, exactly as a player trade makes room). If neither is possible the
+    # trade does not happen. The buyer's emptied slot is left for the FA draft, which
+    # follows every offseason trade pass.
+    starSlot = None
+    star = None
+    for piece in winner.pieces:
+        if piece.get('kind') == 'player':
+            star = _findRostered(buyer, piece.get('id'))
+            if star is None:
+                return None     # he moved since the bid was priced
+            starSlot = _openSlotFor(seller, star)
+            if starSlot is None:
+                starSlot = _cutToMakeRoom(seasonManager, seller, star, week=None, moves=moves)
+            if starSlot is None:
+                return None
+
     session = get_session()
     try:
         row = session.get(DraftPick, pickId)
@@ -2012,7 +2165,9 @@ def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
         session.close()
 
     given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season,
-                            sellerSlot=None, phase='offseason')
+                            sellerSlot=starSlot, phase='offseason')
+    if star is not None:
+        _mintTradedCard(seasonManager, star, seller, season)
 
     manifest = {
         'season': season, 'week': 0, 'phase': 'offseason',
@@ -2034,6 +2189,7 @@ def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
         # man for a locker-room problem and nothing says why anyone wanted him.
         'sellerWhy': getattr(listing, 'why', None),
         'buyerWhy': getattr(winner, 'why', None),
+        'moves': moves,
     }
     tradeId = _persistTrade(manifest)
     _recordTrade(seasonManager, manifest, tradeId)

@@ -3468,6 +3468,29 @@ TRADE_PICK_SWAP_MIN_ABS = 8.0
 # relationship rather than the number.
 TRADE_PICK_PREMIUM_TOP = 1.20
 TRADE_PICK_PREMIUM_TOP_SLOTS = 3
+# ⚠️ A TOP PICK IN THE UPCOMING DRAFT IS NOT SMALL CHANGE (owner, 2026-10-01). Slots this
+# high may still be traded on purpose — a club calling to move up into one and paying the
+# class-based price for the drop (`pickInquiriesFor`) — but they are never offered as a
+# piece inside a bundle for something else (`_tradeableAssets`). Future-draft picks are
+# unaffected: their class does not exist yet.
+TRADE_PICK_PROTECTED_SLOTS = 5
+# ⚠️ A TOP-3 PICK IS PAID FOR WITH QUALITY, NOT VOLUME (owner, 2026-10-01: "a 'first'
+# means nothing because there's only one round"). With one round every pick is a first,
+# and a contender's future one is just another mid-to-late prospect; a team has six roster
+# spots and a capped pipeline, so a pile of ordinary assets never adds up to the star a
+# top-3 pick brings. A club giving up a top-3 slot in the upcoming draft counts what it
+# receives best piece first, each further piece worth this fraction of the one before
+# (1, 0.5, 0.25, ...). Simulated before: Beans traded #2, with a 99-ceiling QB on the
+# board, for #9 plus two future firsts and two prospects.
+TRADE_TOP_PICK_PIECE_DECAY = 0.5
+# ⚠️ AND A TOP-3 PICK COSTS AN ESTABLISHED STAR (owner, 2026-10-01: "I'd expect they'd
+# have to get a 4-5 star rated roster player in their prime in return for that pick").
+# A move up into a top-3 slot in the upcoming draft must include a roster player at least
+# this rating (the 4-star line), on the PRIME arc, with at least
+# `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract so he is not a rental. Without one
+# the buyer cannot bid; the rest of the package is counted quality-first on top of him.
+TRADE_TOP_PICK_STAR_RATING = 84
+TRADE_TOP_PICK_STAR_MIN_TERM = 2
 
 # So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
 # sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
