@@ -2659,6 +2659,13 @@ COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
 # ONLY as the position-supply deficit fill, and any class left in the database is
 # released into free agency on load rather than being stranded there forever.
 ROOKIE_DRAFT_ENABLED = True
+# The top N slots of the rookie draft take the BEST PROSPECT AVAILABLE by the club's own
+# read of his ceiling, ignoring position value and roster need, kickers excluded (owner,
+# 2026-10-01: "with high picks, prospects are assets"). A top pick is the one chance at a
+# headline prospect, and on the old board the QB multiplier let a 75-ceiling quarterback
+# go #2 while a 99 went #4. After these slots the board shifts from asset value toward
+# NEED, reaching pure need at the last pick of the draft (playerManager.rookieNeedWeight).
+ROOKIE_DRAFT_BPA_SLOTS = 5
 
 
 def rookieDraftEnabled() -> bool:

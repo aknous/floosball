@@ -8410,8 +8410,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     order = []
     session = get_session()
     try:
-        ranked = sorted((getattr(t, 'id', None) for t in (getattr(tm, 'teams', None) or [])),
-                        key=lambda tid: _teamWinPct(teamsById.get(tid)))
+        ranked, orderFinal, playoffSlotsFrom = _rookieDraftOrder()
         ownerByOrigin = {r.original_team_id: r.current_owner_id for r in
                          session.query(DraftPick).filter_by(season=season, used=False).all()}
         def recordOf(teamId):
@@ -8560,6 +8559,10 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                         "state": windowState,
                         "deadlineWeek": int(GM_ACTIVE_WEEK)},
         "draftOrder": order,
+        # False until the Floos Bowl is played. The slots from `draftPlayoffSlotsFrom` on
+        # belong to playoff teams and keep moving until then; the page says so.
+        "draftOrderFinal": orderFinal,
+        "draftPlayoffSlotsFrom": playoffSlotsFrom,
         "expiring": expiring,
         "block": block,
         "trades": tradeRows,
@@ -8595,30 +8598,45 @@ def _tradeAssetsWithRatings(assets, ratingById) -> list:
     return out
 
 
-def _teamWinPct(team) -> float:
-    """Worst-first ordering key. Missing clubs sort last rather than crashing the page.
+def _rookieDraftOrder() -> tuple:
+    """(teamIds worst-first, final, playoffSlotsFrom) for the rookie draft.
 
-    ⚠️ THE RECORD LIVES IN `seasonTeamStats`. THERE IS NO `team.wins`, AND READING IT
-    RETURNS 0 FOR ALL 32 CLUBS FOREVER. This did exactly that: every club came back at the
-    `played == 0` fallback of 0.5, `sorted` is stable, and the draft order silently became
-    **team-id order** rather than worst-first — so the fan-facing order, and every "traded"
-    flag hanging off it, named the wrong clubs. Nothing raises, because a missing attribute
-    through `getattr` is indistinguishable from a club that has not played yet.
+    ⚠️ THE REAL ORDER WHERE IT EXISTS. From the end of the regular season the sim builds
+    `freeAgencyOrder` itself — the non-playoff teams, then each playoff round's losers as
+    they go out, then the Floos Bowl runner-up and champion — and that is what the draft
+    walks. This used to re-sort the whole league by win% alone (ties by team id), which
+    ignored the playoffs entirely and disagreed with the draft the moment it ran.
 
-    ⚠️ THIS IS THE SECOND TIME THE SAME ATTRIBUTE HAS BITTEN. `tradeManager` read it once
-    and it flattened the entire contention gradient the market runs on — 0 expiring-surplus
-    listings out of 1,468 — which is why the comment there names it in capitals. Read it
-    through the same shape that fix landed on, and count TIES, which a two-term reading
-    silently drops.
+    Teams the real order has not reached yet (still alive in the playoffs, or the whole
+    league during the regular season) are PROJECTED with the same rules: the projected
+    non-qualifiers (`standings_view.seedLeague`) before the qualifiers, each group by
+    `seeding.draftOrderKey`. `final` is True once every team is in the real order.
     """
-    if team is None:
-        return 2.0
-    stats = getattr(team, 'seasonTeamStats', None) or {}
-    wins = float(stats.get('wins', 0) or 0)
-    losses = float(stats.get('losses', 0) or 0)
-    ties = float(stats.get('ties', 0) or 0)
-    played = wins + losses + ties
-    return (wins / played) if played else 0.5
+    from seeding import draftOrderKey
+    sm = floosball_app.seasonManager if floosball_app else None
+    tm = floosball_app.teamManager if floosball_app else None
+    teams = [t for t in (getattr(tm, 'teams', None) or []) if getattr(t, 'id', None) is not None]
+    byId = {t.id: t for t in teams}
+    playoffSlotsFrom = len(teams) - len(teams) // 2 + 1
+    known = []
+    for t in (getattr(getattr(sm, 'currentSeason', None), 'freeAgencyOrder', None) or []):
+        tid = getattr(t, 'id', None)
+        if tid in byId and tid not in known:
+            known.append(tid)
+    rest = [t for t in teams if t.id not in set(known)]
+    if known:
+        tail = sorted(rest, key=draftOrderKey)
+    else:
+        qualified = set()
+        try:
+            from standings_view import seedLeague
+            for lg in (floosball_app.leagueManager.leagues or []):
+                qualified |= set((seedLeague(list(lg.teamList), []) or {}).get('seeds', {}).keys())
+        except Exception:
+            qualified = set()
+        tail = (sorted((t for t in rest if t.id not in qualified), key=draftOrderKey)
+                + sorted((t for t in rest if t.id in qualified), key=draftOrderKey))
+    return known + [t.id for t in tail], not rest, playoffSlotsFrom
 
 
 @app.get("/api/draft/class")
@@ -8944,8 +8962,8 @@ def get_team_picks(team_id: int):
                 "abbr": getattr(t, 'abbr', t.name[:3].upper()),
                 "color": getattr(t, 'color', None)}
 
-    # The same worst-first ranking the Transactions page resolves the draft order with.
-    ranked = sorted(teamsById.keys(), key=lambda tid: _teamWinPct(teamsById.get(tid)))
+    # The same order the Transactions page shows (and the draft uses).
+    ranked, _, _ = _rookieDraftOrder()
     projectedSlot = {tid: i for i, tid in enumerate(ranked, start=1)}
 
     session = get_session()

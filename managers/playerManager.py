@@ -4516,6 +4516,86 @@ class PlayerManager:
         logger.info(f"Parity re-map: deflated {total} players onto the true-skill curve (rising debut below & grow in, peak/declining frozen)")
         return total
 
+    def rookieCeiling(self, brain, team, rookie) -> float:
+        """This club's read of a rookie's ceiling (its scouted belief), falling back to
+        his current rating."""
+        try:
+            return float(brain._ceilingRating(rookie, team))
+        except Exception:
+            return float(getattr(rookie, 'playerRating', 0) or 0)
+
+    def rookieBoardValue(self, brain, team, rookie) -> float:
+        """What a rookie is worth to THIS club on draft day: `trading.prospectValue` on its
+        own read of his ceiling, a rookie-length contract and his position's weight.
+
+        ⚠️ THE CEILING ABOVE REPLACEMENT, NOT TODAY'S RATING. The board used to be
+        `decisionValue` — today's rating plus at most 45% of the gap to the ceiling,
+        times position value — so current rating dominated and the QB multiplier did the
+        rest: on production a 72-rated QB with a 75 ceiling went #2 and a 70-ceiling one #3
+        while a 99-ceiling QB lasted to #4 and the class's only 100 (a TE) to #24. A
+        prospect is worth what he becomes, and one barely above replacement is worth
+        almost nothing however good he looks today. Also what `findPickBuyer` prices a
+        slot with, so the market and the board agree.
+        """
+        import trading
+        from managers.frontOfficeBrain import positionValue
+        ceiling = self.rookieCeiling(brain, team, rookie)
+        try:
+            posW = positionValue(rookie)
+        except Exception:
+            posW = trading.averagePositionWeight()
+        return trading.prospectValue(ceiling, 0, rookieTerm=trading.rookieTermForSkill(ceiling),
+                                     positionWeight=posW)
+
+    def rookieNeedValue(self, brain, team, rookie) -> float:
+        """What a rookie is worth to THIS club for what it is MISSING: the same
+        `prospectValue` as the board, but measured above what the club already has at
+        his position instead of above replacement.
+
+        "What it already has" is the higher of its weaker starter there (WR has two
+        slots) and the best ceiling already in its pipeline there. A starter on a walk
+        year or set to retire counts as nobody, because that slot is about to open. Same
+        shape as a trade bid, which prices the upgrade over the man displaced.
+        """
+        import trading
+        from constants import REPLACEMENT_RATING
+        from managers.frontOfficeBrain import positionValue
+        posValue = getattr(getattr(rookie, 'position', None), 'value', None)
+        slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
+        starters = []
+        for slot in slots:
+            p = (getattr(team, 'rosterDict', None) or {}).get(slot)
+            leaving = p is None or getattr(p, 'willRetire', False) or \
+                (getattr(p, 'termRemaining', 99) or 99) <= 1
+            starters.append(float(REPLACEMENT_RATING) if leaving
+                            else float(getattr(p, 'playerRating', 0) or 0))
+        bar = min(starters) if starters else float(REPLACEMENT_RATING)
+        for prospect in getattr(team, 'prospects', None) or []:
+            if getattr(getattr(prospect, 'position', None), 'value', None) == posValue:
+                bar = max(bar, self.rookieCeiling(brain, team, prospect))
+        bar = max(bar, float(REPLACEMENT_RATING))
+        ceiling = self.rookieCeiling(brain, team, rookie)
+        upgrade = max(0.0, ceiling - bar)
+        try:
+            posW = positionValue(rookie)
+        except Exception:
+            posW = trading.averagePositionWeight()
+        return trading.prospectValue(float(REPLACEMENT_RATING) + upgrade, 0,
+                                     rookieTerm=trading.rookieTermForSkill(ceiling),
+                                     positionWeight=posW)
+
+    @staticmethod
+    def rookieNeedWeight(slot: int, draftLength: int) -> float:
+        """How much a pick weighs NEED against asset value (owner, 2026-10-01: early
+        picks take the best player available, and "the further back the draft goes, the
+        more teams draft by need"). 0 through `ROOKIE_DRAFT_BPA_SLOTS`, rising evenly to
+        1 at the last pick."""
+        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        start = int(ROOKIE_DRAFT_BPA_SLOTS)
+        if slot <= start or draftLength <= start:
+            return 0.0
+        return min(1.0, (slot - start) / float(draftLength - start))
+
     def countTeamProspectsAtPosition(self, team, position) -> int:
         """How many prospects this team already holds at a given Position enum."""
         return sum(1 for p in getattr(team, 'prospects', []) if p.position == position)
@@ -4614,26 +4694,13 @@ class PlayerManager:
         slotByTeamId = slotByTeamId or {}
 
         def bestFor(team, eligible):
-            coach = getattr(team, 'coach', None)
-            try:
-                return max(eligible,
-                           key=lambda r: brain.decisionValue(r, coach=coach, team=team))
-            except Exception:
-                return max(eligible, key=lambda r: float(getattr(r, 'playerRating', 0) or 0))
+            # The same board the draft itself picks from.
+            return max(eligible, key=lambda r: self.rookieBoardValue(brain, team, r))
 
         def worthIt(team, eligible):
             """(does this beat their own next-season pick, by how much)."""
             best = bestFor(team, eligible)
-            try:
-                skill = float(brain._ceilingRating(best, team))
-            except Exception:
-                skill = float(getattr(best, 'playerRating', 0) or 0)
-            try:
-                posW = positionValue(best)
-            except Exception:
-                posW = trading.averagePositionWeight()
-            gain = trading.prospectValue(
-                skill, 0, rookieTerm=trading.rookieTermForSkill(skill), positionWeight=posW)
+            gain = self.rookieBoardValue(brain, team, best)
             # What they give up: their own pick a year out, which regresses toward the
             # middle of the draft because nobody knows where they finish.
             cost = trading.pickValue(
@@ -4818,7 +4885,8 @@ class PlayerManager:
         for i, t in enumerate(draftOrder):
             slotByTeamId.setdefault(getattr(t, 'id', None), i + 1)
 
-        for onTheClock in draftOrder:
+        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        for slotNumber, onTheClock in enumerate(draftOrder, start=1):
             if not available:
                 break
             team = onTheClock
@@ -4880,18 +4948,26 @@ class PlayerManager:
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
-            coach = getattr(team, 'coach', None)
-
-            def boardValue(rookie):
-                try:
-                    return brain.decisionValue(rookie, coach=coach, team=team)
-                except Exception:
-                    return float(getattr(rookie, 'playerRating', 0) or 0)
-
-            # Tie-break toward a position this club is thin at, so a pipeline does not
-            # stack three quarterbacks because they happened to score alike.
-            pick = max(eligible, key=lambda r: (
-                boardValue(r), -self.countTeamProspectsAtPosition(team, r.position)))
+            if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
+                # ⚠️ A TOP PICK TAKES THE BEST PROSPECT AVAILABLE (owner, 2026-10-01): the
+                # highest ceiling on this club's own board, whatever the position or need,
+                # kickers excluded (unless a kicker is all it can take). Ties go to the
+                # better player today.
+                pool = [r for r in eligible if r.position != Position.K] or eligible
+                pick = max(pool, key=lambda r: (
+                    self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
+                    -self.countTeamProspectsAtPosition(team, r.position)))
+            else:
+                # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
+                # `prospectValue` readings, one above replacement and one above what this
+                # club already has, so they blend on one scale. Tie-break toward the
+                # higher ceiling, then a position this club is thin at.
+                needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
+                pick = max(eligible, key=lambda r: (
+                    (1.0 - needW) * self.rookieBoardValue(brain, team, r)
+                    + needW * self.rookieNeedValue(brain, team, r),
+                    self.rookieCeiling(brain, team, r),
+                    -self.countTeamProspectsAtPosition(team, r.position)))
             available.remove(pick)
 
             pick.is_prospect = True
