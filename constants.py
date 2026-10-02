@@ -3468,27 +3468,25 @@ TRADE_PICK_SWAP_MIN_ABS = 8.0
 # relationship rather than the number.
 TRADE_PICK_PREMIUM_TOP = 1.20
 TRADE_PICK_PREMIUM_TOP_SLOTS = 3
-# ⚠️ A TOP PICK IN THE UPCOMING DRAFT IS NOT SMALL CHANGE (owner, 2026-10-01). Slots this
-# high may still be traded on purpose — a club calling to move up into one and paying the
-# class-based price for the drop (`pickInquiriesFor`) — but they are never offered as a
-# piece inside a bundle for something else (`_tradeableAssets`). Future-draft picks are
-# unaffected: their class does not exist yet.
-TRADE_PICK_PROTECTED_SLOTS = 5
-# ⚠️ A TOP-3 PICK IS PAID FOR WITH QUALITY, NOT VOLUME (owner, 2026-10-01: "a 'first'
-# means nothing because there's only one round"). With one round every pick is a first,
-# and a contender's future one is just another mid-to-late prospect; a team has six roster
-# spots and a capped pipeline, so a pile of ordinary assets never adds up to the star a
-# top-3 pick brings. A club giving up a top-3 slot in the upcoming draft counts what it
-# receives best piece first, each further piece worth this fraction of the one before
-# (1, 0.5, 0.25, ...). Simulated before: Beans traded #2, with a 99-ceiling QB on the
-# board, for #9 plus two future firsts and two prospects.
+# ⚠️ A HEADLINE PICK — one of the top `TRADE_HEADLINE_PICK_SLOTS` in the upcoming draft
+# where the prospect the holder expects to land there projects as a 5-star (believed
+# ceiling at least `TRADE_HEADLINE_PICK_CEILING`, the 5-star line) — is protected three
+# ways (owner, 2026-10-01). It keys on the PLAYER, not the slot number: "if its a weak
+# draft class then it could still be possible" to move one for a package, and then it
+# trades like any other pick.
+#   1. it is never offered as a piece inside a bundle for something else
+#      (`_tradeableAssets`); it can still be bought on purpose with a move-up;
+#   2. the seller counts the payment for it QUALITY FIRST — best piece in full, each
+#      further piece `TRADE_TOP_PICK_PIECE_DECAY` of the one before ("a 'first' means
+#      nothing because there's only one round"). Simulated before: Beans traded #2, a
+#      99-ceiling QB on the board, for #9 plus two future firsts and two prospects;
+#   3. the payment must include an established STAR ("a 4-5 star rated roster player in
+#      their prime"): rated at least `TRADE_TOP_PICK_STAR_RATING` (the 4-star line), on
+#      the PRIME arc, with `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract.
+# Future-draft picks are unaffected: their class does not exist yet.
+TRADE_HEADLINE_PICK_SLOTS = 5
+TRADE_HEADLINE_PICK_CEILING = 92
 TRADE_TOP_PICK_PIECE_DECAY = 0.5
-# ⚠️ AND A TOP-3 PICK COSTS AN ESTABLISHED STAR (owner, 2026-10-01: "I'd expect they'd
-# have to get a 4-5 star rated roster player in their prime in return for that pick").
-# A move up into a top-3 slot in the upcoming draft must include a roster player at least
-# this rating (the 4-star line), on the PRIME arc, with at least
-# `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract so he is not a rental. Without one
-# the buyer cannot bid; the rest of the package is counted quality-first on top of him.
 TRADE_TOP_PICK_STAR_RATING = 84
 TRADE_TOP_PICK_STAR_MIN_TERM = 2
 

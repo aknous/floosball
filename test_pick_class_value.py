@@ -24,24 +24,30 @@ class Rookie:
 
 
 class ClassPM:
-    """A player manager holding an upcoming class, with the draft board's value per name."""
+    """A player manager holding an upcoming class, with the draft board's value and the
+    believed ceiling per name (ceiling defaults to 95, a 5-star class)."""
 
-    def __init__(self, values):
+    def __init__(self, values, ceilings=None):
         self.freeAgents = []
         self.activePlayers = [Rookie(n) for n in values]
         self._values = values
+        self._ceilings = ceilings or {}
 
     def rookieBoardValue(self, brain, team, rookie):
         return self._values[rookie.name]
+
+    def rookieCeiling(self, brain, team, rookie):
+        return self._ceilings.get(rookie.name, 95.0)
 
 
 def _teams():
     return [FakeTeam(i + 1, f"C{i + 1}", wins=20 - i, losses=8 + i) for i in range(4)]
 
 
-def _market(values, teams=None):
+def _market(values, teams=None, ceilings=None):
     teams = teams or _teams()
-    return TradeMarket(ClassPM(values), FakeTeamManager(teams), StubBrain(), SEASON, None), teams
+    return (TradeMarket(ClassPM(values, ceilings), FakeTeamManager(teams), StubBrain(), SEASON, None),
+            teams)
 
 
 PICK1 = {'id': 1, 'season': SEASON, 'round': 1, 'slot': 1, 'classSize': 32}
@@ -74,14 +80,37 @@ def test_with_no_class_the_upcoming_pick_falls_back_to_the_generic_yield():
     assert abs(m._pickValueTo(holder, PICK1) - trading.pickValue(1, 0, weight=w)) < 1e-9
 
 
-def test_a_top_upcoming_pick_is_never_bundle_change():
-    """A protected slot cannot be offered inside a deal for something else; a later slot
-    and a future-draft pick still can."""
-    m, teams = _market({'Generational QB': 80.0, 'Solid': 20.0})
+def test_a_headline_pick_is_never_bundle_change():
+    """#1 with a 5-star prospect there cannot be offered inside a deal for something else;
+    a later slot and a future-draft pick still can."""
+    m, teams = _market({'Generational QB': 80.0, 'Solid': 20.0},
+                       ceilings={'Generational QB': 98.0, 'Solid': 85.0})
     m.picksOwnedBy = lambda team: [PICK1, PICK9, FUTURE1]
     ids = {a['id'] for a in m._tradeableAssets(teams[0]) if a['kind'] == 'pick'}
     assert 1 not in ids, "the #1 pick was offered as a bundle piece"
     assert {2, 3} <= ids, "an unprotected or future pick was dropped from the bundle pool"
+
+
+def test_in_a_weak_class_a_top_pick_trades_like_any_other():
+    """Owner, 2026-10-01: "if its a weak draft class then it could still be possible".
+    The rule keys on the prospect at the slot: no 5-star there, no protection."""
+    m, teams = _market({'Best Of A Weak Class': 20.0, 'Solid': 15.0},
+                       ceilings={'Best Of A Weak Class': 88.0, 'Solid': 85.0})
+    assert not m._isHeadlinePick(teams[0], PICK1)
+    m.picksOwnedBy = lambda team: [PICK1]
+    assert 1 in {a['id'] for a in m._tradeableAssets(teams[0])}
+
+
+def test_the_headline_test_reads_the_prospect_at_the_slot():
+    """In a class with three 5-star prospects (99, 97, 93), #1-#3 are headline picks and #4
+    and #5 are not; nothing past the top five ever is."""
+    ceil = {'A': 97.0, 'B': 93.0, 'C': 89.0, 'D': 86.0, 'E': 84.0, 'F': 99.0}
+    m, teams = _market({n: 10.0 for n in ceil}, ceilings=ceil)
+    head = lambda slot: m._isHeadlinePick(teams[0], {**PICK1, 'slot': slot})
+    assert head(1) and head(2) and head(3), "the three 5-star prospects should protect #1-#3"
+    assert not head(4) and not head(5)
+    assert not head(6), "slot 6 is never a headline pick"
+    assert not m._isHeadlinePick(teams[0], FUTURE1), "a future pick has no class to read"
 
 
 def test_bundle_and_move_up_price_a_pick_the_same_way():

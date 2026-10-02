@@ -733,6 +733,37 @@ class TradeMarket:
                 return board[min(k, len(board)) - 1] * weight
         return trading.pickValue(pick['slot'], out, weight=weight)
 
+    def _classCeilings(self, team) -> list:
+        """This club's believed ceiling for each prospect in the upcoming class, best
+        first (`playerManager.rookieCeiling`)."""
+        key = ('ceil', getattr(team, 'id', None))
+        if key not in self._classBoardCache:
+            vals = []
+            ceilFn = getattr(self.playerManager, 'rookieCeiling', None)
+            if ceilFn is not None:
+                for r in self._upcomingClass():
+                    try:
+                        vals.append(float(ceilFn(self.brain, team, r)))
+                    except Exception:
+                        continue
+            self._classBoardCache[key] = sorted(vals, reverse=True)
+        return self._classBoardCache[key]
+
+    def _isHeadlinePick(self, holder, pick) -> bool:
+        """A top slot in the upcoming draft where the prospect the holder expects there
+        projects as a 5-star. See `TRADE_HEADLINE_PICK_*`: it keys on the player, so in a
+        weak class the same slot trades like any other pick."""
+        from constants import TRADE_HEADLINE_PICK_SLOTS, TRADE_HEADLINE_PICK_CEILING
+        if int(pick.get('season', 0)) != int(self.season):
+            return False
+        slot = int(pick.get('slot') or 99)
+        if slot > int(TRADE_HEADLINE_PICK_SLOTS):
+            return False
+        ceilings = self._classCeilings(holder)
+        if not ceilings:
+            return False
+        return ceilings[min(slot, len(ceilings)) - 1] >= float(TRADE_HEADLINE_PICK_CEILING)
+
     def _upcomingClass(self) -> list:
         """The class the upcoming draft will pick from: generated at season start, still
         flagged `is_upcoming_rookie` until the draft runs."""
@@ -790,7 +821,7 @@ class TradeMarket:
         return value * premium, value * premium
 
     def _starPaymentFor(self, buyer, seller):
-        """The roster star this club would give up to move into a top-3 slot, as a
+        """The roster star this club would give up to move into a headline slot, as a
         bundle piece, or None if it has none (owner, 2026-10-01: a top-3 pick costs "a 4-5
         star rated roster player in their prime"). Qualifies: rated at least
         `TRADE_TOP_PICK_STAR_RATING`, on the PRIME arc, at least
@@ -848,8 +879,7 @@ class TradeMarket:
         # `_assemble` takes the CHEAPEST assets that clear, so left to itself it would
         # happily pay with prospects and keep the pick — which is not a move up, it is
         # buying a second pick. Excluded from the pool so it cannot be offered twice.
-        isTopPick = (int(listing.pick.get('season', 0)) == int(self.season)
-                     and int(listing.pick.get('slot') or 99) <= TRADE_PICK_PREMIUM_TOP_SLOTS)
+        isTopPick = self._isHeadlinePick(listing.team, listing.pick)
         star = None
         if isTopPick:
             star = self._starPaymentFor(buyer, listing.team)
@@ -1748,8 +1778,8 @@ class TradeMarket:
     @staticmethod
     def _qualityValue(values) -> float:
         """A payment counted best piece first, each further piece worth
-        `TRADE_TOP_PICK_PIECE_DECAY` of the one before — what a club giving up a top-3
-        pick believes it received. See the constant."""
+        `TRADE_TOP_PICK_PIECE_DECAY` of the one before — what a club giving up a headline
+        pick believes it received. See `TRADE_HEADLINE_PICK_*`."""
         from constants import TRADE_TOP_PICK_PIECE_DECAY
         total, factor = 0.0, 1.0
         for v in sorted(values, reverse=True):
@@ -1888,14 +1918,12 @@ class TradeMarket:
         # sides at the holder's now-weight cancels it.
         valuer = valuingTeam if valuingTeam is not None else team
         weight = trading.laterWeight(self.nowWeight(valuer))
-        from constants import TRADE_PICK_PROTECTED_SLOTS
         for pick in self.picksOwnedBy(team):
-            # ⚠️ A TOP PICK IN THE UPCOMING DRAFT IS NEVER BUNDLE CHANGE: it can still be
-            # traded on purpose (a move-up, priced on the drop), just not thrown in for
-            # something else. A trade-up's own swap pick travels separately (`bidForPick`),
-            # so this does not stop a club moving up from a protected slot.
-            if (int(pick['season']) == int(self.season)
-                    and int(pick.get('slot') or 99) <= int(TRADE_PICK_PROTECTED_SLOTS)):
+            # ⚠️ A HEADLINE PICK IS NEVER BUNDLE CHANGE: it can still be traded on purpose
+            # (a move-up, priced on the drop), just not thrown in for something else. A
+            # trade-up's own swap pick travels separately (`bidForPick`), so this does not
+            # stop a club moving up from one.
+            if self._isHeadlinePick(team, pick):
                 continue
             out.append({
                 'kind': 'pick',
