@@ -6473,6 +6473,23 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"restoreForOffseasonResume: schedule reload failed: {e}")
         self._restoreFreeAgencyOrder()
+        # ⚠️ This season's records, as the playoff resume already does. Without them every
+        # team read 0-0 for the rest of the offseason (prod, season 8): the standings page,
+        # and the second trade pass, which prices contention and "one player away" off the
+        # record. The rows are written at season end, so they are complete here.
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                teamManager.loadSeasonTeamStats(seasonNumber)
+        except Exception as e:
+            logger.warning(f"restoreForOffseasonResume: team season stats reload failed: {e}")
+        # And each player's finished season, which the season-end step archived in memory
+        # only (stats leaders and the player list read it; prod season 8 showed zeros).
+        try:
+            if self.playerManager:
+                self.playerManager.restoreArchivedSeasonStats(seasonNumber)
+        except Exception as e:
+            logger.warning(f"restoreForOffseasonResume: archived player stats reload failed: {e}")
         # ⚠️ The offseason only exists after the Floos Bowl, so this season HAS a champion,
         # and the fresh Season above knows nothing about it. Without this the header fell
         # back to last season's winner and no team held the reigning-champion flag

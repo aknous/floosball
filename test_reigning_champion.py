@@ -74,8 +74,12 @@ class ReigningChampionTest(unittest.TestCase):
         sm._restoreFreeAgencyOrder = lambda: None
         sm.game_repo = None
         sm.playerManager = types.SimpleNamespace(activePlayers=[])
+        loaded = []
+        sm.serviceContainer.getService('team_manager').loadSeasonTeamStats = loaded.append
         import asyncio
         asyncio.run(sm.restoreForOffseasonResume(8))
+        # Prod, season 8: the same restart left every team 0-0 in the standings.
+        self.assertEqual(loaded, [8], "the offseason resume did not reload team records")
         self.assertEqual([t.id for t in teams if t.floosbowlChampion], [3])
         self.assertIs(sm.currentSeason.champion, teams[2])
         self.assertTrue(sm.currentSeason.isComplete)
