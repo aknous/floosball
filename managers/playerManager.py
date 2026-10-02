@@ -4547,6 +4547,55 @@ class PlayerManager:
         return trading.prospectValue(ceiling, 0, rookieTerm=trading.rookieTermForSkill(ceiling),
                                      positionWeight=posW)
 
+    def rookieNeedValue(self, brain, team, rookie) -> float:
+        """What a rookie is worth to THIS club for what it is MISSING: the same
+        `prospectValue` as the board, but measured above what the club already has at
+        his position instead of above replacement.
+
+        "What it already has" is the higher of its weaker starter there (WR has two
+        slots) and the best ceiling already in its pipeline there. A starter on a walk
+        year or set to retire counts as nobody, because that slot is about to open. Same
+        shape as a trade bid, which prices the upgrade over the man displaced.
+        """
+        import trading
+        from constants import REPLACEMENT_RATING
+        from managers.frontOfficeBrain import positionValue
+        posValue = getattr(getattr(rookie, 'position', None), 'value', None)
+        slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
+        starters = []
+        for slot in slots:
+            p = (getattr(team, 'rosterDict', None) or {}).get(slot)
+            leaving = p is None or getattr(p, 'willRetire', False) or \
+                (getattr(p, 'termRemaining', 99) or 99) <= 1
+            starters.append(float(REPLACEMENT_RATING) if leaving
+                            else float(getattr(p, 'playerRating', 0) or 0))
+        bar = min(starters) if starters else float(REPLACEMENT_RATING)
+        for prospect in getattr(team, 'prospects', None) or []:
+            if getattr(getattr(prospect, 'position', None), 'value', None) == posValue:
+                bar = max(bar, self.rookieCeiling(brain, team, prospect))
+        bar = max(bar, float(REPLACEMENT_RATING))
+        ceiling = self.rookieCeiling(brain, team, rookie)
+        upgrade = max(0.0, ceiling - bar)
+        try:
+            posW = positionValue(rookie)
+        except Exception:
+            posW = trading.averagePositionWeight()
+        return trading.prospectValue(float(REPLACEMENT_RATING) + upgrade, 0,
+                                     rookieTerm=trading.rookieTermForSkill(ceiling),
+                                     positionWeight=posW)
+
+    @staticmethod
+    def rookieNeedWeight(slot: int, draftLength: int) -> float:
+        """How much a pick weighs NEED against asset value (owner, 2026-10-01: early
+        picks take the best player available, and "the further back the draft goes, the
+        more teams draft by need"). 0 through `ROOKIE_DRAFT_BPA_SLOTS`, rising evenly to
+        1 at the last pick."""
+        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        start = int(ROOKIE_DRAFT_BPA_SLOTS)
+        if slot <= start or draftLength <= start:
+            return 0.0
+        return min(1.0, (slot - start) / float(draftLength - start))
+
     def countTeamProspectsAtPosition(self, team, position) -> int:
         """How many prospects this team already holds at a given Position enum."""
         return sum(1 for p in getattr(team, 'prospects', []) if p.position == position)
@@ -4909,10 +4958,15 @@ class PlayerManager:
                     self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
                     -self.countTeamProspectsAtPosition(team, r.position)))
             else:
-                # Tie-break toward the higher ceiling, then a position this club is thin
-                # at, so a pipeline does not stack three quarterbacks who scored alike.
+                # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
+                # `prospectValue` readings, one above replacement and one above what this
+                # club already has, so they blend on one scale. Tie-break toward the
+                # higher ceiling, then a position this club is thin at.
+                needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
                 pick = max(eligible, key=lambda r: (
-                    self.rookieBoardValue(brain, team, r), self.rookieCeiling(brain, team, r),
+                    (1.0 - needW) * self.rookieBoardValue(brain, team, r)
+                    + needW * self.rookieNeedValue(brain, team, r),
+                    self.rookieCeiling(brain, team, r),
                     -self.countTeamProspectsAtPosition(team, r.position)))
             available.remove(pick)
 

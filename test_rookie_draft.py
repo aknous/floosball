@@ -43,6 +43,7 @@ class FakeTeam:
         self.prospects = []
         self.coach = None
         self.numbered = []
+        self.rosterDict = {}
 
     def assignPlayerNumber(self, player):
         self.numbered.append(player)
@@ -88,6 +89,8 @@ class Harness:
     payForfeitedSlot = PlayerManager.payForfeitedSlot
     rookieCeiling = PlayerManager.rookieCeiling
     rookieBoardValue = PlayerManager.rookieBoardValue
+    rookieNeedValue = PlayerManager.rookieNeedValue
+    rookieNeedWeight = staticmethod(PlayerManager.rookieNeedWeight)
 
 
 def _run(rookies, teams, brain=None):
@@ -211,19 +214,64 @@ def test_a_top_pick_passes_on_a_kicker():
     print("PASS a top-3 pick skips the kicker")
 
 
-def test_after_the_top_three_the_board_prices_the_ceiling_above_replacement():
-    """From pick 4 the board is `prospectValue`: ceiling ABOVE REPLACEMENT x position
-    weight. A QB barely above replacement is worth less than a 100-ceiling TE even at
-    TE's lower weight, where the old board (today's rating x position) took the QB."""
-    filler = [FakePlayer(10 + i, 60, Position.RB, f'Filler {i}') for i in range(3)]
-    rookies = filler + [FakePlayer(1, 74, Position.QB, 'Barely QB'),
-                        FakePlayer(2, 70, Position.TE, 'Ninety TE')]
-    ceilings = {'Barely QB': 75, 'Ninety TE': 90}
-    ceilings.update({f'Filler {i}': 99 - i for i in range(3)})    # the top three take these
-    _, events = _run(rookies, _teams(4), StubBrain(lambda p, team: ceilings[p.name]))
-    fourth = [e for e in events if e['type'] == 'pick'][3]
-    assert fourth['playerName'] == 'Ninety TE', fourth
-    print("PASS pick 4 values a 90-ceiling TE over a 75-ceiling QB")
+def _fillersThenChoice(choices, chooserRoster=None, teams=7):
+    """Five high-ceiling fillers taken by the best-available picks 1-5, then the
+    remaining clubs choose among `choices` {name: (position, rating, ceiling)}."""
+    filler = [FakePlayer(10 + i, 60, Position.RB, f'Filler {i}') for i in range(5)]
+    picks = [FakePlayer(20 + i, rating, pos, name)
+             for i, (name, (pos, rating, _)) in enumerate(choices.items())]
+    ceilings = {name: c for name, (_, _, c) in choices.items()}
+    ceilings.update({f'Filler {i}': 99 - i for i in range(5)})
+    clubs = _teams(teams)
+    if chooserRoster is not None:
+        clubs[5].rosterDict = chooserRoster
+    _, events = _run(filler + picks, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    return [e for e in events if e['type'] == 'pick']
+
+
+def test_after_the_top_five_the_board_prices_the_ceiling_above_replacement():
+    """Past the best-available picks the board is `prospectValue`: ceiling ABOVE
+    REPLACEMENT x position weight. A QB barely above replacement is worth less than a
+    90-ceiling TE even at TE's lower weight, where the old board (today's rating x
+    position) took the QB."""
+    picks = _fillersThenChoice({'Barely QB': (Position.QB, 74, 75),
+                                'Ninety TE': (Position.TE, 70, 90)})
+    assert picks[5]['playerName'] == 'Ninety TE', picks[5]
+    print("PASS pick 6 values a 90-ceiling TE over a 75-ceiling QB")
+
+
+def test_need_weight_ramps_from_the_end_of_the_best_available_picks():
+    from constants import ROOKIE_DRAFT_BPA_SLOTS as B
+    w = PlayerManager.rookieNeedWeight
+    assert w(1, 32) == 0.0 and w(B, 32) == 0.0, "the best-available picks ignore need"
+    assert 0.0 < w(B + 1, 32) < w(20, 32) < 1.0, "need grows pick by pick"
+    assert w(32, 32) == 1.0, "the last pick is pure need"
+
+
+def test_a_late_pick_fills_a_hole_over_a_better_asset():
+    """Owner, 2026-10-01: "the further back the draft goes, the more teams draft by
+    need". A club with a 90-rated QB under contract and no RB takes the 85-ceiling RB
+    with its last pick over a 92-ceiling QB who would sit behind its starter. The
+    asset board alone takes the QB (25 points above replacement at 1.00, against 18 at
+    0.78)."""
+    starter = FakePlayer(99, 90, Position.QB, 'Starter QB')
+    starter.termRemaining = 3
+    picks = _fillersThenChoice({'Better QB': (Position.QB, 80, 92),
+                                'Needed RB': (Position.RB, 75, 85)},
+                               chooserRoster={'qb': starter}, teams=6)
+    assert picks[5]['playerName'] == 'Needed RB', picks[5]
+    print("PASS the last pick takes the RB the club is missing")
+
+
+def test_a_walk_year_starter_is_a_hole_coming():
+    """A starter on his last year counts as nobody: that slot is about to open."""
+    starter = FakePlayer(99, 90, Position.QB, 'Walk Year QB')
+    starter.termRemaining = 1
+    picks = _fillersThenChoice({'Better QB': (Position.QB, 80, 92),
+                                'Needed RB': (Position.RB, 75, 85)},
+                               chooserRoster={'qb': starter}, teams=6)
+    assert picks[5]['playerName'] == 'Better QB', picks[5]
+    print("PASS a walk-year starter does not block the QB")
 
 
 # ------------------------------------------------ flags and the aftermath
