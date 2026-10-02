@@ -57,6 +57,10 @@ class StubBrain:
     def decisionValue(self, player, coach=None, rng=None, team=None):
         return self.valueFn(player, team)
 
+    def _ceilingRating(self, player, team=None):
+        # The draft board reads the club's belief about a prospect's CEILING.
+        return self.valueFn(player, team)
+
 
 class Harness:
     def __init__(self, rookies):
@@ -82,6 +86,8 @@ class Harness:
     handOverNextSeasonPick = PlayerManager.handOverNextSeasonPick
     forfeitPayoutFor = PlayerManager.forfeitPayoutFor
     payForfeitedSlot = PlayerManager.payForfeitedSlot
+    rookieCeiling = PlayerManager.rookieCeiling
+    rookieBoardValue = PlayerManager.rookieBoardValue
 
 
 def _run(rookies, teams, brain=None):
@@ -180,6 +186,44 @@ def test_a_tie_goes_to_the_thinner_position():
     pick = next(e for e in events if e['type'] == 'pick')
     assert pick['position'] == 'RB', pick
     print("PASS a tie breaks toward the position the club is thin at")
+
+
+def test_a_top_pick_takes_the_best_prospect_whatever_the_position():
+    """Owner, 2026-10-01: a top-3 pick takes the best player available, by ceiling,
+    position value and need ignored. Production's season-7 #2 took a 75-ceiling QB while
+    a 99-ceiling QB and the class's only 100 (a TE) were still on the board."""
+    rookies = [FakePlayer(1, 72, Position.QB, 'Low Ceiling QB'),
+               FakePlayer(2, 82, Position.TE, 'Hundred TE'),
+               FakePlayer(3, 70, Position.WR, 'Ninety Six WR')]
+    ceilings = {'Low Ceiling QB': 75, 'Hundred TE': 100, 'Ninety Six WR': 96}
+    _, events = _run(rookies, _teams(3), StubBrain(lambda p, team: ceilings[p.name]))
+    picks = [e['playerName'] for e in events if e['type'] == 'pick']
+    assert picks == ['Hundred TE', 'Ninety Six WR', 'Low Ceiling QB'], picks
+    print("PASS the top picks go by ceiling, not by the QB multiplier")
+
+
+def test_a_top_pick_passes_on_a_kicker():
+    rookies = [FakePlayer(1, 80, Position.K, 'Hundred K'), FakePlayer(2, 70, Position.RB, 'Eighty RB')]
+    ceilings = {'Hundred K': 100, 'Eighty RB': 80}
+    _, events = _run(rookies, _teams(1), StubBrain(lambda p, team: ceilings[p.name]))
+    first = next(e for e in events if e['type'] == 'pick')
+    assert first['playerName'] == 'Eighty RB', first
+    print("PASS a top-3 pick skips the kicker")
+
+
+def test_after_the_top_three_the_board_prices_the_ceiling_above_replacement():
+    """From pick 4 the board is `prospectValue`: ceiling ABOVE REPLACEMENT x position
+    weight. A QB barely above replacement is worth less than a 100-ceiling TE even at
+    TE's lower weight, where the old board (today's rating x position) took the QB."""
+    filler = [FakePlayer(10 + i, 60, Position.RB, f'Filler {i}') for i in range(3)]
+    rookies = filler + [FakePlayer(1, 74, Position.QB, 'Barely QB'),
+                        FakePlayer(2, 70, Position.TE, 'Ninety TE')]
+    ceilings = {'Barely QB': 75, 'Ninety TE': 90}
+    ceilings.update({f'Filler {i}': 99 - i for i in range(3)})    # the top three take these
+    _, events = _run(rookies, _teams(4), StubBrain(lambda p, team: ceilings[p.name]))
+    fourth = [e for e in events if e['type'] == 'pick'][3]
+    assert fourth['playerName'] == 'Ninety TE', fourth
+    print("PASS pick 4 values a 90-ceiling TE over a 75-ceiling QB")
 
 
 # ------------------------------------------------ flags and the aftermath
