@@ -1722,6 +1722,36 @@ class PlayerManager:
         except Exception as e:
             logger.error(f"Failed to restore player season stats: {e}")
 
+    def restorePreviousTeams(self, seasonNumber: int) -> None:
+        """Re-stamp `previousTeam` on this offseason's departures after a restart.
+
+        ⚠️ `previousTeam` IS NOT PERSISTED, and it is what `_leftThisTeamThisOffseason`
+        reads to stop a team signing a player it just cut or let walk straight back in the
+        FA draft. Every offseason restart therefore lifted the block for everyone who had
+        left (prod season 8: several deploys between the front-office step and the draft).
+        The recap log has each departure, so it is read back from there. Only free agents
+        with `freeAgentYears == 0` qualify, the same condition the block checks.
+        """
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import SeasonRecapEvent
+            rows = (self.db_session.query(SeasonRecapEvent)
+                    .filter(SeasonRecapEvent.season == seasonNumber,
+                            SeasonRecapEvent.event_type.in_(('walked', 'cut')))
+                    .order_by(SeasonRecapEvent.id).all())
+            leftFrom = {r.player_id: r.team_name for r in rows if r.player_id and r.team_name}
+            restored = 0
+            for player in self.freeAgents:
+                team = leftFrom.get(getattr(player, 'id', None))
+                if team and (getattr(player, 'freeAgentYears', 1) or 0) == 0 \
+                        and not getattr(player, 'previousTeam', None):
+                    player.previousTeam = team
+                    restored += 1
+            logger.info(f"Restored previous team for {restored} free agents who left this offseason")
+        except Exception as e:
+            logger.error(f"Failed to restore previous teams: {e}")
+
     def restoreArchivedSeasonStats(self, seasonNumber: int) -> None:
         """Rebuild this season's `seasonStatsArchive` entry from `PlayerSeasonStats` after an
         offseason restart. Add-only: a player already holding an entry for the season is

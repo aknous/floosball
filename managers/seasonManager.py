@@ -6491,6 +6491,8 @@ class SeasonManager:
         try:
             if self.playerManager:
                 self.playerManager.restoreArchivedSeasonStats(seasonNumber)
+                # And who left whom, which blocks a team re-signing a player it just let go.
+                self.playerManager.restorePreviousTeams(seasonNumber)
         except Exception as e:
             logger.warning(f"restoreForOffseasonResume: archived player stats reload failed: {e}")
         # ⚠️ The offseason only exists after the Floos Bowl, so this season HAS a champion,
