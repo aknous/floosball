@@ -37,13 +37,13 @@ def _p(pid, rating, pos=Position.QB, ceiling=None, rookie=False):
 
 
 def test_a_better_internal_replacement_lets_the_incumbent_walk():
-    bolt = _p(1, 74)
+    bolt = _p(1, 78)    # above the star floor, so only the internal option decides
     assert Brain().chooseResigns([bolt], 2) == [bolt]
     assert Brain().chooseResigns([bolt], 2, internal=[_p(2, 93, rookie=True)]) == []
 
 
 def test_a_weaker_internal_option_changes_nothing():
-    bolt = _p(1, 74)
+    bolt = _p(1, 78)
     assert Brain().chooseResigns([bolt], 2, internal=[_p(2, 70, rookie=True)]) == [bolt]
 
 

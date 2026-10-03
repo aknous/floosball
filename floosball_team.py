@@ -441,9 +441,16 @@ class Team:
         the facility that drives it, at the team's current level. Replaces the
         old FUNDING_* market-tier lookups. Returns 0 when unbuilt/unknown."""
         from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
+        # Calibration switch (FLOOS_FACILITY_FORCE): the named facilities (comma-separated,
+        # or 'all') read level 5 on even-id teams and level 0 on odd-id ones, so the win gap
+        # between the halves is what those facilities are worth. Off unless set.
+        import os
+        forced = os.environ.get('FLOOS_FACILITY_FORCE')
         for key, cfg in FACILITY_CATALOG.items():
             if cfg.get('effect') == effectType:
                 level = max(0, min(FACILITY_MAX_LEVEL, (self.facilities or {}).get(key, 0)))
+                if forced and (forced == 'all' or key in forced.split(',')):
+                    level = FACILITY_MAX_LEVEL if (getattr(self, 'id', 0) or 0) % 2 == 0 else 0
                 levels = cfg.get('levels') or []
                 return levels[level] if level < len(levels) else (levels[-1] if levels else 0)
         return 0

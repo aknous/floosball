@@ -173,7 +173,8 @@ def test_resign_is_comparative_not_best_available():
     sharp = FakeCoach(scouting=100)
 
     goodButReplaceable = FakePlayer('Starter QB', 85, position=Position.QB)
-    modestButIrreplaceable = FakePlayer('Starter TE', 74, position=Position.TE)
+    # 78, not a 2-star: under 76 a player walks on the star floor alone (FO_RESIGN_MIN_RATING).
+    modestButIrreplaceable = FakePlayer('Starter TE', 78, position=Position.TE)
 
     kept = brain.chooseResigns(
         [goodButReplaceable, modestButIrreplaceable], limit=2, coach=sharp)
@@ -181,7 +182,7 @@ def test_resign_is_comparative_not_best_available():
 
     assert 'Starter TE' in keptNames, keptNames
     assert 'Starter QB' not in keptNames, keptNames
-    print("PASS re-sign is comparative (replaceable 85 QB walks, 74 TE kept)")
+    print("PASS re-sign is comparative (replaceable 85 QB walks, 78 TE kept)")
 
 
 def test_resign_respects_the_limit():
@@ -201,7 +202,7 @@ def test_retiring_free_agents_are_not_a_replacement():
     retiring = FakePlayer('FA', 95, position=Position.TE, willRetire=True)
     brain = FrontOfficeBrain(FakePlayerManager(freeAgents=[retiring]))
     sharp = FakeCoach(scouting=100)
-    incumbent = FakePlayer('Starter', 75, position=Position.TE)
+    incumbent = FakePlayer('Starter', 78, position=Position.TE)
 
     kept = brain.chooseResigns([incumbent], limit=2, coach=sharp)
     assert [p.name for p in kept] == ['Starter']
@@ -235,6 +236,23 @@ def test_pick_depth_saves_the_franchise_player():
     print("PASS pick depth: 85 QB walks picking first, is kept with 4 clubs ahead")
 
 
+def test_a_two_star_walks_unless_he_is_rising():
+    """Owner, 2026-10-03: GMs do not re-sign low-star players and take a chance in free
+    agency or the draft instead, "except rising players"."""
+    brain = FrontOfficeBrain(FakePlayerManager(freeAgents=[]))
+    sharp = FakeCoach(scouting=100)
+    twoStar = FakePlayer('Two Star', 72, position=Position.TE)
+    assert brain.chooseResigns([twoStar], limit=2, coach=sharp) == []
+
+    rising = FakePlayer('Rising', 72, position=Position.TE)
+    brain.classifyArc = lambda p: 'developing' if p is rising else 'prime'
+    rising.computeExpectedRating = lambda: 84
+    brain._ceilingRating = lambda p, team=None: 88
+    assert brain.worthResigningOnStars(rising, sharp)
+    assert not brain.worthResigningOnStars(twoStar, sharp)
+    print("PASS a 2-star walks, a rising 2-star projected to 3 stars can stay")
+
+
 def test_pick_depth_scales_with_fa_order():
     """Early pickers shop the top of the board; late pickers see leftovers."""
     brain = _brain()
@@ -252,11 +270,12 @@ def test_picked_clean_position_keeps_incumbent():
     replace the incumbent with, so he must be kept."""
     pool = [FakePlayer('FA0', 95, position=Position.TE)]
     brain = FrontOfficeBrain(FakePlayerManager(freeAgents=pool))
-    incumbent = FakePlayer('Starter', 70, position=Position.TE)
+    incumbent = FakePlayer('Starter', 80, position=Position.TE)
 
     # ⚠️ `teamsAhead`, not `pickDepth` — see the note in the pick-depth test above.
     # Nine clubs picking first will almost certainly have taken the only TE in the pool,
-    # so nobody better survives and the 70 is worth keeping.
+    # so nobody better survives and the 80 is worth keeping (a 70 would now walk on the
+    # star floor alone, FO_RESIGN_MIN_RATING).
     kept = brain.chooseResigns([incumbent], limit=2,
                                coach=FakeCoach(scouting=100), pickDepth=9, teamsAhead=9)
     assert [p.name for p in kept] == ['Starter']

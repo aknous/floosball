@@ -2876,6 +2876,26 @@ FO_DECLINE_MAX = 0.40             # cap so an ancient vet never projects to noth
 # by this margin (in value points). Slots then go to the biggest surpluses
 # first, so a team spends them where the incumbent genuinely wins.
 FO_RESIGN_SURPLUS_MARGIN = 0.5
+# ⚠️ A WALK-YEAR PLAYER UNDER 3 STARS IS NOT RE-SIGNED (owner, 2026-10-03: "not
+# re-signing low star rated players and take a chance with FA or rookie draft to
+# improve"). Rated under this (2 stars or fewer) he walks, and the slot goes to free
+# agency, a promoted prospect or the draft. The one exception is a DEVELOPING player the
+# team projects to this rating or better (owner: "except rising players"). The value is
+# the 3-star line, `PlayerTier.TierB`. In season 8 this would have let 17 of 52 re-signs
+# walk.
+FO_RESIGN_MIN_RATING = 76
+
+# ⚠️ CLEAR FAN RATINGS DECIDE (owner, 2026-10-03: "make sure that fan ratings play a role
+# in cut/re-sign decisions"). Sentiment is the player's own team's fans' average rating
+# mapped onto -1..+1 (`normalizeSentiment`: 3 is 0), so 0.5 is an average of 4 and -0.5
+# an average of 2. At or above KEEP his fans want him: he is re-signed ahead of anyone
+# else (under 3 stars too) and cannot be cut. At or below WALK they want him gone: he
+# is not re-signed and is first in line for a cut. In between, the GM's own
+# sentiment tilt applies as before.
+# ⚠️ NO RATINGS IS NO VERDICT, NOT A ZERO (owner): a player below his team's rater quorum
+# is absent from the sentiment map and neither rule applies to him.
+FAN_VERDICT_KEEP_SENTIMENT = 0.5
+FAN_VERDICT_WALK_SENTIMENT = -0.5
 
 # Cut-for-upgrade. A GM cuts a player under contract only when the replacement
 # it can REALISTICALLY sign beats them by this margin in value points. Bigger

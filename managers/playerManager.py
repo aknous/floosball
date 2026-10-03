@@ -85,10 +85,41 @@ def wasPromotedThisOffseason(player, season) -> bool:
         return False
 
 
+# The fan sentiment the GM brain read this offseason ({playerId: -1..+1}, quorum-gated),
+# published by `seasonManager._foBrainForOffseason` so every cut path sees the same
+# verdicts through `isCutProtected`.
+_fanSentiment: dict = {}
+
+
+def setFanSentiment(sentimentMap) -> None:
+    global _fanSentiment
+    _fanSentiment = dict(sentimentMap or {})
+
+
+def fanVerdict(player, sentimentMap=None):
+    """'keep', 'walk' or None: what this player's own team's fans have clearly said.
+
+    ⚠️ NO RATINGS IS NO VERDICT (owner, 2026-10-03: "if a player has no ratings, that
+    cant be interpreted as a 0 rating"). The map holds only players whose fans met their
+    team's rater quorum; anyone absent gets None and the normal logic decides."""
+    from constants import FAN_VERDICT_KEEP_SENTIMENT, FAN_VERDICT_WALK_SENTIMENT
+    pid = getattr(player, 'id', None)
+    source = _fanSentiment if sentimentMap is None else sentimentMap
+    if pid is None or pid not in source:
+        return None
+    sentiment = float(source[pid] or 0.0)
+    if sentiment >= FAN_VERDICT_KEEP_SENTIMENT:
+        return 'keep'
+    if sentiment <= FAN_VERDICT_WALK_SENTIMENT:
+        return 'walk'
+    return None
+
+
 def isCutProtected(player, season) -> bool:
     """May this rostered player NOT be cut? The one predicate every cut path reads.
 
-    Two rules:
+    Three rules:
+      - his own fans clearly want him (`fanVerdict` 'keep', average 4+);
       - promoted in this same offseason (`wasPromotedThisOffseason`);
       - ⚠️ STILL ON HIS PROMOTION CONTRACT (`onProspectContract`, owner 2026-09-27): a
         promoted prospect can only stay rostered or be traded, never cut, until that
@@ -100,6 +131,9 @@ def isCutProtected(player, season) -> bool:
     if player is None:
         return False
     if getattr(player, 'onProspectContract', False):
+        return True
+    # A player his own fans clearly want (average 4+) cannot be cut (owner, 2026-10-03).
+    if fanVerdict(player) == 'keep':
         return True
     return wasPromotedThisOffseason(player, season)
 

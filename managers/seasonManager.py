@@ -8285,6 +8285,9 @@ class SeasonManager:
                            f"valuing on attributes alone: {e}")
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
                                  performanceMap=performanceMap)
+        # Every cut path reads fan verdicts through `isCutProtected`; give it this read.
+        from managers.playerManager import setFanSentiment
+        setFanSentiment(sentimentMap)
         # ⚠️ STAMP WHERE IN THE CALENDAR THIS BRAIN IS STANDING, or a prospect's ceiling
         # is read under the wrong seed and the GM's belief diverges from the band the
         # FANS ARE SHOWN — the exact divergence `_ceilingRating` reads the belief to
