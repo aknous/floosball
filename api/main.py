@@ -8458,9 +8458,10 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
         # they are the same number, and further back it reads as how the deal has aged. Do
         # not relabel it "rating at trade" without actually storing one.
         ratingById = _ratingsByPlayerId()
+        pickOrigins = _pickOriginsFor(session, trades, teamBlob)
 
         def withRatings(assets):
-            return _tradeAssetsWithRatings(assets, ratingById)
+            return _tradeAssetsWithRatings(assets, ratingById, pickOrigins)
 
         tradeRows = [{
             "id": t.id, "week": t.week, "phase": t.phase,
@@ -8537,7 +8538,9 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             from managers.tradeManager import TradeMarket
             brain = sm._foBrainForOffseason()
             brain.season, brain.week = season, week or 1
-            market = TradeMarket(floosball_app.playerManager, tm, brain, season, windowWeek)
+            orderIds, _final, _from = _rookieDraftOrder()
+            market = TradeMarket(floosball_app.playerManager, tm, brain, season, windowWeek,
+                                 draftOrder=orderIds)
             for team in getattr(tm, 'teams', None) or []:
                 for listing in market.listingsFor(team):
                     block.append({
@@ -8589,8 +8592,15 @@ def _ratingsByPlayerId() -> dict:
     return out
 
 
-def _tradeAssetsWithRatings(assets, ratingById) -> list:
-    """A trade manifest side with each player/prospect's current rating attached."""
+def _tradeAssetsWithRatings(assets, ratingById, pickOrigins=None) -> list:
+    """A trade manifest side with each player/prospect's current rating attached, and each
+    pick's ORIGINAL team (`pickOrigins`, from `_pickOriginsFor`).
+
+    ⚠️ A PICK IS NAMED BY WHOSE PICK IT IS. The manifest names every pick "S8 R1 pick",
+    which cannot say whether it is the seller's own or one it acquired: reported on prod as
+    the Melons appearing to receive a pick the Strangers never sent, when it was the Rocks'
+    pick the Strangers had bought a season earlier. Read from `draft_picks` at serve time,
+    so every trade already in the table is labeled too."""
     out = []
     for a in (assets or []):
         a = dict(a)
@@ -8598,8 +8608,31 @@ def _tradeAssetsWithRatings(assets, ratingById) -> list:
             rating = ratingById.get(a.get('id'))
             if rating:
                 a['rating'] = rating
+        elif a.get('kind') == 'pick' and pickOrigins:
+            origin = pickOrigins.get(a.get('id'))
+            if origin:
+                a['originalTeam'] = origin
         out.append(a)
     return out
+
+
+def _pickOriginsFor(session, trades, teamBlob) -> dict:
+    """{pickId: original team blob} for every pick piece in these trades, in one query."""
+    from database.models import DraftPick
+    ids = set()
+    for t in trades:
+        for side in ('aGave', 'bGave'):
+            for a in ((t.assets_json or {}).get(side) or []):
+                if a.get('kind') == 'pick' and a.get('id') is not None:
+                    ids.add(a.get('id'))
+    if not ids:
+        return {}
+    try:
+        rows = session.query(DraftPick.id, DraftPick.original_team_id).filter(
+            DraftPick.id.in_(ids)).all()
+    except Exception:
+        return {}
+    return {pid: teamBlob(orig) for pid, orig in rows if orig is not None}
 
 
 def _rookieDraftOrder() -> tuple:
@@ -8616,31 +8649,15 @@ def _rookieDraftOrder() -> tuple:
     non-qualifiers (`standings_view.seedLeague`) before the qualifiers, each group by
     `seeding.draftOrderKey`. `final` is True once every team is in the real order.
     """
-    from seeding import draftOrderKey
+    from standings_view import projectedDraftOrder
     sm = floosball_app.seasonManager if floosball_app else None
     tm = floosball_app.teamManager if floosball_app else None
     teams = [t for t in (getattr(tm, 'teams', None) or []) if getattr(t, 'id', None) is not None]
-    byId = {t.id: t for t in teams}
     playoffSlotsFrom = len(teams) - len(teams) // 2 + 1
-    known = []
-    for t in (getattr(getattr(sm, 'currentSeason', None), 'freeAgencyOrder', None) or []):
-        tid = getattr(t, 'id', None)
-        if tid in byId and tid not in known:
-            known.append(tid)
-    rest = [t for t in teams if t.id not in set(known)]
-    if known:
-        tail = sorted(rest, key=draftOrderKey)
-    else:
-        qualified = set()
-        try:
-            from standings_view import seedLeague
-            for lg in (floosball_app.leagueManager.leagues or []):
-                qualified |= set((seedLeague(list(lg.teamList), []) or {}).get('seeds', {}).keys())
-        except Exception:
-            qualified = set()
-        tail = (sorted((t for t in rest if t.id not in qualified), key=draftOrderKey)
-                + sorted((t for t in rest if t.id in qualified), key=draftOrderKey))
-    return known + [t.id for t in tail], not rest, playoffSlotsFrom
+    ids, final = projectedDraftOrder(
+        teams, getattr(getattr(floosball_app, 'leagueManager', None), 'leagues', None),
+        getattr(getattr(sm, 'currentSeason', None), 'freeAgencyOrder', None))
+    return ids, final, playoffSlotsFrom
 
 
 @app.get("/api/draft/class")
@@ -8887,6 +8904,7 @@ def get_team_trades(team_id: int, limit: int = Query(default=40, ge=1, le=200)):
         trades = (session.query(Trade)
                   .filter(or_(Trade.team_a_id == team_id, Trade.team_b_id == team_id))
                   .order_by(Trade.id.desc()).limit(limit).all())
+        pickOrigins = _pickOriginsFor(session, trades, teamBlob)
         rows = []
         for t in trades:
             assets = t.assets_json or {}
@@ -8898,8 +8916,8 @@ def get_team_trades(team_id: int, limit: int = Query(default=40, ge=1, le=200)):
             rows.append({
                 "id": t.id, "season": t.season, "week": t.week, "phase": t.phase,
                 "partner": teamBlob(t.team_b_id if isA else t.team_a_id),
-                "gave": _tradeAssetsWithRatings(gave, ratingById),
-                "got": _tradeAssetsWithRatings(got, ratingById),
+                "gave": _tradeAssetsWithRatings(gave, ratingById, pickOrigins),
+                "got": _tradeAssetsWithRatings(got, ratingById, pickOrigins),
                 "why": why,
                 "trigger": getattr(t, 'trigger', None),
                 # Both teams' forced moves, each naming its team: the partner's cut or
