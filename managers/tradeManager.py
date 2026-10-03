@@ -143,12 +143,16 @@ class TradeMarket:
     reason `_foBrainForOffseason` rebuilds each offseason.
     """
 
-    def __init__(self, playerManager, teamManager, brain, season: int, week=None):
+    def __init__(self, playerManager, teamManager, brain, season: int, week=None,
+                 draftOrder=None):
         self.playerManager = playerManager
         self.teamManager = teamManager
         self.brain = brain
         self.season = season
         self.week = week            # None = an offseason pass
+        # Team ids in this draft's slot order (`standings_view.projectedDraftOrder`), so a
+        # pick is priced at the slot the draft will use. None falls back to win% alone.
+        self.draftOrder = list(draftOrder) if draftOrder else None
         self._contention = {}
         self._leagueMean = 0.0
         # Cached per pass: the sweep asks for it once per listing and once per bid.
@@ -2168,7 +2172,16 @@ class TradeMarket:
             session.close()
 
     def _draftOrderPositions(self) -> dict:
-        """{teamId: slot}, worst record first — the order the draft will use."""
+        """{teamId: slot}, the order the draft will use.
+
+        ⚠️ THE DRAFT'S OWN ORDER WHEN THE CALLER PASSES IT. This sorted the league by win%
+        alone, which ignores the playoffs (non-qualifiers pick first, then each round's
+        losers) and the point-differential tiebreak: on prod in the season-8 offseason the
+        Rocks' pick (12-16) was priced and labeled as #8 when the real, already-final order
+        had it at #10. The win% read stays only as the fallback for callers with no order.
+        """
+        if self.draftOrder:
+            return {tid: i + 1 for i, tid in enumerate(self.draftOrder)}
         teams = list(getattr(self.teamManager, 'teams', None) or [])
         ranked = sorted(teams, key=lambda t: self._contention.get(getattr(t, 'id', None), 0.5))
         return {getattr(t, 'id', None): i + 1 for i, t in enumerate(ranked)}
@@ -2193,7 +2206,8 @@ class TradeMarket:
         return max(clearing, key=lambda b: b.value)
 
 
-def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> list:
+def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
+                  draftOrder=None) -> list:
     """One pass of the market. Returns the settled trades as manifests.
 
     ⚠️ SETTLED SEQUENTIALLY, RE-VALIDATING EACH REMAINING ACCEPTED TRADE AGAINST THE NEW
@@ -2210,7 +2224,8 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> 
     if not tradeWindowOpen(week):
         return []
 
-    market = TradeMarket(playerManager, teamManager, brain, season, week)
+    market = TradeMarket(playerManager, teamManager, brain, season, week,
+                         draftOrder=draftOrder)
     settled = []
     bidsUsed = {}
 

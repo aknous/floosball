@@ -639,3 +639,37 @@ def buildFormAndMovement(session, season: int,
             'rankLastWeek': rankLastWeek.get(teamId),
         }
     return out
+
+
+def projectedDraftOrder(teams, leagues, knownOrder) -> tuple:
+    """(teamIds worst-first, final) for the upcoming rookie draft. ONE definition, shared by
+    the transactions page and the trade market, so a pick is priced at the slot fans see.
+
+    ⚠️ THE REAL ORDER WHERE IT EXISTS. From the end of the regular season the sim builds
+    `freeAgencyOrder` itself (`knownOrder`): the non-playoff teams, then each playoff
+    round's losers as they go out, then the Floos Bowl runner-up and champion. Teams it
+    has not reached yet are PROJECTED with the same rules: projected non-qualifiers
+    (`seedLeague`) before qualifiers, each group by `seeding.draftOrderKey`. `final` is
+    True once every team is in the real order.
+    """
+    from seeding import draftOrderKey
+    teams = [t for t in (teams or []) if getattr(t, 'id', None) is not None]
+    byId = {t.id: t for t in teams}
+    known = []
+    for t in (knownOrder or []):
+        tid = getattr(t, 'id', None)
+        if tid in byId and tid not in known:
+            known.append(tid)
+    rest = [t for t in teams if t.id not in set(known)]
+    if known:
+        tail = sorted(rest, key=draftOrderKey)
+    else:
+        qualified = set()
+        try:
+            for lg in (leagues or []):
+                qualified |= set((seedLeague(list(lg.teamList), []) or {}).get('seeds', {}).keys())
+        except Exception:
+            qualified = set()
+        tail = (sorted((t for t in rest if t.id not in qualified), key=draftOrderKey)
+                + sorted((t for t in rest if t.id in qualified), key=draftOrderKey))
+    return known + [t.id for t in tail], not rest

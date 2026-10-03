@@ -8039,6 +8039,22 @@ class SeasonManager:
                     except Exception as e:
                         logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
 
+    def _draftOrderIds(self) -> list:
+        """The upcoming rookie draft's order as team ids: the real order once the sim has
+        built it, projected before that (`standings_view.projectedDraftOrder`, the same
+        reader the transactions page uses)."""
+        try:
+            from standings_view import projectedDraftOrder
+            teamManager = self.serviceContainer.getService('team_manager')
+            leagues = getattr(getattr(self, 'leagueManager', None), 'leagues', None)
+            ids, _final = projectedDraftOrder(
+                getattr(teamManager, 'teams', None),
+                leagues, getattr(self.currentSeason, 'freeAgencyOrder', None))
+            return ids
+        except Exception as e:
+            logger.warning(f"Draft order unavailable for the trade market: {e}")
+            return []
+
     def _runTradePass(self, week: int) -> list:
         """One weekly pass of the trade market. Best-effort — ⚠️ NOTHING HERE MAY BREAK A
         WEEK, which is the lesson `_publishGameNews` already taught: its first version
@@ -8066,7 +8082,8 @@ class SeasonManager:
             brain = self._foBrainForOffseason()
             brain.season, brain.week = season, int(week or 1)
             accepted = tradeManager.runWeeklyPass(
-                self.playerManager, teamManager, brain, season, week)
+                self.playerManager, teamManager, brain, season, week,
+                draftOrder=self._draftOrderIds())
             settled = []
             for entry in accepted:
                 # ⚠️ SEQUENTIAL, RE-VALIDATING AGAINST THE STATE THE LAST ONE LEFT. Within
@@ -8132,7 +8149,8 @@ class SeasonManager:
             # `week=None` is what tells the valuation this is the offseason: whole
             # seasons of control, and contention at parity.
             for entry in tradeManager.runWeeklyPass(
-                    self.playerManager, teamManager, brain, season, None):
+                    self.playerManager, teamManager, brain, season, None,
+                    draftOrder=self._draftOrderIds()):
                 # ⚠️ A PICK TRADE HAS ITS OWN SETTLEMENT — nobody is displaced, nothing
                 # is cut and no slot is backfilled, so `settleTrade`'s roster ordering does
                 # not apply to it at all.
