@@ -6491,6 +6491,8 @@ class SeasonManager:
         try:
             if self.playerManager:
                 self.playerManager.restoreArchivedSeasonStats(seasonNumber)
+                # And who left whom, which blocks a team re-signing a player it just let go.
+                self.playerManager.restorePreviousTeams(seasonNumber)
         except Exception as e:
             logger.warning(f"restoreForOffseasonResume: archived player stats reload failed: {e}")
         # ⚠️ The offseason only exists after the Floos Bowl, so this season HAS a champion,
@@ -8862,6 +8864,13 @@ class SeasonManager:
             'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
         }
         cutTally = 0
+        # Which slots of THIS draft each club owns (slot k = the k-th pick), traded picks
+        # included: the same reader the draft itself uses.
+        try:
+            slotOwners = [owner for _original, owner in self._rookieDraftSlots(list(faOrder or []))]
+        except Exception as e:
+            slotOwners = []
+            logger.debug(f"draft slots unavailable for retention: {e}")
 
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
@@ -8892,9 +8901,17 @@ class SeasonManager:
             # decision asks how likely a better player survives to this club's pick, and
             # with teamsAhead defaulting to 0 every club believes it picks first, so
             # nobody is ever worth keeping over the market.
+            # The club's own replacements: its prospects, and the rookies it will take
+            # with a top pick in this draft (`slotOwners`, read once above the loop).
+            internal = [pr for pr in (getattr(team, 'prospects', None) or [])
+                        if getattr(pr, 'is_prospect', False)]
+            try:
+                internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
+            except Exception as e:
+                logger.debug(f"expected draftees unavailable for {team.name}: {e}")
             kept = brain.chooseResigns(expiring, limit, coach=coach,
                                        pickDepth=pickDepth, team=team,
-                                       teamsAhead=teamsAhead)
+                                       teamsAhead=teamsAhead, internal=internal)
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds

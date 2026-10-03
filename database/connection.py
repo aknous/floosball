@@ -64,6 +64,8 @@ def init_db():
     _backfillProspectContracts()
     _backfillTradeMoves()
     _reconcileTeamTitles()
+    _releaseResignedPlayer('undo_resign_bolt_newtonian_s8', playerId=209,
+                           name='Bolt Newtonian', teamId=1, season=8)
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -3918,6 +3920,61 @@ def _backfillProspectContracts():
 
 _TRADE_MOVES_MARKER = 'trade_moves_backfilled'
 _POSITION_BY_NAME = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+
+
+def _releaseResignedPlayer(marker, playerId, name, teamId, season):
+    """ONE-SHOT, owner-directed: undo a re-sign this offseason and let the player walk,
+    exactly as contract expiry would have.
+
+    Season 8 (owner, 2026-10-02): the Strangers re-signed Bolt Newtonian (74 QB) for three
+    seasons while holding the #1 pick with two top QB prospects in the class. Re-sign
+    decisions did not see the team's own draft then (see `rankResignCandidates(internal=)`),
+    and cutting him now would cost a fee for a contract signed hours earlier, so the owner
+    asked for the re-sign to be undone instead.
+
+    Runs at boot, before players load, because the live process holds rosters in memory
+    and would write a direct database edit straight back. Guarded so it can only ever
+    touch the state it was written for: the player still on that team on the re-signed
+    contract, the season's offseason still before the FA draft. Otherwise it marks itself
+    done and changes nothing.
+    """
+    import json
+    from sqlalchemy import text
+    from database.models import AppSetting
+    session = SessionLocal()
+    try:
+        if session.query(AppSetting).filter_by(key=marker).first():
+            return
+        row = session.execute(text(
+            'SELECT name, team_id, term_remaining FROM players WHERE id = :id'),
+            {'id': playerId}).fetchone()
+        state = session.execute(text(
+            'SELECT current_season, in_offseason, offseason_completed_steps '
+            'FROM simulation_state WHERE id = 1')).fetchone()
+        resign = session.execute(text(
+            "SELECT id FROM season_recap_events WHERE season = :s AND player_id = :p "
+            "AND event_type = 'resign'"), {'s': season, 'p': playerId}).fetchone()
+        steps = set(json.loads(state[2] or '[]')) if state else set()
+        ok = (row is not None and row[0] == name and row[1] == teamId
+              and state is not None and state[0] == season and state[1]
+              and 'fa_draft' not in steps and resign is not None)
+        if ok:
+            session.execute(text(
+                'UPDATE players SET team_id = NULL, term_remaining = 0, team_resign_count = 0, '
+                'free_agent_years = 0 WHERE id = :id'), {'id': playerId})
+            session.execute(text(
+                "UPDATE season_recap_events SET event_type = 'walked', detail = NULL "
+                "WHERE id = :id"), {'id': resign[0]})
+            logger.info(f"Released {name} to free agency (re-sign undone, season {season})")
+        else:
+            logger.info(f"{marker}: state no longer matches, left unchanged")
+        session.add(AppSetting(key=marker, value='1'))
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"{marker} skipped: {e}")
+    finally:
+        session.close()
 
 
 def _reconcileTeamTitles():
