@@ -64,8 +64,8 @@ def init_db():
     _backfillProspectContracts()
     _backfillTradeMoves()
     _reconcileTeamTitles()
-    _releaseResignedPlayer('undo_resign_bolt_newtonian_s8', playerId=209,
-                           name='Bolt Newtonian', teamId=1, season=8)
+    _releaseResignedPlayer('undo_resign_flash_bobby_s8', playerId=13,
+                           name='Flash Bobby', teamId=7, season=8)
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -3926,11 +3926,11 @@ def _releaseResignedPlayer(marker, playerId, name, teamId, season):
     """ONE-SHOT, owner-directed: undo a re-sign this offseason and let the player walk,
     exactly as contract expiry would have.
 
-    Season 8 (owner, 2026-10-02): the Strangers re-signed Bolt Newtonian (74 QB) for three
-    seasons while holding the #1 pick with two top QB prospects in the class. Re-sign
-    decisions did not see the team's own draft then (see `rankResignCandidates(internal=)`),
-    and cutting him now would cost a fee for a contract signed hours earlier, so the owner
-    asked for the re-sign to be undone instead.
+    Season 8 (owner, 2026-10-02): the Beans re-signed Flash Bobby (65 QB) for one season
+    while holding the #2 pick with two top QB prospects in the class (the Strangers'
+    Bolt Newtonian was released the same way). Re-sign decisions did not see the team's
+    own draft then (see `rankResignCandidates(internal=)`), and the owner does not want
+    a player signed and then cut in the same offseason, so the re-sign is undone instead.
 
     Runs at boot, before players load, because the live process holds rosters in memory
     and would write a direct database edit straight back. Guarded so it can only ever
