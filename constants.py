@@ -3099,7 +3099,12 @@ REPLACEMENT_RATING = 67.0
 # ⚠️ ON AS OF 2026-09-17 (owner), so the first offseason after production's week 22 runs
 # with a live market. It shipped False while the market was being measured, matching
 # RULE_VOTE_ENABLED / WEATHER_ENABLED / RUNNER_MOVE_ENABLED.
-TRADING_ENABLED = True
+# ⚠️ OFF AGAIN AS OF 2026-10-03 (owner): fans were frustrated by this offseason's trades
+# (the Waffles bought a prospect with picks and flipped him for a declining veteran within
+# the same pass). Trading is off and every trade surface is hidden while it is off
+# (`api.main._tradesHidden`), the season-8 trades that reverse cleanly were undone, and
+# every unused pick went back to its original team (`connection._revertSeason8Trades`).
+TRADING_ENABLED = False
 
 
 def tradingEnabled(session=None) -> bool:

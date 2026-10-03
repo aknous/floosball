@@ -5052,7 +5052,10 @@ class PlayerManager:
                 # positions it had room for, which is knowable only on the clock. See
                 # `findPickBuyer`.
                 buyer, buyerEligible = (None, None)
-                if season is not None:
+                # With trading off the slot is not sold for a future pick: it is skipped
+                # and the team is compensated (below).
+                from constants import tradingEnabled
+                if season is not None and tradingEnabled():
                     try:
                         buyer, buyerEligible = self.findPickBuyer(
                             team, available, leagueTeams or draftOrder, season,

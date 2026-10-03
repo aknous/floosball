@@ -3387,6 +3387,8 @@ async def get_league_news_recent(
         session = get_session()
         try:
             q = session.query(LeagueNewsItem)
+            if _tradesHidden():
+                q = q.filter(LeagueNewsItem.category != 'trade')
             seasonMgr = floosball_app.seasonManager
             cs = seasonMgr.currentSeason
             if season is not None:
@@ -4287,11 +4289,12 @@ def get_season_recap(response: Response = None):
 
         events = (session.query(SeasonRecapEvent)
                   .filter_by(season=target).order_by(SeasonRecapEvent.id).all())
+        hideTrades = _tradesHidden()
         transactions = [{
             "type": e.event_type, "teamId": e.team_id, "teamAbbr": e.team_abbr,
             "teamName": e.team_name, "playerId": e.player_id, "playerName": e.player_name,
             "position": e.position, "rating": e.rating, "tier": e.tier, "detail": e.detail,
-        } for e in events]
+        } for e in events if not (hideTrades and e.event_type == 'trade')]
 
         ftCache: dict = {}
         def _enrich(board):
@@ -7548,6 +7551,8 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             }
         draftOrder.append(row)
     transactions = getattr(sm, '_offseasonTransactions', [])
+    if _tradesHidden():
+        transactions = [t for t in transactions if t.get('type') != 'trade']
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
     faWindowEnd = getattr(sm, '_faWindowEnd', None)
     # Always include FA pool during offseason so ballot rank markers work after window closes
@@ -8341,6 +8346,8 @@ def get_recent_transactions(response: Response):
     happen". It empties itself at the rollover with no state to track and nothing to mark
     as read.
     """
+    if _tradesHidden():
+        return build_success_response({"trades": 0})
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     from database.connection import get_session
@@ -8390,6 +8397,8 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     ones that make the page worth visiting outside the trade window. "These 33 players are
     leaving for nothing unless someone moves" is a story every week of the season.
     """
+    if _tradesHidden():
+        raise HTTPException(404, "Not found")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON, GM_ACTIVE_WEEK
@@ -8879,6 +8888,8 @@ def get_team_trades(team_id: int, limit: int = Query(default=40, ge=1, le=200)):
     bought). The league-wide page (`/api/transactions`) shows the current season only; a
     team page is where the whole ledger belongs.
     """
+    if _tradesHidden():
+        raise HTTPException(404, "Not found")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     from database.connection import get_session
@@ -8963,6 +8974,8 @@ def get_team_picks(team_id: int):
     exists. A future draft's order depends on a season not yet played, so its slot would
     be invented.
     """
+    if _tradesHidden():
+        raise HTTPException(404, "Not found")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     from database.connection import get_session
@@ -11664,13 +11677,25 @@ def _regularSeasonWeeksPlayed(seasonNumber: int) -> Optional[int]:
         return None
 
 
+def _tradesHidden() -> bool:
+    """Every trade surface is hidden while trading is off (owner, 2026-10-03: "scrub the
+    site of trades altogether"): the Transactions page and its endpoints, the team page's
+    trades and picks, trade news and the recap's trade rows. The records stay in the
+    database, so turning trading back on brings them back."""
+    from constants import tradingEnabled
+    try:
+        return not tradingEnabled()
+    except Exception:
+        return True
+
+
 def _transactionsAvailable(cs) -> bool:
     """Whether the Transactions page is open: from the week the in-season trade window
     opens, through the deadline, the playoffs and the offseason. Closed before that."""
     import trading
     from constants import TRADE_MIN_CERTAINTY
     sm = floosball_app.seasonManager if floosball_app else None
-    if cs is None:
+    if cs is None or _tradesHidden():
         return False
     if cs.isComplete or getattr(sm, '_offseasonFlowPhase', None) is not None:
         return True

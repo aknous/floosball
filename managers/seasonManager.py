@@ -7829,6 +7829,15 @@ class SeasonManager:
         scope it to this draft.
         """
         pairs = [(t, t) for t in worstFirst]
+        # ⚠️ WITH TRADING OFF EVERY TEAM PICKS IN ITS OWN SLOT (owner, 2026-10-03: "make sure
+        # future rookie drafts use the correct order"), whatever the pick rows say, so a
+        # stale ownership row can never move a selection.
+        try:
+            from constants import tradingEnabled
+            if not tradingEnabled():
+                return pairs
+        except Exception:
+            return pairs
         if not worstFirst:
             return pairs
         try:
