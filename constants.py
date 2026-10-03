@@ -2031,18 +2031,28 @@ CULL_RATING_FRACTION_OF_MEAN = 0.92
 # two levels that paid nothing now interpolate toward level 3.
 FACILITY_MAX_LEVEL = 5
 
+# ⚠️ RESIZED SO A FULLY BUILT SET IS WORTH ABOUT +3 WINS A SEASON (owner, 2026-10-03:
+# facilities must make "a noticeable impact"; target chosen by the owner). Measured
+# before, with every facility at level 5 against level 0 (`FLOOS_FACILITY_FORCE`, 3
+# leagues x 4 seasons): +1.2 wins, nearly all Recovery, with the Locker Room and
+# Scouting indistinguishable from noise and the Stadium read by nothing. Sized from the
+# rating-multiplier price (~0.45 wins a season per 1%), then measured and nudged: a first
+# pass at Locker Room 1.5% / Stadium 3% measured +2.3 wins (3 leagues x 4 seasons), so they
+# are 2% in every game and 4% at home. Recovery and Training as they were. Scouting moves a GM's judgment up to +20 points (was 7), so a
+# poor evaluator with a full department sees like a good one.
+
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
 FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
                     'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
-                    'levels': [0.0, 0.001, 0.0018, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+                    'levels': [0.0, 0.004, 0.008, 0.012, 0.016, 0.020]},     # rating edge in every game (Game._applyFacilityEdge)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
                     'levels': [0.0, 0.05, 0.10, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
-                    'levels': [0, 1, 2, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+                    'levels': [0, 4, 8, 12, 16, 20]},                    # points added to the GM's scouting judgment (60-100)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
-                    'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
+                    'levels': [0.0, 0.008, 0.016, 0.024, 0.032, 0.040]}, # rating edge in home games (Game._applyFacilityEdge)
 }
 
 # Migration: starting level for the four legacy-perk facilities by current tier.

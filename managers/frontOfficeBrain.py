@@ -368,9 +368,11 @@ class FrontOfficeBrain:
         """How much of a player's forward arc this front office actually sees.
 
         The GM's own `scouting` plus whatever their Scouting Department buys
-        them. The facility is worth up to +7 attribute points at level 5, which
-        on the 40-point vision span is about +17% of the arc — enough to matter
-        on a close call, never enough to turn a bad evaluator into a good one.
+        them: up to +20 attribute points at level 5, half the 40-point vision span,
+        so a poor evaluator with a full department sees like a good one (owner,
+        2026-10-03: scouting "is supposed to help the GM evaluate their players and
+        make better decisions on who to draft or sign"). It was +7, which moved a
+        GM's draft picks by nothing measurable.
         """
         bonus = 0.0
         if FO_SCOUT_FACILITY_ENABLED and team is not None:
