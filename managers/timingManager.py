@@ -58,7 +58,7 @@ class TimingMode(Enum):
     FAST_WEEKLY = "fast-weekly"        # FAST games (no delays, no broadcast), 30s pause between weeks
 
 def firstGameDateFor(seasonStart) -> datetime.date:
-    """Day 0 of a season's schedule: the Eastern day its anchor opens into.
+    """Day 0 of a season's schedule: the Monday on or after its anchor, in Eastern.
 
     ⚠️ THE ONE DEFINITION. `seasonStart` is a naive UTC stamp, so `seasonStart.date()` asks
     what day it is in LONDON — which made the anchor's hour load-bearing and DST-unstable.
@@ -74,57 +74,8 @@ def firstGameDateFor(seasonStart) -> datetime.date:
     shape a bug can have. Anything converting a season anchor to a game day calls this.
     """
     offset = 4 if _isEdtDate(seasonStart.date()) else 5
-    etMoment = seasonStart - datetime.timedelta(hours=offset)
-    # ⚠️ DAY 0 IS THE DAY THE ANCHOR OPENS INTO, NOT "THE MONDAY ON OR AFTER IT" (2026-10-04).
-    # The anchor is defined as the first game day's first kickoff minus the rollover lead
-    # (`TimingManager._seasonAnchorFor`), so adding the lead back lands on that day. The
-    # Monday snap made the anchor's weekday load-bearing: an admin starting a season early
-    # (`season_start_override`) on a Wednesday would have had the schedule quietly pushed
-    # to the following Monday. Every Monday anchor still resolves to its Monday, including
-    # the pre-2026-09 04:00 ET one.
-    return (etMoment + datetime.timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)).date()
-
-
-SEASON_START_OVERRIDE_KEY = 'season_start_override'
-
-
-def seasonStartOverride():
-    """The admin-chosen first game day of the next season (an Eastern date), or None.
-
-    Stored as the app_setting `season_start_override` ('YYYY-MM-DD'), written from the
-    Admin panel and cleared by `seasonManager.startNewSeason` once a season has used it.
-    Fails CLOSED to None: an unreadable setting means the usual Monday, never a surprise
-    early start.
-    """
-    try:
-        from database.connection import get_session
-        from database.models import AppSetting
-        session = get_session()
-        try:
-            row = session.query(AppSetting).filter_by(key=SEASON_START_OVERRIDE_KEY).first()
-            raw = (row.value or '').strip() if row else ''
-        finally:
-            session.close()
-        if not raw:
-            return None
-        return datetime.datetime.strptime(raw, '%Y-%m-%d').date()
-    except Exception:
-        return None
-
-
-def clearSeasonStartOverride() -> None:
-    """Drop the override, once the season it was set for has started."""
-    try:
-        from database.connection import get_session
-        from database.models import AppSetting
-        session = get_session()
-        try:
-            session.query(AppSetting).filter_by(key=SEASON_START_OVERRIDE_KEY).delete()
-            session.commit()
-        finally:
-            session.close()
-    except Exception as e:
-        logger.warning(f"Could not clear the season start override: {e}")
+    etDate = (seasonStart - datetime.timedelta(hours=offset)).date()
+    return etDate + datetime.timedelta(days=(0 - etDate.weekday()) % 7)
 
 
 class TimingManager:
@@ -347,9 +298,8 @@ class TimingManager:
 
         # FAST mode: no delay
 
-    async def waitForWeekSetup(self, weekSetupTime: datetime.datetime, targetFn=None) -> None:
-        """Wait for week setup time. `targetFn`, if given, is re-read every poll, so a
-        schedule moved while waiting (an admin's early start) is followed."""
+    async def waitForWeekSetup(self, weekSetupTime: datetime.datetime) -> None:
+        """Wait for week setup time"""
         if self._isFastCatchingUp:
             return
         if self._isScheduledMode:
@@ -366,15 +316,13 @@ class TimingManager:
 
                     while datetime.datetime.utcnow() < weekSetupTime:
                         await asyncio.sleep(self.delays['daily_check'])
-                        if targetFn is not None:
-                            weekSetupTime = targetFn()
 
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.FAST_WEEKLY):
             logger.info(f"{self.mode.value} mode: week setup delay {self.delays['week_start_wait']}s")
             await asyncio.sleep(self.delays['week_start_wait'])
 
-    async def waitForGamesStart(self, weekStartTime: datetime.datetime, targetFn=None) -> None:
-        """Wait until games should start. `targetFn`, if given, is re-read every poll."""
+    async def waitForGamesStart(self, weekStartTime: datetime.datetime) -> None:
+        """Wait until games should start"""
         if self._isFastCatchingUp:
             return
         if self._isScheduledMode:
@@ -391,8 +339,6 @@ class TimingManager:
 
                     while datetime.datetime.utcnow() < weekStartTime:
                         await asyncio.sleep(self.delays['daily_check'])
-                        if targetFn is not None:
-                            weekStartTime = targetFn()
 
         elif self.mode == TimingMode.PLAYOFF_TEST and self.playoffPhase:
             # During playoffs: wait for exact scheduled start time
@@ -543,15 +489,8 @@ class TimingManager:
             targetUtc = self._nextSeasonAnchorUtc()
             pollInterval = self.delays.get('daily_check', 30.0)
             logger.info(f"SCHEDULED mode: waiting for next season start at {targetUtc.isoformat()} (polling every {pollInterval}s)")
-            # Re-read every poll: an admin can move the start (`season_start_override`)
-            # while the league is already waiting, and a target captured once would
-            # ignore it until the original Monday.
             while datetime.datetime.utcnow() < targetUtc:
                 await asyncio.sleep(pollInterval)
-                newTarget = self._nextSeasonAnchorUtc()
-                if newTarget != targetUtc:
-                    logger.info(f"Season start moved to {newTarget.isoformat()}")
-                    targetUtc = newTarget
             logger.info("Season start time reached — proceeding")
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.FAST_WEEKLY):
             logger.info(f"{self.mode.value} mode: season transition delay {self.delays['season_transition']}s")
@@ -600,25 +539,6 @@ class TimingManager:
 
     @staticmethod
     def _nextSeasonAnchorUtc() -> datetime.datetime:
-        """When the next season opens, as naive UTC: an admin's early start if one is set
-        and its first kickoff is still ahead (`seasonStartOverride`), else the usual Monday.
-
-        ⚠️ ONE HELPER FEEDS THE WAIT, THE SCHEDULE AND THE FANS' COUNTDOWN
-        (`waitBetweenSeasons`, `seasonManager.startNewSeason`, `/api/season`), which is why
-        the override lives here and not at any one of them: three readers of two answers is
-        a season that starts at one time and is scheduled for another.
-        """
-        override = seasonStartOverride()
-        if override is not None:
-            anchor = TimingManager._seasonAnchorFor(override)
-            kickoff = anchor + datetime.timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
-            if kickoff > datetime.datetime.utcnow():
-                return anchor
-            logger.warning(f"Season start override {override} has already kicked off; ignoring it")
-        return TimingManager._defaultNextSeasonAnchorUtc()
-
-    @staticmethod
-    def _defaultNextSeasonAnchorUtc() -> datetime.datetime:
         """When the next season opens, as naive UTC.
 
         ⚠️ IT IS KEYED ON THE FIRST GAME DAY, NOT ON THE ANCHOR'S OWN WEEKDAY. Asked as "the
