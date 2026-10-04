@@ -86,6 +86,10 @@ class TimingManager:
         self.scheduleGap = scheduleGap  # seconds between rounds in TEST_SCHEDULED / PLAYOFF_TEST mode
         self.catchingUp = False  # When True, week-level waits use SEQUENTIAL delays for catch-up
         self.playoffPhase = False  # Set by seasonManager when playoffs begin (for PLAYOFF_TEST)
+        # Admin "roll over now" (`/api/admin/season-rollover`): ends the between-season wait
+        # at its next poll. In memory on purpose -- a restart while waiting already rolls the
+        # season over at boot, so there is nothing to persist.
+        self.rolloverRequested = False
         self.delays = self._getDefaultDelays()
         if mode == TimingMode.TURBO:
             self.delays.update(self._getTurboDelays())
@@ -489,9 +493,13 @@ class TimingManager:
             targetUtc = self._nextSeasonAnchorUtc()
             pollInterval = self.delays.get('daily_check', 30.0)
             logger.info(f"SCHEDULED mode: waiting for next season start at {targetUtc.isoformat()} (polling every {pollInterval}s)")
-            while datetime.datetime.utcnow() < targetUtc:
+            while datetime.datetime.utcnow() < targetUtc and not self.rolloverRequested:
                 await asyncio.sleep(pollInterval)
-            logger.info("Season start time reached — proceeding")
+            if self.rolloverRequested:
+                logger.info("Season rollover requested by an admin — proceeding early")
+            else:
+                logger.info("Season start time reached — proceeding")
+            self.rolloverRequested = False
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.FAST_WEEKLY):
             logger.info(f"{self.mode.value} mode: season transition delay {self.delays['season_transition']}s")
             await asyncio.sleep(self.delays['season_transition'])

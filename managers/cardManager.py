@@ -149,10 +149,20 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
         cycleStart = kickoffUtc - _dt.timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
     now = _dt.datetime.utcnow()
     if cycleStart > now:
-        # Pre-start window — anchor far enough back that every recent
-        # paid open still counts. A year is well beyond a single cycle's
-        # span so it can't accidentally pull in prior-cycle opens.
-        cycleStart = now - _dt.timedelta(days=365)
+        # ⚠️ THE PRE-START WINDOW BELONGS TO DAY 1, NOT TO THE LAST YEAR (fixed 2026-10-04).
+        # The season can roll over before its opening time (an admin's early rollover, or a
+        # restart while the league is waiting), and the shop sells packs from the moment it
+        # does. This clamp used to reach a YEAR back and `_countPacksThisCycle` has no season
+        # filter, so every pack opened last season counted and a regular buyer read "cycle
+        # limit reached" until the opening time. Count from the end of the previous season
+        # instead: once the regular season is over the shop sells only collection items,
+        # which are exempt from the cap, so every capped pack opened since then is this
+        # season's. A year back stays only as the fallback for a league with no prior season.
+        prev = session.query(Season).filter(Season.season_number == currentSeason - 1).first()
+        if prev is not None and prev.end_date is not None and prev.end_date <= now:
+            cycleStart = prev.end_date
+        else:
+            cycleStart = now - _dt.timedelta(days=365)
     return cycleStart
 
 
