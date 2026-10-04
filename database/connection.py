@@ -64,7 +64,6 @@ def init_db():
     _backfillProspectContracts()
     _backfillTradeMoves()
     _reconcileTeamTitles()
-    _revertSeason8Trades()
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -3919,79 +3918,6 @@ def _backfillProspectContracts():
 
 _TRADE_MOVES_MARKER = 'trade_moves_backfilled'
 _POSITION_BY_NAME = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
-
-
-def _revertSeason8Trades():
-    """ONE-SHOT, owner-directed (2026-10-03): unwind what can be cleanly unwound now that
-    trading is off. TO BE REMOVED once it has run on prod.
-
-    1. Every unused draft pick goes back to its original team.
-    2. Two same-position swaps from the season-8 offseason are reversed: Norman Slithers
-       back to the Waffles and Switch Supertoe to the Melons (the trade that frustrated
-       Waffles fans), Alister Broomhandle back to the Beans and Squall Baptiste to the
-       Pinecones. Each roster stays full.
-    3. Werewolf Millionaire returns to the Trains' pipeline.
-
-    Runs at boot, before players load, because the live process holds rosters in memory and
-    would write a direct database edit back. Each step is guarded on the exact state it was
-    written for and skipped otherwise; the marker makes the whole thing run once.
-    """
-    from sqlalchemy import text
-    from database.models import AppSetting
-    from constants import PROSPECT_SLOT_CAP_PER_POSITION
-    marker = 'revert_trades_s8'
-    session = SessionLocal()
-    try:
-        if session.query(AppSetting).filter_by(key=marker).first():
-            return
-        teamId = {name: tid for tid, name in session.execute(text('SELECT id, name FROM teams'))}
-
-        def _player(name):
-            return session.execute(text(
-                'SELECT id, team_id, position, is_prospect, drafting_team_id FROM players '
-                "WHERE name = :n AND coalesce(service_time, '') != 'Retired'"), {'n': name}).fetchall()
-
-        picks = session.execute(text(
-            'UPDATE draft_picks SET current_owner_id = original_team_id '
-            'WHERE coalesce(used, 0) = 0 AND current_owner_id != original_team_id')).rowcount
-        logger.info(f"{marker}: {picks} unused pick(s) returned to their original teams")
-
-        for nameA, teamA, nameB, teamB in (
-                ('Norman Slithers', 'Melons', 'Switch Supertoe', 'Waffles'),
-                ('Alister Broomhandle', 'Pinecones', 'Squall Baptiste', 'Beans')):
-            a, b = _player(nameA), _player(nameB)
-            ok = (len(a) == 1 and len(b) == 1 and a[0][1] == teamId.get(teamA)
-                  and b[0][1] == teamId.get(teamB) and a[0][2] == b[0][2]
-                  and not a[0][3] and not b[0][3])
-            if ok:
-                session.execute(text('UPDATE players SET team_id = :t WHERE id = :id'),
-                                {'t': teamId[teamB], 'id': a[0][0]})
-                session.execute(text('UPDATE players SET team_id = :t WHERE id = :id'),
-                                {'t': teamId[teamA], 'id': b[0][0]})
-                logger.info(f"{marker}: {nameA} -> {teamB}, {nameB} -> {teamA}")
-            else:
-                logger.info(f"{marker}: {nameA}/{nameB} no longer as traded, left unchanged")
-
-        w = _player('Werewolf Millionaire')
-        trains = teamId.get('Trains')
-        room = trains is not None and session.execute(text(
-            'SELECT count(*) FROM players WHERE coalesce(is_prospect, 0) = 1 '
-            'AND drafting_team_id = :t AND position = :p'),
-            {'t': trains, 'p': w[0][2] if w else 0}).scalar() < PROSPECT_SLOT_CAP_PER_POSITION
-        if len(w) == 1 and w[0][3] and w[0][4] == teamId.get('Monuments') and room:
-            session.execute(text('UPDATE players SET drafting_team_id = :t WHERE id = :id'),
-                            {'t': trains, 'id': w[0][0]})
-            logger.info(f"{marker}: Werewolf Millionaire -> Trains pipeline")
-        else:
-            logger.info(f"{marker}: Werewolf Millionaire no longer as traded, left unchanged")
-
-        session.add(AppSetting(key=marker, value='1'))
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        logger.warning(f"{marker} skipped: {e}")
-    finally:
-        session.close()
 
 
 def _reconcileTeamTitles():
