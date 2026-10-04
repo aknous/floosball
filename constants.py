@@ -3133,7 +3133,7 @@ REPLACEMENT_RATING = 67.0
 # (the Waffles bought a prospect with picks and flipped him for a declining veteran within
 # the same pass). Trading is off and every trade surface is hidden while it is off
 # (`api.main._tradesHidden`), the season-8 trades that reverse cleanly were undone, and
-# every unused pick went back to its original team (`connection._revertSeason8Trades`).
+# every unused pick went back to its original team (a one-shot at boot, run on prod and removed).
 TRADING_ENABLED = False
 
 

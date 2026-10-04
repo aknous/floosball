@@ -6141,6 +6141,74 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
         session.close()
 
 
+def _seasonRolloverStatus() -> Dict[str, Any]:
+    """Where the league is in its yearly cycle, for the admin's early rollover.
+
+    `phase`:
+      - `season`: the current season has already rolled over (cards minted, shop open),
+        whether or not its games have started. Nothing to roll over.
+      - `offseason`: the offseason is still running. A rollover request is held and
+        happens the moment the offseason finishes.
+      - `waiting`: the offseason is done and the league is waiting for the usual
+        rollover time. A request rolls it over at the next poll (about 30 seconds).
+    """
+    from managers.timingManager import TimingManager
+    phase, mode, requested, seasonNumber = 'season', None, False, None
+    if floosball_app is not None:
+        try:
+            simState = floosball_app._loadSimulationState() or {}
+            seasonsPlayed = floosball_app.serviceContainer.getService('game_state').getState('seasonsPlayed', 0)
+            current = getattr(floosball_app.seasonManager, 'currentSeason', None)
+            mode = floosball_app.getTimingMode()
+            requested = bool(getattr(floosball_app.seasonManager.timingManager, 'rolloverRequested', False))
+            seasonNumber = getattr(current, 'seasonNumber', None)
+            if simState.get('in_offseason'):
+                phase = 'offseason'
+            elif current is None or current.seasonNumber <= seasonsPlayed:
+                phase = 'waiting'
+        except Exception as e:
+            logger.warning(f"Season rollover status: could not read the sim state: {e}")
+    return {
+        'phase': phase,
+        'seasonNumber': seasonNumber,
+        'timingMode': mode,
+        'rolloverRequested': requested and phase != 'season',
+        # When the next season would roll over on its own (scheduled mode).
+        'usualRollover': TimingManager._nextSeasonAnchorUtc().isoformat() + 'Z',
+    }
+
+
+@app.get("/api/admin/season-rollover")
+async def admin_get_season_rollover(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: whether the next season can be rolled over early, and if it has been asked."""
+    return _seasonRolloverStatus()
+
+
+@app.post("/api/admin/season-rollover")
+async def admin_request_season_rollover(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: roll the next season over now instead of at the usual time.
+
+    Rolling over is what creates the season: card templates mint, the shop sells packs
+    and singles again, lineups and pick-em open for week 1. Games still start at the
+    usual time (the season's schedule is anchored exactly as it would have been). If the
+    offseason is still running, the rollover happens as soon as it finishes.
+    """
+    status = _seasonRolloverStatus()
+    if status['phase'] == 'season':
+        raise HTTPException(status_code=409, detail="The current season has already rolled over")
+    floosball_app.seasonManager.timingManager.rolloverRequested = True
+    logger.info(f"Admin requested an early season rollover (phase: {status['phase']})")
+    return _seasonRolloverStatus()
+
+
+@app.delete("/api/admin/season-rollover")
+async def admin_cancel_season_rollover(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: cancel a rollover request that has not happened yet."""
+    if floosball_app is not None:
+        floosball_app.seasonManager.timingManager.rolloverRequested = False
+    return _seasonRolloverStatus()
+
+
 @app.post("/api/admin/personality/reload")
 async def admin_reload_personality_templates(_auth: None = Depends(_checkAdminAuth)):
     """Hot-reload personality content from disk:
