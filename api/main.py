@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Tuple
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import os
 from logger_config import get_logger
@@ -6139,6 +6139,128 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
         return {"updated": updated}
     finally:
         session.close()
+
+
+def _seasonStartStatus() -> Dict[str, Any]:
+    """Where the league is in its yearly cycle, and when the next season starts.
+
+    `phase` is one of:
+      - `season`: games of the current season have kicked off; nothing can move.
+      - `pending`: the season has been created and is waiting for its first kickoff (a
+        restart while waiting builds it straight away). Moving it re-times it in place.
+      - `offseason`: the offseason is still running. An early start is stored and used
+        once the offseason finishes.
+      - `waiting`: offseason done, the league is waiting to create the next season.
+    """
+    from managers.timingManager import (TimingManager, firstGameDateFor, seasonStartOverride,
+                                        CROSS_DAY_ROLLOVER_LEAD_MINUTES)
+    phase = 'season'
+    mode = None
+    effectiveAnchor = None
+    if floosball_app is not None:
+        try:
+            simState = floosball_app._loadSimulationState() or {}
+            seasonsPlayed = floosball_app.serviceContainer.getService('game_state').getState('seasonsPlayed', 0)
+            current = getattr(floosball_app.seasonManager, 'currentSeason', None)
+            mode = floosball_app.getTimingMode()
+            if simState.get('in_offseason'):
+                phase = 'offseason'
+            elif current is None or current.seasonNumber <= seasonsPlayed:
+                phase = 'waiting'
+            else:
+                first = (current.schedule[0].get('startTime') if current.schedule else None)
+                if first is not None and first > datetime.utcnow():
+                    phase = 'pending'
+                    effectiveAnchor = getattr(current, 'startDate', None)
+        except Exception as e:
+            logger.warning(f"Season start status: could not read the sim state: {e}")
+
+    def describe(anchor):
+        kickoff = anchor + timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
+        return {'firstGameDay': firstGameDateFor(anchor).isoformat(),
+                'opensAt': anchor.isoformat() + 'Z', 'firstKickoff': kickoff.isoformat() + 'Z'}
+
+    normalAnchor = TimingManager._defaultNextSeasonAnchorUtc()
+    if effectiveAnchor is None:
+        effectiveAnchor = TimingManager._nextSeasonAnchorUtc()
+    override = seasonStartOverride()
+    return {
+        'phase': phase,
+        'timingMode': mode,
+        'normal': describe(normalAnchor),
+        'effective': describe(effectiveAnchor),
+        # True when the next season does not start on its usual day, however it got there.
+        'early': firstGameDateFor(effectiveAnchor) != firstGameDateFor(normalAnchor),
+        'override': override.isoformat() if override else None,
+    }
+
+
+def _storeSeasonStartOverride(firstGameDay) -> None:
+    from managers.timingManager import SEASON_START_OVERRIDE_KEY
+    from database.connection import get_session
+    from database.models import AppSetting
+    session = get_session()
+    try:
+        row = session.query(AppSetting).filter_by(key=SEASON_START_OVERRIDE_KEY).first()
+        if row is None:
+            session.add(AppSetting(key=SEASON_START_OVERRIDE_KEY, value=firstGameDay.isoformat()))
+        else:
+            row.value = firstGameDay.isoformat()
+            row.updated_at = datetime.utcnow()
+        session.commit()
+    finally:
+        session.close()
+
+
+@app.get("/api/admin/season-start")
+async def admin_get_season_start(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: when the next season starts, and whether it has been moved early."""
+    return _seasonStartStatus()
+
+
+@app.post("/api/admin/season-start")
+async def admin_set_season_start(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
+    """Admin: start the next season early, on `firstGameDay` (an Eastern 'YYYY-MM-DD').
+
+    The league opens the evening before that day, like every season, and games run four
+    consecutive days from it. Refused once a season's games have kicked off, for a day
+    whose first kickoff has passed, and for a day after the usual start (this moves a
+    season EARLIER). A season already created and waiting is re-timed in place; otherwise
+    the day is stored and used when the season is created, provided the offseason has
+    finished before that day's first kickoff.
+    """
+    from managers.timingManager import TimingManager, firstGameDateFor, CROSS_DAY_ROLLOVER_LEAD_MINUTES
+    raw = str((payload or {}).get('firstGameDay') or '').strip()
+    try:
+        firstGameDay = datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="firstGameDay must be a date, YYYY-MM-DD")
+    status = _seasonStartStatus()
+    if status['phase'] == 'season':
+        raise HTTPException(status_code=409, detail="This season's games have already started")
+    anchor = TimingManager._seasonAnchorFor(firstGameDay)
+    if anchor + timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES) <= datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That day's first kickoff has already passed")
+    normalDay = firstGameDateFor(TimingManager._defaultNextSeasonAnchorUtc())
+    if firstGameDay > normalDay:
+        raise HTTPException(status_code=400, detail=f"The season already starts on {normalDay.isoformat()}; pick that day or earlier")
+    if status['phase'] == 'pending':
+        if not floosball_app.seasonManager.rescheduleUnstartedSeason(anchor):
+            raise HTTPException(status_code=409, detail="This season's games have already started")
+    else:
+        _storeSeasonStartOverride(firstGameDay)
+    logger.info(f"Admin moved the next season to start early, first game day {firstGameDay.isoformat()}")
+    return _seasonStartStatus()
+
+
+@app.delete("/api/admin/season-start")
+async def admin_clear_season_start(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: undo an early start; the next season starts on its usual day."""
+    from managers.timingManager import TimingManager, clearSeasonStartOverride
+    clearSeasonStartOverride()
+    if _seasonStartStatus()['phase'] == 'pending':
+        floosball_app.seasonManager.rescheduleUnstartedSeason(TimingManager._defaultNextSeasonAnchorUtc())
+    return _seasonStartStatus()
 
 
 @app.post("/api/admin/personality/reload")

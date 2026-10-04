@@ -335,6 +335,10 @@ class SeasonManager:
                     logger.warning("Schedule load from database failed — falling back to fresh generation")
         if not scheduleLoaded:
             self.createSchedule()
+            # An admin's early start applies to ONE season: this one has now been anchored
+            # and scheduled off it, so it must not carry into the next.
+            from managers.timingManager import clearSeasonStartOverride
+            clearSeasonStartOverride()
 
         # Initialize season stats. Pass resumeFromWeek so a mid-season
         # restart skips the fatigue reset (DB already has the accumulated
@@ -713,7 +717,13 @@ class SeasonManager:
                 # — the rollover call below no-ops once this window exists.
                 self._maybeOpenRuleVote(nextWeek, weekStartTime)
 
-            await self.timingManager.waitForWeekSetup(weekSetupTime)
+            # The target is re-read each poll: an admin can move a season that has been
+            # created but not started (`rescheduleUnstartedSeason`), which re-times this
+            # week dict in place.
+            await self.timingManager.waitForWeekSetup(
+                weekSetupTime,
+                targetFn=lambda: week['startTime'] - datetime.timedelta(minutes=earlyMinutes))
+            weekStartTime = week['startTime']
 
             # ── Official week transition ──
             # Advance currentWeek AFTER the wait so that between-weeks API calls
@@ -926,7 +936,9 @@ class SeasonManager:
                                             len(week.get('games', [])))
 
             # Wait for games to start
-            await self.timingManager.waitForGamesStart(weekStartTime)
+            await self.timingManager.waitForGamesStart(
+                weekStartTime, targetFn=lambda: week['startTime'])
+            weekStartTime = week['startTime']
 
             # Cores rule-change vote resolves right AS the day's games start — voting
             # stays open through the whole pre-game run-up, the winning rule applies to
@@ -3760,6 +3772,53 @@ class SeasonManager:
         logger.info(f"Loaded {len(rows)} games ({len(weekMap)} weeks) from DB for season {seasonNumber}")
         return True
 
+    def rescheduleUnstartedSeason(self, anchor: datetime.datetime) -> bool:
+        """Move a season that has been created but not yet kicked off to open at `anchor`.
+
+        ⚠️ AN EARLY START HAS TWO CASES, AND THIS IS THE ONE THE OVERRIDE CANNOT REACH.
+        Before the season exists, `season_start_override` moves it through the one anchor
+        helper. But a restart while the league is waiting goes straight to
+        `startNewSeason`, which builds the season off the usual Monday and then waits for
+        week 1, so the season already exists and its times are already set. Here the start
+        date moves in memory AND in the `seasons` row (a restart restores it from there,
+        and the shop's cycle boundary reads it), the schedule is re-timed in place (the
+        week loop re-reads its week dict while waiting), the countdown cache follows, and an
+        open rule vote closes at the new kickoff: resolution waits for `closes_at`, so a
+        stale later time would leave opening day's ballot unresolved when the games start.
+
+        False, changing nothing, when there is no season or its first games have kicked off.
+        """
+        season = self.currentSeason
+        if not season or not season.schedule:
+            return False
+        firstStart = season.schedule[0].get('startTime')
+        if firstStart is None or firstStart <= datetime.datetime.utcnow():
+            return False
+        season.startDate = anchor
+        self._recalculateScheduleTimes()
+        newFirst = season.schedule[0]['startTime']
+        if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
+            self._cachedNextGameStart = newFirst
+        try:
+            from database.connection import get_session
+            from database.models import Season as DBSeason, RuleVoteWindow
+            session = get_session()
+            try:
+                row = session.query(DBSeason).filter_by(season_number=season.seasonNumber).first()
+                if row is not None:
+                    row.start_date = anchor
+                for window in session.query(RuleVoteWindow).filter_by(season=season.seasonNumber).all():
+                    if not window.resolved and window.day_index == 0:
+                        window.closes_at = newFirst
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Rescheduled season {season.seasonNumber} in memory but could not persist it: {e}")
+        logger.info(f"Season {season.seasonNumber} rescheduled: opens {anchor.isoformat()}, "
+                    f"first kickoff {newFirst.isoformat()}")
+        return True
+
     def _recalculateScheduleTimes(self) -> None:
         """Patch all schedule start times using the current getWeekStartTime logic.
 
@@ -3958,7 +4017,7 @@ class SeasonManager:
 
     @staticmethod
     def _firstGameDate(seasonStart: datetime.datetime) -> datetime.date:
-        """Day 0 of the schedule: the Monday on or after the season anchor, in Eastern.
+        """Day 0 of the schedule: the Eastern day the season anchor opens into.
 
         ⚠️ THE SCHEDULE USED `seasonStart.date()` DIRECTLY, WHICH MADE THE ANCHOR'S HOUR
         LOAD-BEARING AND DST-UNSTABLE. `startDate` is a naive UTC stamp, so taking its date
@@ -3968,11 +4027,11 @@ class SeasonManager:
         naive read would have put the whole season on Sunday for half the year and Monday for
         the other half -- a silent one-day shift twice a year.
 
-        ⚠️ SO DAY 0 IS DERIVED, NOT READ. Convert to Eastern, then take the Monday on or
-        after it. Games are played Monday to Thursday whatever hour the league opens at, which
-        is what lets the anchor be a configuration (`SEASON_START_WEEKDAY`) instead of a fact
-        the scheduler depends on. An anchor already ON a Monday is its own day 0, so this is
-        exactly what the old code did for the old anchor -- it is a generalisation, not a move.
+        ⚠️ SO DAY 0 IS DERIVED, NOT READ: convert to Eastern and add the rollover lead back,
+        which lands on the first game day by construction (`TimingManager._seasonAnchorFor`).
+        It used to snap to the Monday on or after the anchor, which would have pushed an
+        admin's early start (`season_start_override`) on any other weekday to the next
+        Monday. Every Monday anchor, old and new, still resolves to its Monday.
         """
         # ⚠️ Delegates to the ONE definition. This math also lives in the shop's cycle
         # boundary, and when it was duplicated there by hand it was written as the naive
