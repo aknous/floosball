@@ -2031,18 +2031,28 @@ CULL_RATING_FRACTION_OF_MEAN = 0.92
 # two levels that paid nothing now interpolate toward level 3.
 FACILITY_MAX_LEVEL = 5
 
+# ⚠️ RESIZED SO A FULLY BUILT SET IS WORTH ABOUT +3 WINS A SEASON (owner, 2026-10-03:
+# facilities must make "a noticeable impact"; target chosen by the owner). Measured
+# before, with every facility at level 5 against level 0 (`FLOOS_FACILITY_FORCE`, 3
+# leagues x 4 seasons): +1.2 wins, nearly all Recovery, with the Locker Room and
+# Scouting indistinguishable from noise and the Stadium read by nothing. Sized from the
+# rating-multiplier price (~0.45 wins a season per 1%), then measured and nudged: a first
+# pass at Locker Room 1.5% / Stadium 3% measured +2.3 wins (3 leagues x 4 seasons), so they
+# are 2% in every game and 4% at home. Recovery and Training as they were. Scouting moves a GM's judgment up to +20 points (was 7), so a
+# poor evaluator with a full department sees like a good one.
+
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
 FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
                     'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
-                    'levels': [0.0, 0.001, 0.0018, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+                    'levels': [0.0, 0.004, 0.008, 0.012, 0.016, 0.020]},     # rating edge in every game (Game._applyFacilityEdge)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
                     'levels': [0.0, 0.05, 0.10, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
-                    'levels': [0, 1, 2, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+                    'levels': [0, 4, 8, 12, 16, 20]},                    # points added to the GM's scouting judgment (60-100)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
-                    'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
+                    'levels': [0.0, 0.008, 0.016, 0.024, 0.032, 0.040]}, # rating edge in home games (Game._applyFacilityEdge)
 }
 
 # Migration: starting level for the four legacy-perk facilities by current tier.
@@ -2876,6 +2886,26 @@ FO_DECLINE_MAX = 0.40             # cap so an ancient vet never projects to noth
 # by this margin (in value points). Slots then go to the biggest surpluses
 # first, so a team spends them where the incumbent genuinely wins.
 FO_RESIGN_SURPLUS_MARGIN = 0.5
+# ⚠️ A WALK-YEAR PLAYER UNDER 3 STARS IS NOT RE-SIGNED (owner, 2026-10-03: "not
+# re-signing low star rated players and take a chance with FA or rookie draft to
+# improve"). Rated under this (2 stars or fewer) he walks, and the slot goes to free
+# agency, a promoted prospect or the draft. The one exception is a DEVELOPING player the
+# team projects to this rating or better (owner: "except rising players"). The value is
+# the 3-star line, `PlayerTier.TierB`. In season 8 this would have let 17 of 52 re-signs
+# walk.
+FO_RESIGN_MIN_RATING = 76
+
+# ⚠️ CLEAR FAN RATINGS DECIDE (owner, 2026-10-03: "make sure that fan ratings play a role
+# in cut/re-sign decisions"). Sentiment is the player's own team's fans' average rating
+# mapped onto -1..+1 (`normalizeSentiment`: 3 is 0), so 0.5 is an average of 4 and -0.5
+# an average of 2. At or above KEEP his fans want him: he is re-signed ahead of anyone
+# else (under 3 stars too) and cannot be cut. At or below WALK they want him gone: he
+# is not re-signed and is first in line for a cut. In between, the GM's own
+# sentiment tilt applies as before.
+# ⚠️ NO RATINGS IS NO VERDICT, NOT A ZERO (owner): a player below his team's rater quorum
+# is absent from the sentiment map and neither rule applies to him.
+FAN_VERDICT_KEEP_SENTIMENT = 0.5
+FAN_VERDICT_WALK_SENTIMENT = -0.5
 
 # Cut-for-upgrade. A GM cuts a player under contract only when the replacement
 # it can REALISTICALLY sign beats them by this margin in value points. Bigger
@@ -3099,7 +3129,12 @@ REPLACEMENT_RATING = 67.0
 # ⚠️ ON AS OF 2026-09-17 (owner), so the first offseason after production's week 22 runs
 # with a live market. It shipped False while the market was being measured, matching
 # RULE_VOTE_ENABLED / WEATHER_ENABLED / RUNNER_MOVE_ENABLED.
-TRADING_ENABLED = True
+# ⚠️ OFF AGAIN AS OF 2026-10-03 (owner): fans were frustrated by this offseason's trades
+# (the Waffles bought a prospect with picks and flipped him for a declining veteran within
+# the same pass). Trading is off and every trade surface is hidden while it is off
+# (`api.main._tradesHidden`), the season-8 trades that reverse cleanly were undone, and
+# every unused pick went back to its original team (`connection._revertSeason8Trades`).
+TRADING_ENABLED = False
 
 
 def tradingEnabled(session=None) -> bool:

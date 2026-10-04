@@ -423,12 +423,15 @@ class FacilityCurveTests(unittest.TestCase):
                 self.assertGreaterEqual(b, a, f"{key} ladder goes backwards: {levels}")
 
     def testMigrationLevelsAreUnchanged(self):
-        """⚠️ Levels 3-5 are what the tier migration pinned. Smoothing must not move
-        them, or a club that migrated in at Lv3/Lv4 silently changes strength."""
+        """⚠️ Levels 3-5 are pinned so nothing moves a club's strength by accident.
+
+        Re-pinned 2026-10-03, deliberately: the owner resized the Locker Room and the
+        Scouting Department so a fully built set is worth about +3 wins a season
+        (see `FACILITY_CATALOG`). Recovery was not resized."""
         from constants import FACILITY_CATALOG
-        expected = {'scouting': [3, 5, 7],
+        expected = {'scouting': [12, 16, 20],
                     'recovery': [0.15, 0.30, 0.35],
-                    'locker_room': [0.0025, 0.0075, 0.01]}
+                    'locker_room': [0.012, 0.016, 0.020]}
         for key, tail in expected.items():
             self.assertEqual(tail, list(FACILITY_CATALOG[key]['levels'][3:]),
                              f"{key} levels 3-5 moved")

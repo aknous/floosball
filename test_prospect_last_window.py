@@ -242,6 +242,8 @@ class StubSM:
     # function, which a class body would rebind as an instance method.
     _isFinalProspectWindow = staticmethod(SeasonManager._isFinalProspectWindow)
     _cutToMakeRoomForProspect = SeasonManager._cutToMakeRoomForProspect
+    _cutPlanForProspect = SeasonManager._cutPlanForProspect
+    _executeProspectCut = SeasonManager._executeProspectCut
     _promoteProspectsAutonomously = SeasonManager._promoteProspectsAutonomously
 
     def _recordOffseasonEvent(self, *a, **kw):
@@ -349,3 +351,91 @@ def test_a_walk_year_incumbent_is_never_paid_for():
     assert sm._promoteProspectsAutonomously(team) == []
     assert sm.charged == []
     print("PASS a walk-year incumbent is left alone")
+
+
+# ── A prospect who is better TODAY (owner, 2026-10-03) ──────────────────────
+
+def _filledQb(incumbent, prospect):
+    return StubTeam({'qb': incumbent, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1},
+                    [prospect])
+
+
+def test_an_early_prospect_who_is_better_today_is_promoted_over_the_starter():
+    """The rule that was missing: before, an early-window prospect could only take an
+    OPEN slot, so a team with a clearly better prospect kept starting the weaker man."""
+    prospect = FakeBrainPlayer('Kid', 84)
+    prospect.prospect_seasons = 0
+    incumbent = FakeBrainPlayer('Journeyman', 72, termRemaining=2)
+    incumbent.term = 3
+    team = _filledQb(incumbent, prospect)
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert [p['name'] for p in sm._promoteProspectsAutonomously(team)] == ['Kid']
+    assert team.rosterDict['qb'] is prospect
+    assert pm.released == [incumbent]
+    assert sm.charged == [cutFeeFor(incumbent)]
+
+
+def test_an_early_prospect_must_be_better_now_not_just_projected():
+    """Projected better is not enough before his final window: he must rate above
+    the starter today, or the team waits."""
+    prospect = FakeBrainPlayer('Kid', 70)
+    prospect.prospect_seasons = 0
+    incumbent = FakeBrainPlayer('Journeyman', 72, termRemaining=2)
+    incumbent.term = 3
+
+    class ProjectingBrain(StubBrain):
+        def decisionValue(self, player, coach=None, rng=None, team=None):
+            return 95.0 if player is prospect else float(player.playerRating)
+    pm = StubPlayerManager()
+    sm = StubSM(ProjectingBrain(replacement=0.0), pm)
+    assert sm._promoteProspectsAutonomously(_filledQb(incumbent, prospect)) == []
+    assert pm.released == []
+
+
+def test_nobody_signed_this_offseason_is_cut_for_a_prospect():
+    """Owner: "I generally dont want teams signing players and then cutting them in
+    the offseason." A contract that has not started counting down is off limits."""
+    prospect = FakeBrainPlayer('Kid', 88)
+    prospect.prospect_seasons = 0
+    incumbent = FakeBrainPlayer('JustSigned', 72, termRemaining=3)
+    incumbent.term = 3
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert sm._promoteProspectsAutonomously(_filledQb(incumbent, prospect)) == []
+    assert pm.released == []
+
+
+def test_a_fan_favorite_is_not_cut_for_a_prospect():
+    from managers import playerManager as pmod
+    prospect = FakeBrainPlayer('Kid', 88)
+    prospect.prospect_seasons = 0
+    incumbent = FakeBrainPlayer('Favorite', 72, termRemaining=2)
+    incumbent.term = 3
+    incumbent.id = 4242
+    pmod.setFanSentiment({4242: 0.9})
+    try:
+        pm = StubPlayerManager()
+        sm = StubSM(StubBrain(replacement=0.0), pm)
+        assert sm._promoteProspectsAutonomously(_filledQb(incumbent, prospect)) == []
+        assert pm.released == []
+    finally:
+        pmod.setFanSentiment({})
+
+
+def test_nobody_is_cut_for_a_prospect_who_is_not_finally_promoted():
+    """The cut is DECIDED per candidate and EXECUTED only for the one promoted, so a
+    losing candidate never costs anyone his job."""
+    better = FakeBrainPlayer('Better', 90, position=Position.QB)
+    better.prospect_seasons = 0
+    worse = FakeBrainPlayer('Worse', 80, position=Position.RB)
+    worse.prospect_seasons = 0
+    qb = FakeBrainPlayer('QB', 70, termRemaining=2); qb.term = 3
+    rb = FakeBrainPlayer('RB', 78, termRemaining=2, position=Position.RB); rb.term = 3
+    team = StubTeam({'qb': qb, 'rb': rb, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1},
+                    [better, worse])
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    names = [p['name'] for p in sm._promoteProspectsAutonomously(team)]
+    assert names == ['Better']          # Worse only clears 78 by 2, under the margin
+    assert pm.released == [qb]

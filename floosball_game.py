@@ -9564,9 +9564,6 @@ class Game:
         self._applyLeagueCompression(self.homeTeam)
         self._applyLeagueCompression(self.awayTeam)
 
-        # Apply funding morale modifiers (small pregame confidence/determination nudge)
-        self._applyFundingMorale(self.homeTeam)
-        self._applyFundingMorale(self.awayTeam)
 
         # Diagnostic snapshot at game start — captures the effective scaled
         # pressure modifier each team carries into this game. Regular-season
@@ -9632,6 +9629,11 @@ class Game:
         # same compounded stack and stay bounded by the soft floor below.
         self._applyFormOffset(self.homeTeam)
         self._applyFormOffset(self.awayTeam)
+
+        # Facilities the fans fund: the Locker Room's edge in every game and the
+        # Stadium's in home games, as a rating multiplier on the same stack as form.
+        self._applyFacilityEdge(self.homeTeam)
+        self._applyFacilityEdge(self.awayTeam)
 
         # Calibration only (POSITION_FORCE): boost one roster slot on half the
         # league and cut it on the other half, to measure that position's causal
@@ -11562,17 +11564,24 @@ class Game:
 
     # ─── Funding Morale ───────────────────────────────────────────────────
 
-    def _applyFundingMorale(self, team):
-        """Apply a small pregame confidence/determination nudge based on the
-        team's Locker Room level (Markets→Facilities; migrated levels reproduce
-        the old market-tier morale modifier)."""
-        modifier = team.facilityEffect('morale') if hasattr(team, 'facilityEffect') else 0
-        if modifier == 0:
+    def _applyFacilityEdge(self, team):
+        """The Locker Room (`morale`) and, at home, the Stadium (`home_morale`), as a
+        rating multiplier on the team's game attributes.
+
+        ⚠️ A RATING EDGE, NOT A CONFIDENCE NUDGE (owner, 2026-10-03: facilities must make
+        "a noticeable impact"). The Locker Room used to add its value to pre-game
+        confidence and determination, which at 0.01 measured as nothing, and the Stadium
+        was read by nothing at all. A rating multiplier has a known price: about 0.45 wins
+        a season per 1% (`rating-multiplier -> win-probability transfer`, CLAUDE.md), which
+        is what the level tables in `FACILITY_CATALOG` are sized from."""
+        if not hasattr(team, 'facilityEffect'):
             return
-        for player in team.rosterDict.values():
-            if player is not None and player.gameAttributes is not None:
-                player.updateInGameConfidence(modifier * 0.6)
-                player.updateInGameDetermination(modifier * 0.4)
+        edge = float(team.facilityEffect('morale') or 0.0)
+        if team is self.homeTeam:
+            edge += float(team.facilityEffect('home_morale') or 0.0)
+        if edge:
+            team._facilityEdgeApplied = edge
+            self._applyTeamRatingMult(team, 1.0 + edge)
 
     def _snapshotBaselineRatings(self, team):
         """Record each rostered player's pre-modifier overallRating so the

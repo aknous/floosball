@@ -389,7 +389,9 @@ def test_the_offseason_pass_prices_in_OFFSEASON_terms():
 
 # ------------------------------- 7. a traded pick must change who picks
 
-def test_a_traded_pick_actually_changes_the_draft_order():
+def test_a_traded_pick_actually_changes_the_draft_order(monkeypatch):
+    # Traded picks only move a selection with trading on, which is now off by default.
+    monkeypatch.setattr(constants, 'TRADING_ENABLED', True)
     """⚠️ EVERY TRADED PICK WAS COSMETIC. The draft read `freeAgencyOrder` straight
     through and never consulted `DraftPick` at all, so a club could trade for the first
     selection, watch the transactions page say so, and then not get it. A quarter of every

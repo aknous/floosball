@@ -61,7 +61,7 @@ from constants import (
     FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX, FO_SCOUT_NOISE_FLOOR,
     FO_CEILING_CREDIT, FO_DEVELOPING_HEADROOM,
     FO_DECLINE_PER_YEAR_PAST, FO_DECLINE_MAX,
-    FO_RESIGN_SURPLUS_MARGIN, FO_FA_CONTENTION,
+    FO_RESIGN_SURPLUS_MARGIN, FO_RESIGN_MIN_RATING, FO_FA_CONTENTION,
     FO_CUT_ENABLED, FO_CUT_UPGRADE_MARGIN, FO_CUT_MAX_PER_TEAM,
     FO_CUT_MIN_CONFIDENCE,
     SENTIMENT_MAX_VALUE_SWING,
@@ -201,6 +201,11 @@ def venueBiasFor(team) -> float:
         return getStadiumManager().phaseBias(getattr(team, 'id', None))
     except Exception:
         return 0.0
+
+
+# Re-sign priority for a player his fans clearly want: above any value-based priority,
+# so the re-sign cap reaches him first.
+FAN_KEEP_PRIORITY = 1.0e6
 
 
 class FrontOfficeBrain:
@@ -363,9 +368,11 @@ class FrontOfficeBrain:
         """How much of a player's forward arc this front office actually sees.
 
         The GM's own `scouting` plus whatever their Scouting Department buys
-        them. The facility is worth up to +7 attribute points at level 5, which
-        on the 40-point vision span is about +17% of the arc — enough to matter
-        on a close call, never enough to turn a bad evaluator into a good one.
+        them: up to +20 attribute points at level 5, half the 40-point vision span,
+        so a poor evaluator with a full department sees like a good one (owner,
+        2026-10-03: scouting "is supposed to help the GM evaluate their players and
+        make better decisions on who to draft or sign"). It was +7, which moved a
+        GM's draft picks by nothing measurable.
         """
         bonus = 0.0
         if FO_SCOUT_FACILITY_ENABLED and team is not None:
@@ -808,7 +815,17 @@ class FrontOfficeBrain:
         shared with the Front Office readout."""
         try:
             from managers.facilitiesManager import computeAppeal
-            return float(computeAppeal(getattr(team, 'facilities', None) or {}))
+            facilities = dict(getattr(team, 'facilities', None) or {})
+            # Calibration switch, the same one `Team.facilityEffect` reads: forced
+            # facilities count at level 5 on even-id teams and 0 on odd-id ones.
+            forced = _os.environ.get('FLOOS_FACILITY_FORCE')
+            if forced:
+                from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
+                even = (getattr(team, 'id', 0) or 0) % 2 == 0
+                for key in FACILITY_CATALOG:
+                    if forced == 'all' or key in forced.split(','):
+                        facilities[key] = FACILITY_MAX_LEVEL if even else 0
+            return float(computeAppeal(facilities))
         except Exception:
             return 0.0
 
@@ -1017,9 +1034,21 @@ class FrontOfficeBrain:
                         >= float(getattr(pl, 'playerRating', 0) or 0)):
                     coveredIds.add(id(pl))
 
+        from managers.playerManager import fanVerdict
         ranked = []
         for player in expiring:
             if id(player) in coveredIds:
+                continue
+            # Clear fan ratings decide (`FAN_VERDICT_*`): wanted, he is kept ahead of
+            # everyone (stars and replaceability aside); not wanted, he walks.
+            verdict = fanVerdict(player, getattr(self, 'sentimentMap', None) or {})
+            if verdict == 'walk':
+                continue
+            if verdict == 'keep':
+                ranked.append((player, FAN_KEEP_PRIORITY
+                               + self.decisionValue(player, coach, rng=rng, team=team)))
+                continue
+            if not self.worthResigningOnStars(player, coach, team):
                 continue
             incumbent = self.decisionValue(player, coach, rng=rng, team=team)
             # ⚠️ WHAT WOULD I ACTUALLY LOSE, not "does one named free agent beat him".
@@ -1047,6 +1076,27 @@ class FrontOfficeBrain:
                 ranked.append((player, priority))
         ranked.sort(key=lambda pair: -pair[1])
         return ranked
+
+    def worthResigningOnStars(self, player, coach=None, team=None) -> bool:
+        """The simple floor under every re-sign (`FO_RESIGN_MIN_RATING`): a player under 3
+        stars walks, unless he is DEVELOPING and this team projects him to 3 stars or
+        better. The projection is his mature skill (`computeExpectedRating`) plus the
+        credited share of the gap to this team's read of his ceiling, the same read the
+        trade market prices a rising player on."""
+        rating = float(getattr(player, 'playerRating', 0) or 0)
+        if rating >= FO_RESIGN_MIN_RATING:
+            return True
+        try:
+            if self.classifyArc(player) != ARC_DEVELOPING:
+                return False
+            expected = float(player.computeExpectedRating())
+            ceiling = float(self._ceilingRating(player, team))
+            devLean = float(self._attrLean(coach, 'playerDevelopment'))
+            projected = max(rating, expected + max(0.0, ceiling - expected)
+                            * FO_CEILING_CREDIT * devLean)
+        except Exception:
+            return False
+        return projected >= FO_RESIGN_MIN_RATING
 
     def chooseResigns(self, expiring, limit, coach=None, pool=None, rng=None,
                       pickDepth=0, team=None, teamsAhead=0, internal=None):
@@ -1105,9 +1155,13 @@ class FrontOfficeBrain:
             # otherwise only asks about players, and every partial mock of that manager
             # in the tests would need a new method. The default of 0 matches no stamp,
             # so an unstamped brain simply leaves the player cuttable.
-            from managers.playerManager import isCutProtected
+            from managers.playerManager import isCutProtected, fanVerdict
             if isCutProtected(player, self.season):
                 continue
+            verdict = fanVerdict(player, getattr(self, 'sentimentMap', None) or {})
+            if verdict == 'keep':
+                continue                      # his fans want him: never cut
+            disliked = verdict == 'walk'
             # ⚠️ SENTIMENT IS ON THE BAR HERE, NOT IN THE VALUE. A cut is a DEPARTURE,
             # and on a departure the club's own valuation is the side that does not
             # bind — so a beloved player raises the upgrade the club must be confident
@@ -1121,7 +1175,10 @@ class FrontOfficeBrain:
                                                     rng=rng, pickDepth=pickDepth,
                                                     team=team)
             upgrade = replacement - incumbent
-            if upgrade < FO_CUT_UPGRADE_MARGIN * self.sentimentBarScale(player, coach):
+            # A player his fans clearly do not want clears the lowest bar there is.
+            barScale = (SENTIMENT_BAR_MIN_SCALE if disliked
+                        else self.sentimentBarScale(player, coach))
+            if upgrade < FO_CUT_UPGRADE_MARGIN * barScale:
                 continue
             # ⚠️ AND the club must be CONFIDENT it can actually come away better
             # off. The size of the gap says the move is worth making; this says
@@ -1132,9 +1189,10 @@ class FrontOfficeBrain:
                 teamsAhead=teamsAhead, team=team)
             if confidence < FO_CUT_MIN_CONFIDENCE:
                 continue
-            ranked.append((player, slot, upgrade))
-        ranked.sort(key=lambda r: -r[2])
-        return ranked
+            ranked.append((player, slot, upgrade, disliked))
+        # Disliked players first, then the biggest upgrade.
+        ranked.sort(key=lambda r: (not r[3], -r[2]))
+        return [(p, sl, up) for p, sl, up, _d in ranked]
 
     def chooseCuts(self, team, coach=None, pool=None, rng=None, pickDepth=0,
                    teamsAhead=0):

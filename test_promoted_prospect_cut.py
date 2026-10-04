@@ -89,7 +89,7 @@ CUTTERS = [
      'the FA draft upgrade cut (the reported path)'),
     ('managers/frontOfficeBrain.py', 'rankCutCandidates',
      "the GM's cut-for-upgrade sweep"),
-    ('managers/seasonManager.py', '_cutToMakeRoomForProspect',
+    ('managers/seasonManager.py', '_cutPlanForProspect',
      'cutting to promote another prospect'),
     ('managers/tradeManager.py', '_cutToMakeRoom',
      'cutting to make room for a trade'),

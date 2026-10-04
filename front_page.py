@@ -245,12 +245,20 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
 
     # Over-fetch so the lead can be chosen from a real window rather than from whatever
     # happened to land in the last `limit` rows.
+    # Trade news is hidden while trading is off (`constants.tradingEnabled`).
+    try:
+        from constants import tradingEnabled
+        hideTrades = not tradingEnabled()
+    except Exception:
+        hideTrades = True
     rows = (
         session.query(LeagueNewsItem)
         .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
         .limit(max(limit * 4, 40))
         .all()
     )
+    if hideTrades:
+        rows = [r for r in rows if getattr(r, 'category', None) != 'trade']
 
     # ⚠️ PINNED rows are fetched SEPARATELY, outside that window. That is the entire
     # point of pinning: the window above is the newest ~40 items, and a busy slate

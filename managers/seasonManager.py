@@ -7829,6 +7829,15 @@ class SeasonManager:
         scope it to this draft.
         """
         pairs = [(t, t) for t in worstFirst]
+        # ⚠️ WITH TRADING OFF EVERY TEAM PICKS IN ITS OWN SLOT (owner, 2026-10-03: "make sure
+        # future rookie drafts use the correct order"), whatever the pick rows say, so a
+        # stale ownership row can never move a selection.
+        try:
+            from constants import tradingEnabled
+            if not tradingEnabled():
+                return pairs
+        except Exception:
+            return pairs
         if not worstFirst:
             return pairs
         try:
@@ -8276,6 +8285,9 @@ class SeasonManager:
                            f"valuing on attributes alone: {e}")
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
                                  performanceMap=performanceMap)
+        # Every cut path reads fan verdicts through `isCutProtected`; give it this read.
+        from managers.playerManager import setFanSentiment
+        setFanSentiment(sentimentMap)
         # ⚠️ STAMP WHERE IN THE CALENDAR THIS BRAIN IS STANDING, or a prospect's ceiling
         # is read under the wrong seed and the GM's belief diverges from the band the
         # FANS ARE SHOWN — the exact divergence `_ceilingRating` reads the belief to
@@ -8405,72 +8417,88 @@ class SeasonManager:
         seasons = int(getattr(prospect, 'prospect_seasons', 0) or 0)
         return seasons >= max(1, PROSPECT_DEVELOPMENT_WINDOW) - 1
 
-    def _cutToMakeRoomForProspect(self, team, prospect, brain, coach, prospectValue: float):
-        """Cut the weakest incumbent at this prospect's position so he can be
-        promoted on his final window. Returns the freed slot, or None.
+    def _cutPlanForProspect(self, team, prospect, brain, coach, prospectValue: float,
+                            requireBetterToday: bool = False):
+        """(slot, incumbent to cut) that would make room for this prospect, (slot, None)
+        if a slot is already open, or None. DECIDES ONLY; `_executeProspectCut` acts, so
+        nobody is cut for a prospect who is not the one finally promoted.
 
-        Option 2 of the last chance (docs/TRADING_PLAN.md §4). Three gates, and
-        each one is load-bearing:
-
-          1. ⚠️ THE COMPARISON IS AGAINST THE INCUMBENT, NOT A FREE AGENT. The club
-             is choosing between two players it can actually have. A free agent is
-             irrelevant here — it is not giving up a roster spot to sign one.
-          2. The prospect must genuinely beat him, by the same margin a cut-for-
-             upgrade needs anywhere else (`FO_CUT_UPGRADE_MARGIN`). Losing a prospect
-             is bad; cutting a better player to keep him is worse.
-          3. ⚠️ THE FEE MUST BE AFFORDABLE, AND A CLUB THAT CANNOT PAY CANNOT CUT.
-             Not a debt — see CUT_FEE_RATE. A club that cannot afford it falls back
-             to letting him walk (or, once trading ships, to selling him).
-
-        A walk-year or retiring incumbent is skipped: he vacates on his own, and
-        paying to cut a player who is leaving anyway is pure waste.
+        Gates, each load-bearing:
+          1. ⚠️ THE COMPARISON IS AGAINST THE INCUMBENT, NOT A FREE AGENT. The club is
+             choosing between two players it can actually have.
+          2. The prospect must beat him by the same margin a cut-for-upgrade needs
+             anywhere else (`FO_CUT_UPGRADE_MARGIN`).
+          3. ⚠️ NOBODY SIGNED OR RE-SIGNED THIS OFFSEASON (owner, 2026-10-03: "I generally
+             dont want teams signing players and then cutting them in the offseason").
+             His contract has not started counting down: `termRemaining == term`.
+          4. `requireBetterToday` (owner, 2026-10-03, for a prospect NOT on his final
+             season): the prospect must also be rated above him today, so a club only
+             cuts for a player who is better now, not merely projected better.
+        A walk-year or retiring incumbent is skipped (he vacates on his own), as is one
+        `isCutProtected` (a fan favorite, or a protected prospect).
         """
         from constants import FO_CUT_UPGRADE_MARGIN
+        from managers.playerManager import isCutProtected
         posSlots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
         slots = posSlots.get(getattr(getattr(prospect, 'position', None), 'value', 0), [])
         worstSlot, worstPlayer, worstValue = None, None, None
         for slot in slots:
             incumbent = team.rosterDict.get(slot)
             if incumbent is None:
-                return slot                 # already free; nothing to pay for
+                return slot, None
             if getattr(incumbent, 'willRetire', False):
-                continue                    # vacates on its own
-            if (getattr(incumbent, 'termRemaining', 0) or 0) <= 1:
-                continue                    # walk-year: he is leaving anyway
-            # ⚠️ Not a prospect this club promoted minutes ago in the loop above. Trading
-            # one just-promoted prospect for another is the churn this rule exists to
-            # stop, and it costs a cut fee to end up with the same number of rookies.
-            from managers.playerManager import isCutProtected
-            if isCutProtected(
-                    incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
+                continue
+            remaining = getattr(incumbent, 'termRemaining', 0) or 0
+            if remaining <= 1:
+                continue
+            term = getattr(incumbent, 'term', None)
+            if term and remaining >= term:
+                continue                    # signed or re-signed this offseason
+            if isCutProtected(incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
+                continue
+            if requireBetterToday and float(getattr(prospect, 'playerRating', 0) or 0) <= \
+                    float(getattr(incumbent, 'playerRating', 0) or 0):
                 continue
             value = brain.decisionValue(incumbent, coach=coach, team=team)
             if worstValue is None or value < worstValue:
                 worstSlot, worstPlayer, worstValue = slot, incumbent, value
-        if worstPlayer is None:
+        if worstPlayer is None or prospectValue - worstValue < FO_CUT_UPGRADE_MARGIN:
             return None
-        if prospectValue - worstValue < FO_CUT_UPGRADE_MARGIN:
-            return None                     # not enough of an upgrade to pay for
-        from managers.frontOfficeBrain import cutFeeFor
-        fee = cutFeeFor(worstPlayer)
-        if not self._chargeCutFee(team, fee):
-            logger.info(f"{team.name} cannot afford the {fee}F cut fee to keep "
-                        f"{prospect.name} — he walks")
-            return None
+        return worstSlot, worstPlayer
 
+    def _executeProspectCut(self, team, prospect, slot, incumbent, finalWindow: bool):
+        """Cut `incumbent` to promote `prospect` into `slot`, paying the cut fee. Returns
+        the slot, or None (nothing changed) when the club cannot afford it."""
+        from managers.frontOfficeBrain import cutFeeFor
+        fee = cutFeeFor(incumbent)
+        if not self._chargeCutFee(team, fee):
+            logger.info(f"{team.name} cannot afford the {fee}F cut fee to promote "
+                        f"{prospect.name}")
+            return None
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
-        self._recordOffseasonEvent('cut', player=worstPlayer, team=team,
+        self._recordOffseasonEvent('cut', player=incumbent, team=team,
                                    detail=f"released to promote {prospect.name} ({fee}F)")
-        self.playerManager.releasePlayerToFreeAgency(worstPlayer, team, {})
-        worstPlayer.teamResignCount = 0
+        self.playerManager.releasePlayerToFreeAgency(incumbent, team, {})
+        incumbent.teamResignCount = 0
+        why = ('before his development window closed' if finalWindow
+               else 'who is the better player now')
         leagueHighlights.insert(0, {'event': {'text':
-            f'{team.name} released {worstPlayer.name} to promote {prospect.name} '
-            f'before his development window closed'}})
-        logger.info(f"Last window: {team.name} cut {worstPlayer.name} ({fee}F) to "
+            f'{team.name} released {incumbent.name} to promote {prospect.name}, {why}'}})
+        logger.info(f"Prospect promotion: {team.name} cut {incumbent.name} ({fee}F) to "
                     f"promote {prospect.name}")
-        return worstSlot
+        return slot
+
+    def _cutToMakeRoomForProspect(self, team, prospect, brain, coach, prospectValue: float):
+        """Find and execute in one step (the final-window path, kept for its callers)."""
+        plan = self._cutPlanForProspect(team, prospect, brain, coach, prospectValue)
+        if not plan:
+            return None
+        slot, incumbent = plan
+        if incumbent is None:
+            return slot
+        return self._executeProspectCut(team, prospect, slot, incumbent, finalWindow=True)
 
     def _chargeCutFee(self, team, fee: int) -> bool:
         """Debit a team's Treasury for a cut. False (and nothing charged) if it
@@ -8533,7 +8561,7 @@ class SeasonManager:
         # Loop: a promotion fills one slot, but a second prospect may fit a
         # different one, so re-evaluate until nothing more clears the bar.
         while True:
-            best, bestSlot, bestValue = None, None, 0.0
+            best, bestSlot, bestValue, bestCut = None, None, 0.0, None
             for prospect in prospects:
                 lastChance = self._isFinalProspectWindow(prospect)
                 try:
@@ -8542,6 +8570,16 @@ class SeasonManager:
                 except Exception:
                     slot = None
                 value = brain.decisionValue(prospect, coach=coach)
+                cutFor = None
+                if not slot and not lastChance:
+                    # ⚠️ A PROSPECT WHO IS CLEARLY BETTER TODAY DOES NOT WAIT (owner,
+                    # 2026-10-03: "make sure prospects are kept in mind"). The club may cut
+                    # a weaker starter for him, decided here and executed only if he is
+                    # the one promoted (`_cutPlanForProspect`).
+                    plan = self._cutPlanForProspect(team, prospect, brain, coach, value,
+                                                    requireBetterToday=True)
+                    if plan:
+                        slot, cutFor = plan
                 if not slot:
                     # ⚠️ NO OPEN SLOT USED TO MEAN NO PROMOTION AT ANY QUALITY, which on
                     # the final window loses a 99-potential quarterback for nothing
@@ -8551,10 +8589,11 @@ class SeasonManager:
                     # keeps the old behaviour: there is a next year, so leave him down.
                     if not lastChance:
                         continue
-                    slot = self._cutToMakeRoomForProspect(team, prospect, brain, coach, value)
-                    if not slot:
+                    plan = self._cutPlanForProspect(team, prospect, brain, coach, value)
+                    if not plan:
                         continue
-                elif not lastChance:
+                    slot, cutFor = plan
+                elif not lastChance and cutFor is None:
                     replacement = brain.bestReplacementValue(
                         prospect, coach=coach, pickDepth=pickDepth)
                     if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
@@ -8565,9 +8604,14 @@ class SeasonManager:
                 # now and releases him for nothing, so the choice is the prospect or an
                 # empty slot rating 50. Better-than-nothing beats better-than-a-free-agent.
                 if value > bestValue:
-                    best, bestSlot, bestValue = prospect, slot, value
+                    best, bestSlot, bestValue, bestCut = prospect, slot, value, cutFor
             if best is None:
                 break
+            if bestCut is not None:
+                if not self._executeProspectCut(team, best, bestSlot, bestCut,
+                                                finalWindow=self._isFinalProspectWindow(best)):
+                    prospects.remove(best)      # cannot pay the fee: not this offseason
+                    continue
 
             try:
                 bestTerm = self.playerManager.promotionTerm(best)

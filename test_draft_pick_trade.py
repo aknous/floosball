@@ -21,6 +21,15 @@ from database.models import DraftPick                                # noqa: E40
 from floosball_player import Position                                # noqa: E402
 from managers.playerManager import PlayerManager                     # noqa: E402
 
+import pytest                                                          # noqa: E402
+import constants                                                       # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _tradingOn(monkeypatch):
+    """The slot sale runs only with trading on, which is now off by default."""
+    monkeypatch.setattr(constants, 'TRADING_ENABLED', True)
+
 init_db()
 
 SEASON = 60
