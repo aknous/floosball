@@ -2048,7 +2048,7 @@ FACILITY_CATALOG = {
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
                     'levels': [0.0, 0.004, 0.008, 0.012, 0.016, 0.020]},     # rating edge in every game (Game._applyFacilityEdge)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
-                    'levels': [0.0, 0.05, 0.10, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
+                    'levels': [0.0, 0.15, 0.35, 0.55, 0.75, 0.90]},        # share of weekly fatigue gain removed (seasonManager._accumulateFatigue); L5 = nearly fresh all season
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
                     'levels': [0, 4, 8, 12, 16, 20]},                    # points added to the GM's scouting judgment (60-100)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
@@ -4374,14 +4374,18 @@ GAME_FORMAT_DESCRIPTIONS = {
 }
 
 # ---- Player Fatigue ----
-# Accumulation rate is unchanged — fatigue gauge still climbs visibly
-# across the season for the fan UI. What changed: PHYSICAL_IMPACT is
-# softened so each fatigue point hits performance less hard. End-of-
-# season tired stars feel tired, not broken.
-BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
+# The Recovery Center decides how much of this a team actually carries (owner,
+# 2026-10-05: "a team with a level 1 recovery center [should be] heavily
+# fatigued and a team with level 5 almost still fresh"). The base rate is what
+# a team with NO Recovery Center accumulates: at the league's mean resilience
+# (gain multiplier ~1.14) that is ~0.20 fatigue by week 28, i.e. ~10% off every
+# physical attribute by the end of the regular season. Was 0.0025, which left
+# even an unprotected team only ~4-5% down, so there was nothing for the
+# facility to save. Level 5 removes 90% of it (FACILITY_CATALOG['recovery']).
+BASE_FATIGUE_PER_WEEK = 0.0063      # weekly fatigue gain with no Recovery Center
 FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
-FATIGUE_PHYSICAL_IMPACT = 0.6       # Was 1.0 — softened so fatigue is less punishing
+FATIGUE_PHYSICAL_IMPACT = 0.5       # Was 0.6 (owner, 2026-10-05): eased once the Recovery Center made fatigue heavy; the gauge fans see is unchanged
 FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
 
 # Playoff bye reprieve: the top-2 seeds rest through round 1, so their players
