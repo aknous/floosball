@@ -57,7 +57,12 @@ PACK_WEIGHTS = [('metallic', 100), ('holographic', 25), ('prismatic', 10), ('dia
 # editions (a deep collection), not at pack rates. Cards that pay off stars or a built hand
 # (Eminence, Stacked Deck, Lemons, Captain) only show their real value here.
 ARM = os.environ.get('PROBE_ARM', 'pack')
-if ARM == 'contender':
+# PROBE_ARM=built: each target card in a contender hand BUILT for it. Its partners are found
+# empirically (companionPool): a card is a partner when pairing it with the target scores
+# differently from the two apart. Amplifiers (Doubler, Conductor, Captain, ...) produce
+# nothing of their own, so a random hand rarely holds what they act on; this is the arm that
+# says what they are worth when deployed as intended.
+if ARM in ('contender', 'built'):
     PACK_WEIGHTS = [('metallic', 1), ('holographic', 1), ('prismatic', 1), ('diamond', 1)]
 STAR_FLOOR = {}
 POS_NAME = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
@@ -167,7 +172,7 @@ def score(cards, week, seasonInfo, seasonsPlayed, extras, user):
 
 
 def starOk(pid, pos, meta):
-    return ARM != 'contender' or meta.get(pid, ('', 0))[1] >= STAR_FLOOR.get(pos, 0)
+    return ARM not in ('contender', 'built') or meta.get(pid, ('', 0))[1] >= STAR_FLOOR.get(pos, 0)
 
 
 def drawFiller(pos, byPos, meta, used, rng):
@@ -223,6 +228,154 @@ def marginal(effect, edition, targetPos, byWeek, meta, seasonInfo, seasonsPlayed
     return deltas
 
 
+def _pickPlayer(byPos, pos, edition, meta, used, rng):
+    pool = [x for x in byPos.get(pos, []) if x[0] not in used
+            and meta.get(x[0], ('', 80))[1] >= MIN_RATING[edition] and starOk(x[0], pos, meta)]
+    return rng.choice(pool) if pool else None
+
+
+def _card(pid, pos, stats, effect, edition, meta, streak):
+    name, rating = meta.get(pid, ('Probe', 80))
+    cfg = (ce.buildEffectConfig(edition, rating, pos, forceEffect=effect) if effect
+           else blankConfig())
+    return (pid, pos, stats, cfg, edition if effect else 'base', rating, name, streak)
+
+
+def companionPool(effect, edition, byWeek, meta, ctxArgs, rng, weeks=8, minSwing=0.5):
+    """Effects that interact with `effect`: T(A,B) - T(A,-) - T(-,B) + T(-,-) is not ~0."""
+    tpos = next(p for p in (1, 2, 3, 4, 5) if effect in livePool(edition, p))
+    weekList = sorted(w for w in byWeek if w >= 3)
+    pool = []
+    for ed2 in EDITIONS:
+        for e2 in sorted({n for n, e in ce.EFFECT_EDITION_TIER.items() if e == ed2}):
+            if e2 == effect:
+                continue
+            cpos = next((p for p in (1, 2, 3, 4, 5)
+                         if e2 in livePool(ed2, p) and (p != tpos or p == 3)), None)
+            if cpos is None:
+                continue
+            swings = []
+            for _ in range(weeks):
+                wk = rng.choice(weekList)
+                byPos = byWeek[wk]
+                t = _pickPlayer(byPos, tpos, edition, meta, set(), rng)
+                c = _pickPlayer(byPos, cpos, ed2, meta, {t[0]} if t else set(), rng)
+                if not t or not c:
+                    break
+                used = {t[0], c[0]}
+                rest = []
+                slots = [p for _, p in SLOTS]
+                slots.remove(tpos)
+                slots.remove(cpos)
+                for p in slots:
+                    x = _pickPlayer(byPos, p, 'metallic', meta, used, rng)
+                    if x:
+                        used.add(x[0])
+                        rest.append(_card(x[0], p, x[1], None, 'metallic', meta, 1))
+                streak = rng.randint(1, 6)
+                T = {}
+                seed = rng.random()
+                for a in (True, False):
+                    for b in (True, False):
+                        hand = rest + [_card(t[0], tpos, t[1], effect if a else None, edition, meta, streak),
+                                       _card(c[0], cpos, c[1], e2 if b else None, ed2, meta, streak)]
+                        random.seed(seed)
+                        T[(a, b)] = score(hand, wk, *ctxArgs)
+                swings.append(abs(T[(True, True)] - T[(True, False)]
+                                  - T[(False, True)] + T[(False, False)]))
+            if swings and statistics.mean(swings) > minSwing:
+                pool.append((e2, ed2, statistics.mean(swings)))
+    return pool
+
+
+# Hand SHAPES the partner rule cannot express. Lemons multiplies your LOWEST flat-FP card,
+# so five flat partners hand it a small one; the way it is played is one big flat-FP card
+# with the other slots on FPx (reported by a player, and the shape that maximizes it).
+BUILT_SHAPE = {'double_down': 'one_partner_rest_fpx'}
+
+
+def _fpxPool():
+    return [(e, ed, 0.0) for e, ed in ce.EFFECT_EDITION_TIER.items()
+            if ce.EFFECT_OUTPUT_TYPE.get(e) == 'fpx' and ed in EDITIONS]
+
+
+def builtMarginal(effect, edition, targetPos, pool, byWeek, meta, ctxArgs, rng):
+    """The target's marginal value in a contender hand whose other slots are its partners."""
+    shape = BUILT_SHAPE.get(effect)
+    weekList = sorted(w for w in byWeek if w >= 3)
+    deltas = []
+    for _ in range(TRIALS):
+        wk = rng.choice(weekList)
+        byPos = byWeek[wk]
+        t = _pickPlayer(byPos, targetPos, edition, meta, set(), rng)
+        if not t:
+            return None
+        used = {t[0]}
+        others = []
+        slots = [p for _, p in SLOTS]
+        slots.remove(targetPos)
+        rng.shuffle(slots)
+        for i, p in enumerate(slots):
+            slotPool = pool if (shape is None or i == 0) else _fpxPool()
+            choices = [(e2, ed2) for e2, ed2, _ in slotPool if e2 in livePool(ed2, p)
+                       and e2 not in {o[3].get('effectName') for o in others}]
+            rng.shuffle(choices)
+            placed = False
+            for e2, ed2 in choices:
+                x = _pickPlayer(byPos, p, ed2, meta, used, rng)
+                if x:
+                    used.add(x[0])
+                    others.append(_card(x[0], p, x[1], e2, ed2, meta, rng.randint(1, 6)))
+                    placed = True
+                    break
+            if not placed:
+                f = drawFiller(p, byPos, meta, used, rng)
+                if f is None:
+                    break
+                used.add(f[0])
+                others.append(f)
+        else:
+            streak = rng.randint(1, 6)
+            seed = rng.random()
+            random.seed(seed)
+            withCard = score(others + [_card(t[0], targetPos, t[1], effect, edition, meta, streak)],
+                             wk, *ctxArgs)
+            random.seed(seed)
+            without = score(others + [_card(t[0], targetPos, t[1], None, edition, meta, streak)],
+                            wk, *ctxArgs)
+            deltas.append(withCard - without)
+    return deltas
+
+
+def builtMain(byWeek, meta, seasonInfo, seasonsPlayed, extras, rng):
+    names = sorted(ONLY) if ONLY else sorted(
+        n for n, e in ce.EFFECT_EDITION_TIER.items() if e == 'diamond')
+    _, _, balances, pickem, results = extras
+    out = []
+    for effect in names:
+        edition = ce.EFFECT_EDITION_TIER[effect]
+        wk0 = sorted(results)[len(results) // 2] if results else 0
+        user = (statistics.median(balances), pickem[0] if pickem else None,
+                sorted(results.get(wk0, {0: 0}))[0])
+        ctxArgs = (seasonInfo, seasonsPlayed, extras, user)
+        pool = companionPool(effect, edition, byWeek, meta, ctxArgs, rng)
+        pool.sort(key=lambda x: -x[2])
+        per = {}
+        for pos in (1, 2, 3, 4, 5):
+            if effect not in livePool(edition, pos):
+                continue
+            d = builtMarginal(effect, edition, pos, pool, byWeek, meta, ctxArgs, rng) if pool else None
+            if d:
+                per[pos] = (statistics.mean(d), sorted(d)[int(0.9 * (len(d) - 1))])
+        out.append((effect, edition, per, [(e, round(sw, 1)) for e, _, sw in pool]))
+        mean = statistics.mean(v[0] for v in per.values()) if per else float('nan')
+        print(f"  {effect:16}{mean:7.0f}   " + ' '.join(
+            f"{POS_NAME[p]}{v[0]:.0f}(p90 {v[1]:.0f})" for p, v in per.items())
+            + f"   partners {len(pool)}: " + ', '.join(e for e, _, _ in pool[:8]))
+        sys.stdout.flush()
+    return out
+
+
 def main():
     conn = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
     season = int(SEASON) if SEASON else conn.execute(
@@ -230,7 +383,7 @@ def main():
     byWeek, meta = loadWeeks(conn, season)
     seasonsPlayed = dict(conn.execute("select id, seasons_played from players"))
     seasonInfo = seasonContext(byWeek, meta)
-    if ARM == 'contender':
+    if ARM in ('contender', 'built'):
         ratingsByPos = collections.defaultdict(set)
         for byPos in byWeek.values():
             for p, rows in byPos.items():
@@ -242,6 +395,12 @@ def main():
     extras = loadExtras(conn, season)
     rng = random.Random(SEED)
     print(f"{DB} season {season}, {TRIALS} lineups per card, normal weeks, tier 1, arm={ARM}\n")
+    if ARM == 'built':
+        out = builtMain(byWeek, meta, seasonInfo, seasonsPlayed, extras, rng)
+        if os.environ.get('PROBE_OUT'):
+            with open(os.environ['PROBE_OUT'], 'w') as fh:
+                json.dump(out, fh)
+        return
     rows = []
     for edition in EDITIONS:
         names = sorted({n for n, ed in ce.EFFECT_EDITION_TIER.items() if ed == edition})
