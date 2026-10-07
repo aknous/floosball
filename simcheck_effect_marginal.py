@@ -243,17 +243,21 @@ def _card(pid, pos, stats, effect, edition, meta, streak):
 
 def companionPool(effect, edition, byWeek, meta, ctxArgs, rng, weeks=8, minSwing=0.5):
     """Effects that interact with `effect`: T(A,B) - T(A,-) - T(-,B) + T(-,-) is not ~0."""
-    tpos = next(p for p in (1, 2, 3, 4, 5) if effect in livePool(edition, p))
+    targetPositions = [p for p in (1, 2, 3, 4, 5) if effect in livePool(edition, p)]
     weekList = sorted(w for w in byWeek if w >= 3)
     pool = []
     for ed2 in EDITIONS:
         for e2 in sorted({n for n, e in ce.EFFECT_EDITION_TIER.items() if e == ed2}):
             if e2 == effect:
                 continue
-            cpos = next((p for p in (1, 2, 3, 4, 5)
-                         if e2 in livePool(ed2, p) and (p != tpos or p == 3)), None)
-            if cpos is None:
+            # The CANDIDATE's position first, then a target slot that does not collide
+            # with it: a target pinned to its first position (QB) could never be tested
+            # against a QB-only partner, which hid every QB card from Sharpshooter.
+            pair = next(((cp, tp) for cp in (1, 2, 3, 4, 5) if e2 in livePool(ed2, cp)
+                         for tp in targetPositions if tp != cp or cp == 3), None)
+            if pair is None:
                 continue
+            cpos, tpos = pair
             swings = []
             for _ in range(weeks):
                 wk = rng.choice(weekList)

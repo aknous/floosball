@@ -126,7 +126,8 @@ class CardCalcContext:
     chanceBonus: float = 0.0  # Sum of Providence + Catalyst + innate synergy + Fortunate modifier
     chanceCardCount: int = 0  # Number of chance cards in hand (for synergy effects)
     hasAdvantage: bool = False  # Advantage card present
-    advantageRolls: int = 2     # Advantage rolls N times (tier+1), keeps the best
+    advantageRolls: int = 2     # Advantage rolls N times (rollCount + tier - 1), keeps the best
+    catalystJackpotBoost: float = 0.0  # Catalyst: share added to every chance jackpot that hits
     kickerSeasonFgMisses: int = 0  # Season-long kicker FG misses (for Good Neighbor)
 
     # Streak card infrastructure
@@ -469,6 +470,13 @@ _TRADEOFF_EFFECTS = frozenset({
     "double_down", "last_resort",
 })
 
+# The accuracy stats Sharpshooter multiplies for every other card.
+SHARPSHOOTER_STATS = (
+    ("passing_stats", ("comp", "goodThrows")),
+    ("receiving_stats", ("contestedCatches",)),
+    ("kicking_stats", ("fgs", "fgYards")),
+)
+
 # Pure marker / structural cards: they produce no FP of their own — they only
 # amplify or modify OTHER cards. They must never accrue a position-conditional
 # match bonus (which would fabricate a phantom FP row), and Lemons / Conductor
@@ -596,13 +604,38 @@ def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
 
 class _AdvantageRNG:
     """Wraps an RNG so .random() returns the best of N rolls (lower = better for
-    chance cards). N = Advantage's roll count, which scales with its tier."""
-    def __init__(self, rng: _random.Random, rolls: int = 2):
+    chance cards). N = Advantage's roll count, which scales with its tier.
+
+    Every call's rolls are recorded (sorted) in `record` so the calculator can tell
+    afterwards whether a SECOND roll also hit, which pays the jackpot twice."""
+    def __init__(self, rng: _random.Random, rolls: int = 2, record=None):
         self._rng = rng
         self._rolls = max(2, int(rolls))
+        self._record = record
 
     def random(self) -> float:
-        return min(self._rng.random() for _ in range(self._rolls))
+        rolls = sorted(self._rng.random() for _ in range(self._rolls))
+        if self._record is not None:
+            self._record.append(rolls)
+        return rolls[0]
+
+
+def catalystJackpotBoost(primary: dict, playerFP: float) -> float:
+    """Catalyst's share added to every chance jackpot that hits: `perFpPct` per FP its
+    player scores over `baselineSolo`, capped at `maxBoost`. `primary` is tier-scaled."""
+    baseline = primary.get("baselineSolo", 12)
+    perFp = primary.get("perFpPct", 0.0)
+    cap = primary.get("maxBoost", 0.0)
+    return max(0.0, min(cap, (float(playerFP or 0) - baseline) * perFp))
+
+
+def advantageDoubleChance(p: float, rolls: int) -> float:
+    """P(at least two of `rolls` independent rolls hit at odds p): Advantage's
+    double-jackpot chance, for the expected projection."""
+    p = max(0.0, min(1.0, p))
+    miss = (1 - p) ** rolls
+    one = rolls * p * (1 - p) ** (rolls - 1)
+    return max(0.0, 1.0 - miss - one)
 
 
 class _ProjectionRNG:
@@ -646,13 +679,21 @@ def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _
     take the triggered path — the caller scales by the threshold to
     produce expected value.
     """
+    # A forced miss is honored LIVE too: Advantage's double jackpot is the hit minus
+    # what the card pays on a miss, and that is asked of the same compute.
+    if getattr(ctx, 'projectionForceMiss', False):
+        return _ProjectionMissRNG()
     if getattr(ctx, 'isProjection', False):
-        return _ProjectionMissRNG() if getattr(ctx, 'projectionForceMiss', False) else _ProjectionRNG()
+        return _ProjectionRNG()
     seedStr = f"{ctx.userId}-{ctx.season}-{ctx.weekNumber}-{userCardId}-{seedExtra}"
     seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
     rng = _random.Random(seedHash)
     if getattr(ctx, 'hasAdvantage', False):
-        return _AdvantageRNG(rng, getattr(ctx, 'advantageRolls', 2))
+        rolls = getattr(ctx, '_advantageRolls', None)
+        if rolls is None:
+            rolls = ctx._advantageRolls = {}
+        return _AdvantageRNG(rng, getattr(ctx, 'advantageRolls', 2),
+                             record=rolls.setdefault(userCardId, []))
     return rng
 
 
@@ -701,8 +742,9 @@ def _rescaleEquationValue(equation, tierMult):
 def _computeMissedOutcome(effectConfig, ctx, cardPlayerId, eqId, firstPassBreakdowns):
     """What this chance effect pays when the roll MISSES — its guaranteed floor.
 
-    Runs the same compute a second time with the RNG forced to miss. Cheap (projection
-    only, chance cards only) and side-effect free: no chance compute mutates the context.
+    Runs the same compute a second time with the RNG forced to miss. Cheap (projection,
+    and Advantage's double jackpot live; chance cards only) and side-effect free: no
+    chance compute mutates the context.
     Returns None if anything goes wrong, which puts the floor at zero — the old
     behavior, so a bad answer here can never inflate a projection.
     """
@@ -808,10 +850,47 @@ def _computeCardPass(
         floorFP = missed.fpBonus if missed else 0.0
         floorFloobits = missed.floobits if missed else 0
         floorMult = missed.multBonus if (missed and missed.multBonus > 1) else 1.0
-        primary.fpBonus = floorFP + (primary.fpBonus - floorFP) * threshold
-        primary.floobits = int(round(floorFloobits + (primary.floobits - floorFloobits) * threshold))
+        # Advantage: N rolls keep the best (hit at 1-(1-p)^N), and a second hit pays the
+        # jackpot again. The projection used to price chance cards at the single-roll
+        # odds whatever Advantage was equipped.
+        jackpotWeight = threshold
+        if getattr(ctx, 'hasAdvantage', False):
+            n = getattr(ctx, 'advantageRolls', 2)
+            jackpotWeight = (1 - (1 - threshold) ** n) + advantageDoubleChance(threshold, n)
+        jackpotWeight *= 1.0 + getattr(ctx, 'catalystJackpotBoost', 0.0)
+        primary.fpBonus = floorFP + (primary.fpBonus - floorFP) * jackpotWeight
+        primary.floobits = int(round(floorFloobits + (primary.floobits - floorFloobits) * jackpotWeight))
         if primary.multBonus > 1:
-            primary.multBonus = floorMult + (primary.multBonus - floorMult) * threshold
+            primary.multBonus = floorMult + (primary.multBonus - floorMult) * jackpotWeight
+    elif (not getattr(ctx, 'isProjection', False)
+            and primary.chanceTriggered and primary.chanceThreshold > 0
+            and not getattr(primary, 'chanceMetaGrowth', False)):
+        # A chance card that HIT, live. Two amplifiers act on its jackpot (what the hit
+        # pays over the miss), both owner 2026-10-07:
+        #   ⚠️ ADVANTAGE: when a second roll ALSO beat the odds, the jackpot pays again.
+        #      It used to only raise the hit rate, and built around chance cards it
+        #      measured 14 FP a week against ~60 for the best synergy cards.
+        #   ⚠️ CATALYST: the jackpot grows by ctx.catalystJackpotBoost.
+        calls = (getattr(ctx, '_advantageRolls', None) or {}).get(eq.id) or []
+        doubled = bool(getattr(ctx, 'hasAdvantage', False) and calls and len(calls[-1]) > 1
+                       and calls[-1][1] < primary.chanceThreshold)
+        boost = getattr(ctx, 'catalystJackpotBoost', 0.0)
+        if doubled or boost > 0:
+            missed = _computeMissedOutcome(effectConfig, ctx, cardPlayerId, eq.id,
+                                           firstPassBreakdowns)
+            if missed is not None:
+                k = (2.0 if doubled else 1.0) * (1.0 + boost) - 1.0
+                primary.fpBonus = round(primary.fpBonus + k * max(0.0, primary.fpBonus - missed.fpBonus), 2)
+                primary.floobits = int(round(primary.floobits + k * max(0, primary.floobits - missed.floobits)))
+                if primary.multBonus > 1:
+                    floorMult = missed.multBonus if missed.multBonus > 1 else 1.0
+                    primary.multBonus = round(primary.multBonus + k * max(0.0, primary.multBonus - floorMult), 3)
+                notes = []
+                if doubled:
+                    notes.append("Advantage: two rolls hit, jackpot doubled")
+                if boost > 0:
+                    notes.append(f"Catalyst: jackpot +{boost:.0%}")
+                primary.equation = f"{primary.equation}. " + ". ".join(notes)
 
     # 1b. Card upgrade tier. Self-reporting cards scale their own output by
     # CARD_TIER_MULT; structural cards (amplifiers / meta — no own output) get a
@@ -1021,6 +1100,10 @@ def calculateWeekCardBonuses(
         ctx.equippedCardEffectNames.append(ec.get("effectName", ""))
 
     # Pre-scan for chance card synergy, Providence amplifier, Advantage, and Catalyst
+    ctx.hasAdvantage = False
+    ctx.advantageRolls = 2
+    ctx.catalystJackpotBoost = 0.0
+    ctx._advantageRolls = {}
     chanceCardCount = 0
     for eq in equippedCards:
         ec = eq.user_card.card_template.effect_config or {}
@@ -1037,9 +1120,11 @@ def calculateWeekCardBonuses(
             chanceCardCount += 1
         if effectName == "advantage":
             ctx.hasAdvantage = True
-            # Roll count scales with Advantage's tier: tier I = 2, IV = 5.
+            # Roll count: the card's own rollCount (3 since 2026-10-07; older cards 2) plus
+            # one per tier above I. This read `tier + 1` and ignored rollCount entirely.
             _at = getattr(eq.user_card, "tier", 1) or 1
-            ctx.advantageRolls = max(ctx.advantageRolls, _at + 1)
+            _base = int((ec.get("primary") or {}).get("rollCount", 2) or 2)
+            ctx.advantageRolls = max(ctx.advantageRolls, _base + _at - 1)
         if effectName == "catalyst":
             primary = ec.get("primary", {})
             from managers.cardEffects import tierScaledStrength
@@ -1050,19 +1135,16 @@ def calculateWeekCardBonuses(
             # This ran on ctx.weekRawFP (a whole roster, ~120 FP) against a baseline of
             # 25 sized for ONE player, so it sat near its cap every week. Falls back to
             # the roster-era keys so a card minted before the rebase still behaves.
-            fpPer1Pct = _scaled.get("fpPer1PctSolo",
-                                    primary.get("fpPer1PctSolo",
-                                                primary.get("fpPer1Pct", 5)))
-            baseline = primary.get("baselineSolo", primary.get("baseline", 12))
-            maxBoost = _scaled.get("maxBoost", primary.get("maxBoost", 0.10))
+            # ⚠️ CATALYST ENLARGES JACKPOTS, IT NO LONGER RAISES ODDS (owner, 2026-10-07).
+            # Raising odds duplicated Advantage and Providence, and built around chance
+            # cards it measured 22 FP a week. Now Advantage makes hits more likely,
+            # Catalyst makes them bigger, and High Roller pays per hit.
             _cardPid = getattr(eq.user_card.card_template, "player_id", None)
             playerFP = float(((ctx.weekPlayerStats or {}).get(_cardPid) or {})
                              .get("fantasyPoints", 0) or 0)
-            if playerFP > baseline:
-                boost = min(maxBoost, (playerFP - baseline) / fpPer1Pct / 100)
-            else:
-                boost = 0.0
-            ctx.chanceBonus += boost
+            # tierScaledStrength returns only the keys a tier changes ({} at tier I).
+            ctx.catalystJackpotBoost = max(ctx.catalystJackpotBoost,
+                                           catalystJackpotBoost({**primary, **_scaled}, playerFP))
     ctx.chanceCardCount = chanceCardCount
     # Innate chance synergy: each chance card boosts all others by +0.04
     if chanceCardCount > 1:
@@ -1190,16 +1272,23 @@ def calculateWeekCardBonuses(
                     if f in stats and isinstance(stats[f], (int, float)):
                         stats[f] = int(round(stats[f] * yardMult))
 
+    # ⚠️ SHARPSHOOTER IS A PRECISION AMPLIFIER (owner, 2026-10-07). It used to double field
+    # goals only, and only kicker cards read field goals, so a lineup with one kicker slot
+    # held at most ONE card it could act on; built around, it measured 24 FP a week against
+    # ~60 for the best synergy cards. Now every accuracy stat counts: completions and
+    # well-placed throws (QB), contested catches (WR/TE), and field goals (K).
     if "sharpshooter" in equippedNames and _amplifierActive("sharpshooter"):
-        ctx._statAmpFired["sharpshooter"] = _rosterHas("kicking_stats", ("fgs",))
+        ctx._statAmpFired["sharpshooter"] = any(
+            _rosterHas(k, f) for k, f in SHARPSHOOTER_STATS)
         fgMult = _ampFactor("sharpshooter", 2.0, "fgMult")
         for ps in (ctx.weekPlayerStats or {}).values():
-            kStats = ps.get("kicking_stats")
-            if not isinstance(kStats, dict):
-                continue
-            for f in ("fgs", "fgYards"):
-                if f in kStats and isinstance(kStats[f], (int, float)):
-                    kStats[f] = int(round(kStats[f] * fgMult))
+            for catKey, fields in SHARPSHOOTER_STATS:
+                stats = ps.get(catKey)
+                if not isinstance(stats, dict):
+                    continue
+                for f in fields:
+                    if f in stats and isinstance(stats[f], (int, float)):
+                        stats[f] = int(round(stats[f] * fgMult))
 
     # Pre-pass: Alchemy converts roster K FGs into TDs for other cards' tallies
     # (Cornucopia, Touchdown Piñata, etc.). Must run before any card computes, or cards in

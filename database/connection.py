@@ -2071,6 +2071,20 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
     # keeps the exact gates it was minted with.
     # Odometer's text names the card's own position's yard gates (2026-09-27). Every card
     # already stores its position as `posLabel`, which is all the gates depend on.
+    if effectName == 'catalyst' and 'perFpPct' not in primary:
+        # Catalyst enlarges jackpots instead of raising odds (2026-10-07); its params are
+        # fixed by design, so an old card takes the current ones.
+        from managers.cardEffects import (CATALYST_BASELINE_FP, CATALYST_PER_FP_PCT,
+                                          CATALYST_MAX_BOOST)
+        from managers.cardEffects import _POSITION_MEDIAN_FP, _SNAKE_EYES_REF_MEDIAN, POSITION_LABELS
+        pos = {v: k for k, v in POSITION_LABELS.items()}.get(primary.get('posLabel'))
+        cs = _POSITION_MEDIAN_FP.get(pos, _SNAKE_EYES_REF_MEDIAN) / _SNAKE_EYES_REF_MEDIAN
+        perFp = round(CATALYST_PER_FP_PCT / cs, 4)
+        primary.update({"baselineSolo": round(CATALYST_BASELINE_FP * cs, 1), "perFpPct": perFp,
+                        "perFpPctDisplay": round(perFp * 100, 1),
+                        "maxBoost": CATALYST_MAX_BOOST,
+                        "maxBoostDisplay": int(round(CATALYST_MAX_BOOST * 100))})
+        return True
     if effectName == 'odometer':
         # Payouts became per position (2026-10-07) and are read at scoring time, so every
         # card states its position's current table, whenever it was minted.
@@ -2116,6 +2130,10 @@ def _refreshCardEffectText():
 
     refreshEffects = {
         "odometer", "snake_eyes",
+        # Diamond rework (2026-10-07): Sharpshooter became a precision amplifier, and its
+        # mechanic lives in the scoring pre-pass, so it reaches already-minted cards and
+        # their text must say so. Advantage and Catalyst changed what they do the same way.
+        "sharpshooter", "advantage", "catalyst",
         # Trust Fund growth capped at TRUST_FUND_GROWTH_WEEKS_CAP (2026-09-27).
         "trust_fund",
         # FPx delta-notation sweep — existing cards stored 1.x values in

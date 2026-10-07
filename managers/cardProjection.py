@@ -183,9 +183,9 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         bonus = int(round((primary.get("chanceBonus", 0) or 0) * 100))
         return f"+{bonus}% to chance cards" if active else "Needs chance card"
     if effectName == "catalyst":
-        return "Roster-FP chance boost" if active else "Needs chance card"
+        return "Bigger chance jackpots" if active else "Needs chance card"
     if effectName == "advantage":
-        return "Chance rolls twice" if active else "Needs chance card"
+        return "Rolls again, pays twice on two hits" if active else "Needs chance card"
     if effectName == "conductor":
         boost = primary.get("boostPct", 20)
         return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"
@@ -194,7 +194,7 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
     if effectName == "surveyor":
         return "Yards count 1.5x for other cards" if active else "Needs another card"
     if effectName == "sharpshooter":
-        return "FGs count 2x for other cards" if active else "Needs another card"
+        return "Accuracy stats count 3x for other cards" if active else "Needs another card"
     return ""
 
 

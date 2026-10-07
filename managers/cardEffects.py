@@ -139,7 +139,7 @@ EFFECT_CATEGORY = {
     # Diamond stat amplifiers — no own output, pre-pass mutates ctx stats
     "doubler": "cross",          # roster TDs counted 2x for other card effects
     "surveyor": "cross",         # roster yards counted 1.5x for other card effects
-    "sharpshooter": "cross",     # roster FGs counted 2x for other card effects
+    "sharpshooter": "cross",     # roster accuracy stats counted 2x for other card effects
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -264,9 +264,9 @@ def tierScaledStrength(effectName: str, primary: dict, tierMult: float) -> dict:
         return {"rewardValue": round(1 + (p["rewardValue"] - 1) * tierMult, 2)}
     if effectName == "catalyst":
         out = {}
-        for _k in ("fpPer1PctSolo", "fpPer1Pct"):   # Solo is current; the other is legacy
-            if _k in p:
-                out[_k] = max(1, int(round(p[_k] / tierMult)))
+        if "perFpPct" in p:
+            out["perFpPct"] = round(p["perFpPct"] * tierMult, 4)
+            out["perFpPctDisplay"] = round(out["perFpPct"] * 100, 1)
         if "maxBoost" in p:
             out["maxBoost"] = round(p["maxBoost"] * tierMult, 2)
             out["maxBoostDisplay"] = int(round(out["maxBoost"] * 100))
@@ -827,7 +827,7 @@ EFFECT_TAGLINES = {
     "traverse": "Take the long way",
     # ── Chance Synergy Effects ──
     "advantage": "Double or nothing (minus the nothing)",
-    "catalyst": "Points in, luck out",
+    "catalyst": "Points in, payouts up",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "All together now",
     "conductor": "Wave the baton",
@@ -854,7 +854,7 @@ EFFECT_TAGLINES = {
     # ── Diamond stat amplifiers ──
     "doubler": "Twice the score",
     "surveyor": "Every yard counts more",
-    "sharpshooter": "Boots that pay double",
+    "sharpshooter": "Pinpoint everything",
 }
 
 EFFECT_TOOLTIPS = {
@@ -1007,8 +1007,8 @@ EFFECT_TOOLTIPS = {
     "eminence": "Top of the heap. FPx per roster player ranked top-10 at their position by season FP/game.",
     "traverse": "High stakes yardage gamble. FP floor plus a jackpot chance based on yardage by this player.",
     # ── Chance Synergy Effects ──
-    "advantage": "Loaded dice. Every chance card in your hand rolls twice, keeping the better result.",
-    "catalyst": "Compound interest. This player's FP boosts the odds on all your chance cards. Also pays Floobits.",
+    "advantage": "Loaded dice. Every chance card in your hand rolls several times, keeping the best result, and pays its bonus twice when two rolls hit.",
+    "catalyst": "Compound interest. This player's FP makes every chance card's jackpot bigger when it hits. Also pays Floobits.",
     # ── Strategy-Warping Effects ──
     "alchemy": "Transmutation complete. Every field goal your kicker makes counts as a TD for fantasy scoring and other card effects.",
     "home_alone": "Embrace the void. FPx that grows with each empty roster slot.",
@@ -1042,9 +1042,9 @@ EFFECT_TOOLTIPS = {
     "charmed": "Pays out every time luck breaks your way. FP per chance card that triggered this week.",
     "cornerstone": "Roster the position leaders. FPx per roster player ranked #1 at their position by season FP.",
     # ── Diamond stat amplifiers ──
-    "doubler": "Doubles down on the scoreboard. Roster TDs count 2x for every other card. Produces nothing on its own.",
+    "doubler": "Doubles down on the scoreboard. Roster TDs count extra for every other card. Produces nothing on its own.",
     "surveyor": "Measures every yard twice. Roster yards count 1.5x for every other card. Produces nothing on its own.",
-    "sharpshooter": "Kicks land harder. Roster FGs count 2x for every other card. Produces nothing on its own.",
+    "sharpshooter": "Precision pays triple. Your roster's completions, well-placed throws, contested catches and field goals count 3x for every other card. Produces nothing on its own.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -1201,8 +1201,8 @@ EFFECT_DETAIL_TEMPLATES = {
     "eminence": "+{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
-    "advantage": "All chance cards roll {rollCount}x for their bonus, keeping the best result",
-    "catalyst": "+1% chance boost per {fpPer1PctSolo} of this player's FP above {baselineSolo}. Max +{maxBoostDisplay}%. Also pays {baseFloobits} Floobits",
+    "advantage": "All chance cards roll {rollCount}x for their bonus, keeping the best result. When two rolls hit, the bonus pays twice",
+    "catalyst": "Chance cards that hit pay +{perFpPctDisplay}% more jackpot per FP this player scores above {baselineSolo}. Max +{maxBoostDisplay}%. Also pays {baseFloobits} Floobits",
     # ── Strategy-Warping Effects ──
     "alchemy": "+{perFgBonusFP} bonus FP per FG by your kicker. Those FGs also count as TDs for other cards in your hand.",
     "home_alone": "+{perSlotMult} FPx per empty roster slot",
@@ -1237,7 +1237,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "cornerstone": "+{perPlayerMult} FPx per roster player ranked #1 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "doubler": "Roster TDs count {tdMult}x for every other card's effect this week.",
     "surveyor": "Roster yards count {yardMult}x for every other card's effect this week.",
-    "sharpshooter": "Roster FGs count {fgMult}x for every other card's effect this week.",
+    "sharpshooter": "Roster completions, well-placed throws, contested catches and field goals count {fgMult}x for every other card's effect this week.",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -1686,7 +1686,9 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale, position=N
     if effectName == "surveyor":
         return {"isAmplifier": True, "yardMult": 1.5}
     if effectName == "sharpshooter":
-        return {"isAmplifier": True, "fgMult": 2.0}
+        # 3x since the precision redesign (2026-10-07): at 2x, built around, it measured
+        # ~36 FP against the ~70-75 diamond target.
+        return {"isAmplifier": True, "fgMult": 3.0}
     # ── Streak Synergy Effects (second pass) ──
     if effectName == "fortitude":
         return {"rewardType": "mult", "perCardMult": round((0.63 + rn * 0.021) * editionScale * _BAL_FPX_MULT, 2)}
@@ -1774,6 +1776,20 @@ _LADDER_VOLUMES = {
     # 8.36, so the card paid ~2.2x its anchor.
     "adot":      {1: 8.36},
 }
+# Catalyst (2026-10-07): every chance jackpot that hits grows by this share per FP the
+# card's player scores over the baseline, up to the cap. Both are for a ~14 FP median
+# position and scale with the card's own (_POSITION_MEDIAN_FP). Sized against the
+# built-hand target (simcheck_effect_marginal.py, PROBE_ARM=built).
+CATALYST_BASELINE_FP = 12
+CATALYST_PER_FP_PCT = 0.10
+CATALYST_MAX_BOOST = 2.0
+
+# Median fantasy points in a game by position (fresh standard-format season, 2026-10-07).
+# Snake Eyes scales its "bad game" cutoffs off these, against the ~14 FP median its tiers
+# were written for.
+_POSITION_MEDIAN_FP = {1: 15.0, 2: 14.0, 3: 12.0, 4: 5.0, 5: 8.0}
+_SNAKE_EYES_REF_MEDIAN = 14.0
+
 # Altitude's bar sits this far under the mean aDOT (it was 5.5 against a 6.79 mean).
 _ALTITUDE_BAR_BELOW_MEAN = 1.29
 # Ace Up the Sleeve's bonus bar as a multiple of the position's mean receiving yards. It
@@ -2074,7 +2090,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
                 "isChanceEffect": True}
     # ── Meta: Advantage (no direct payout)
     if effectName == "advantage":
-        return {"isAdvantage": True, "rollCount": 2}
+        # 3 rolls at tier I since the double-jackpot redesign (2026-10-07); each tier adds
+        # one. At 2 it measured ~49 FP built against the ~70-75 diamond target.
+        return {"isAdvantage": True, "rollCount": 3}
     # ── Strategy-Warping: Opulence (FP per Floobits balance)
     if effectName == "fat_cat":
         floobitsPerFP = max(1, int(round((3 - rn * 0.02) / editionScale)))
@@ -2263,7 +2281,12 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
         # Tiered FPx. Stored as full multipliers; only the delta (over 1.0)
         # is scaled by the Balatro dial.
         _se = lambda m: round(1 + (m - 1.0) * _BAL_FPX_MULT, 2)
-        return {"tiers": [(0, _se(2.50)), (4, _se(2.05)), (9, _se(1.70)), (14, _se(1.40)), (19, _se(1.15))],
+        # ⚠️ THE CUTOFFS SCALE WITH THE POSITION'S TYPICAL GAME (2026-10-07). They were set
+        # for a ~14 FP median (QB/RB/WR), so a TE (median 5) sat in the top tier most weeks:
+        # built around, Snake Eyes measured 122 FP a week on a TE against 38 on a QB.
+        _sc = _POSITION_MEDIAN_FP.get(position, _SNAKE_EYES_REF_MEDIAN) / _SNAKE_EYES_REF_MEDIAN
+        return {"tiers": [(int(round(t * _sc)), _se(m)) for t, m in
+                          ((0, 2.50), (4, 2.05), (9, 1.70), (14, 1.40), (19, 1.15))],
                 "minMult": 1.0}
     if effectName == "luminary":
         return {"fpShareScale": round((0.54 + rn * 0.024) * editionScale * _BAL_FPX_MULT, 2)}
@@ -2431,20 +2454,20 @@ def _buildFloobitsParams(effectName, playerRating, editionScale, position=None):
         return {"flatBonus": flatBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
-        # Diamond tier — big chance boost + meaningful Floobits output.
-        # SOLO keys: the compute and the detail template were both rebased onto the card's
-        # own player, but this builder still emitted the roster-era `fpPer1Pct`/`baseline`.
-        # The effect of that split: the detail rendered raw {fpPer1PctSolo} placeholders,
-        # _computeCatalyst silently fell through to its hardcoded defaults, and the
-        # calculator pre-scan (the path that actually feeds ctx.chanceBonus) measured
-        # ROSTER FP against a single-player baseline of 25 and sat near its cap every week.
-        fpPer1PctSolo = 5
-        baselineSolo = 12
-        maxBoostPct = 35
-        baseFloobits = int(round((10 + rn * 0.40) * editionScale))
-        return {"fpPer1PctSolo": fpPer1PctSolo, "baselineSolo": baselineSolo,
-                "maxBoost": maxBoostPct / 100, "maxBoostDisplay": maxBoostPct,
-                "baseFloobits": baseFloobits,
+        # Diamond. Every chance card that HITS pays a bigger jackpot: perFpPct of it per
+        # FP this player scores over the baseline, capped at maxBoost (owner, 2026-10-07;
+        # it used to raise odds, which Advantage and Providence already do). Fixed by
+        # design, not by rating; the Floobit dividend still scales with rating.
+        # The baseline and the per-FP rate are both read against THIS position's typical
+        # game, so a TE (median 5) is judged on a TE's scale; at a flat 12 FP it measured
+        # 28 FP built against 54-57 at the other positions.
+        _cs = _POSITION_MEDIAN_FP.get(position, _SNAKE_EYES_REF_MEDIAN) / _SNAKE_EYES_REF_MEDIAN
+        _perFp = round(CATALYST_PER_FP_PCT / _cs, 4)
+        return {"baselineSolo": round(CATALYST_BASELINE_FP * _cs, 1), "perFpPct": _perFp,
+                "perFpPctDisplay": round(_perFp * 100, 1),
+                "maxBoost": CATALYST_MAX_BOOST,
+                "maxBoostDisplay": int(round(CATALYST_MAX_BOOST * 100)),
+                "baseFloobits": int(round((10 + rn * 0.40) * editionScale)),
                 "isChanceAmplifier": True}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"floobits": int(round(5 * editionScale))}
 
@@ -3002,6 +3025,45 @@ _BAND_TRIM = {
 }
 
 
+# ─── Diamond sizing (2026-10-07, owner: a diamond built for its hand lands ~1.25x the
+# best synergy cards built the same way) ─────────────────────────────────────────────
+# Measured with simcheck_effect_marginal.py PROBE_ARM=built: each diamond in a contender
+# hand whose other slots are its empirically-found partners. Best non-diamond synergy
+# built: Eminence 63, Diversified 60, so the target is ~70-75 FP a normal week. Before:
+# Fortitude 110, High Roller 89, Doubler 87 (scale with the count of matching cards, so a
+# full hand of them ran away); Full House 29, Snake Eyes 31, Conductor 20. Captain is left
+# alone (38 FP in the FPx-heavy hand it is played in). Kinds: 'delta' scales the value,
+# 'mult' scales a full multiplier's delta, 'pct' an integer percent, 'tiers' each tier's
+# multiplier delta. Frozen at mint.
+_DIAMOND_SIZE = {
+    "fortitude":   (0.65, {"perCardMult": "delta"}),
+    "high_roller": (0.81, {"perCardMult": "delta"}),
+    "doubler":     (0.71, {"tdMult": "mult"}),
+    "full_roster": (3.0,  {"rewardValue": "mult"}),
+    "snake_eyes":  (3.5,  {"tiers": "tiers"}),
+    "conductor":   (3.6,  {"boostPct": "pct"}),
+}
+
+
+def _applyDiamondSize(effectName, primary):
+    entry = _DIAMOND_SIZE.get(effectName)
+    if not entry:
+        return
+    factor, keys = entry
+    for key, kind in keys.items():
+        v = primary.get(key)
+        if kind == "tiers" and isinstance(v, list):
+            primary[key] = [(t, round(1 + (m - 1) * factor, 2)) for t, m in v]
+        elif not isinstance(v, (int, float)):
+            continue
+        elif kind == "mult":
+            primary[key] = round(1 + (v - 1) * factor, 2)
+        elif kind == "pct":
+            primary[key] = int(round(v * factor))
+        else:
+            primary[key] = round(v * factor, 2)
+
+
 def _applyBandTrim(effectName, position, primary):
     entry = _BAND_TRIM.get(effectName)
     if not entry:
@@ -3087,6 +3149,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         primary = {"baseFP": round(2 * editionScale, 1)}
     primary["posLabel"] = POSITION_LABELS.get(position, "??")
     _applyBandTrim(effectName, position, primary)
+    _applyDiamondSize(effectName, primary)
 
     # Position-specific param overrides for effects with per-position tuning
     if effectName == "crescendo":
@@ -5000,25 +5063,14 @@ def _computeAdvantage(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeCatalyst(primary, ctx, cardPlayerId, eqId):
-    """Dynamic chance boost from THIS player's FP (re-based off the roster) + small floobits base.
-
-    Boost = (rosterFP - baseline) / fpPer1Pct / 100, capped at maxBoost.
-    Also pays a flat floobits dividend.
-    """
-    # Re-based off roster FP to THIS player's FP, so the scale (baseline / per-1%)
-    # drops from roster-wide to single-player.
-    fpPer1Pct = primary.get("fpPer1PctSolo", 3)
-    baseline = primary.get("baselineSolo", 12)
-    maxBoost = primary.get("maxBoost", 0.10)
+    """Jackpot amplifier: every chance card that hits pays a bigger jackpot, scaled by
+    THIS player's FP over the baseline (applied in the calculator, which knows each
+    card's jackpot). Also pays a flat Floobit dividend."""
+    from managers.cardEffectCalculator import catalystJackpotBoost
     baseFloobits = primary.get("baseFloobits", 3)
     playerFP = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
-
-    if playerFP > baseline:
-        boost = min(maxBoost, (playerFP - baseline) / fpPer1Pct / 100)
-    else:
-        boost = 0.0
-
-    eq = f"{playerFP:.1f} FP · +{boost:.1%} chance boost · {baseFloobits}F"
+    boost = catalystJackpotBoost(primary, playerFP)
+    eq = f"{playerFP:.1f} FP · chance jackpots +{boost:.0%} · {baseFloobits}F"
     return EffectResult(floobits=baseFloobits, equation=eq)
 
 
@@ -5374,7 +5426,7 @@ def _computeSurveyor(primary, ctx, cardPlayerId, eqId):
 
 def _computeSharpshooter(primary, ctx, cardPlayerId, eqId):
     """Pure amplifier — roster FGs are doubled in the pre-pass."""
-    return EffectResult(equation="FGs counted 2x for other card effects")
+    return EffectResult(equation="Completions, well-placed throws, contested catches and FGs counted 2x for other card effects")
 
 
 def _computeCharmed(primary, ctx, cardPlayerId, eqId):
