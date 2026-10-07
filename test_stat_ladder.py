@@ -38,21 +38,29 @@ def _score(effect, position, stats, streak=1):
     return r.fpBonus, (r.multBonus - 1.0) if r.multBonus else 0.0
 
 
-# Measured per-game means (docs/CARD_STAT_LADDER.md).
+# The mean week IS the measured table the rates are sized against, read rather than
+# copied, so re-measuring the table cannot leave this test pinning the old volumes.
+V = ce._LADDER_VOLUMES
 MEAN = {
-    'wr': _dbStatsToCardFormat({}, {}, {'yards': 83.5, 'tds': 0.40, 'receptions': 9.35}, {}, 22, 5),
-    'te': _dbStatsToCardFormat({}, {}, {'yards': 59.0, 'tds': 0.26, 'receptions': 8.22}, {}, 18, 5),
-    'rb': _dbStatsToCardFormat({}, {'yards': 110.5, 'yardsAfterContact': 87.5}, {}, {}, 24, 5),
-    'k':  _dbStatsToCardFormat({}, {}, {}, {'puntsInside20': 2.03, 'puntsInside10': 1.0}, 10, 5),
+    'wr': _dbStatsToCardFormat({}, {}, {'yards': V['recYards'][WR], 'tds': V['recTds'][WR],
+                                        'receptions': V['receptions'][WR]}, {}, 22, 5),
+    'te': _dbStatsToCardFormat({}, {}, {'yards': V['recYards'][TE], 'tds': V['recTds'][TE],
+                                        'receptions': V['receptions'][TE]}, {}, 18, 5),
+    'rb': _dbStatsToCardFormat({}, {'yards': V['rushYards'][RB],
+                                    'yardsAfterContact': V['yac2'][RB]}, {}, {}, 24, 5),
+    'k':  _dbStatsToCardFormat({}, {}, {}, {'puntsInside20': V['puntsIn20'][K],
+                                            'puntsInside10': 1.0}, 10, 5),
 }
 MEAN['rb2'] = _dbStatsToCardFormat(
-    {}, {'yards': 110.5, 'carries': 25.9, 'tds': 0.69, '20+': 0.88,
-     'brokenTackles': 0.64, 'yardsAfterContact': 87.5},
-    {}, {}, 24, 5, {'puntReturnYards': 23.0})
+    {}, {'yards': V['rushYards'][RB], 'carries': V['carries'][RB], 'tds': V['rushTds'][RB],
+         '20+': V['bigRuns'][RB], 'brokenTackles': V['brokenTackles'][RB],
+         'yardsAfterContact': V['yac2'][RB]},
+    {}, {}, 24, 5, {'puntReturnYards': V['returnYards'][RB]})
 MEAN['wr2'] = _dbStatsToCardFormat(
-    {}, {}, {'yards': 83.5, 'receptions': 9.35, 'yac': 23.0, 'targets': 9.9,
-             'tds': 0.40, 'contestedCatches': 1.02, 'bailouts': 0.31}, {}, 22, 5,
-    {'puntReturnYards': 23.0})
+    {}, {}, {'yards': V['recYards'][WR], 'receptions': V['receptions'][WR],
+             'yac': V['yac'][WR], 'targets': V['targets'][WR], 'tds': V['recTds'][WR],
+             'contestedCatches': V['contested'][WR], 'bailouts': V['bailouts'][WR]}, {}, 22, 5,
+    {'puntReturnYards': V['returnYards'][WR]})
 P90 = {
     'wr': _dbStatsToCardFormat({}, {}, {'yards': 143, 'tds': 1, 'receptions': 14}, {}, 30, 5),
     'te': _dbStatsToCardFormat({}, {}, {'yards': 94, 'tds': 1, 'receptions': 13}, {}, 26, 5),
@@ -92,9 +100,9 @@ def testHolographicBonusDoesNotFireOnATypicalWeek():
 
 def testTerritoryGatesSitAboveATypicalWeek():
     cfg = ce.buildEffectConfig('holographic', 82, WR, forceEffect='territory')
-    assert min(cfg['primary']['gates']) > 83.5, cfg['primary']['gates']
+    assert min(cfg['primary']['gates']) > V['recYards'][WR], cfg['primary']['gates']
     teCfg = ce.buildEffectConfig('holographic', 82, TE, forceEffect='territory')
-    assert min(teCfg['primary']['gates']) > 59.0, teCfg['primary']['gates']
+    assert min(teCfg['primary']['gates']) > V['recYards'][TE], teCfg['primary']['gates']
 
 
 def testGrinderBarSitsAboveTheLeagueNorm():
@@ -119,8 +127,9 @@ def testPromisedLandSurvivesFractionalTds():
 
 
 QB_MEAN = _dbStatsToCardFormat(
-    {'yards': 229.9, 'comp': 27.7, 'goodThrows': 13.4, 'badThrows': 1.56,
-     'throws': 37.8, 'airYardsSum': 256.6, '20+': 1.75}, {}, {}, {}, 24, 5)
+    {'yards': V['passYards'][QB], 'comp': V['completions'][QB],
+     'goodThrows': V['goodThrows'][QB], 'badThrows': 1.56,
+     'throws': 37.8, 'airYardsSum': 256.6, '20+': V['bigThrows'][QB]}, {}, {}, {}, 24, 5)
 QB_P90 = _dbStatsToCardFormat(
     {'yards': 332, 'comp': 38, 'goodThrows': 28, 'badThrows': 0,
      'throws': 51, 'airYardsSum': 420, '20+': 4}, {}, {}, {}, 34, 5)

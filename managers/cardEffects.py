@@ -1728,39 +1728,46 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale, position=N
 # ─── Stat Ladder: measured per-game volumes ─────────────────────────────────
 # The denominator every ladder rate is sized against. Measured per position on a fresh
 # sim (see docs/CARD_STAT_LADDER.md). Position-keyed because the SAME mechanic on two
-# positions needs two rates — a TE catches 8.2 balls a game to a WR's 9.4, which is
-# exactly the drift that left Safety Blanket paying 5.3/reception and Possession 2.7.
+# positions needs two rates — a TE catches fewer balls than a WR, which is exactly the
+# drift that once left Safety Blanket paying 5.3/reception and Possession 2.7.
+#
+# ⚠️ RE-MEASURED 2026-10-07 on a fresh standard-format season (current engine, 896
+# player-games per position, 1,792 WR), because the engine had moved under the old table
+# and every ladder card minted off it was paying against a stale denominator. WR yards
+# after catch had gone 23 -> 37.7, so Slippery measured 2x its anchor (126 FP a week in a
+# contender lineup, ~4x the metallic median); WR bailouts 0.31 -> 1.44, QB 20+ throws
+# 1.75 -> 3.68, the TD rates ~1.4x, while QB well-placed throws FELL 13.4 -> 10.0. Do NOT
+# measure this on prod: formats are voted weekly (season 7 ran mostly Chess Clock,
+# season 8 mostly Innings at ~1.3x the fantasy points), so a prod season is a format mix.
+# `returnYards` is NOT re-measured: game rows saved no return stats until 2026-10-07.
+# Values are frozen at mint, so this reaches newly minted cards only.
 _LADDER_VOLUMES = {
-    "recYards":  {3: 83.5, 4: 59.0},
-    "puntsIn20": {5: 2.03},
-    "recTds":    {3: 0.40, 4: 0.26},
-    "receptions": {3: 9.35, 4: 8.22},
-    "fgMade":    {5: 1.98},
-    "goodThrows": {1: 13.4},   # GOOD_THROW_THRESHOLD 76 -> 35% of throws
-    "passYards": {1: 229.9},
-    "completions": {1: 27.7},
+    "recYards":  {3: 107.8, 4: 53.7},
+    "puntsIn20": {5: 1.58},
+    "recTds":    {3: 0.56, 4: 0.27},
+    "receptions": {3: 9.19, 4: 6.63},
+    "fgMade":    {5: 1.92},
+    "goodThrows": {1: 10.0},
+    "passYards": {1: 274.7},
+    "completions": {1: 26.0},
     "carries":   {2: 25.9},
-    "rushYards": {2: 110.5},
-    "rushTds":   {2: 0.69},
-    "yac":       {3: 23.0, 4: 17.6},
-    "yac2":      {2: 87.5},   # yards after contact (RB), distinct from receiving YAC
-    # QBs throw ~1 TD a game, so unlike receiving TDs this is not a rare event: 43% of
-    # QB games are scoreless but 29% are multi-TD. Measured over 736 QB games.
-    "passTds":   {1: 1.02},
-    # ⚠️ RE-MEASURED after the target-counting fix (12.3 WR / 11.0 TE over 24 games,
-    # was 9.9 / 8.7). A target used to be booked only on a catch or a drop, so an
-    # incompletion never reached the receiver's line and this table — which sizes
-    # Attention's rate — was reading about 24% light. Left alone, the card would have
-    # quietly paid a quarter more than its rung.
-    "targets":   {3: 12.3, 4: 11.0},
+    "rushYards": {2: 110.7},
+    "rushTds":   {2: 0.96},
+    "yac":       {3: 37.7, 4: 24.5},
+    "yac2":      {2: 87.7},   # yards after contact (RB), distinct from receiving YAC
+    # QBs throw more than a TD a game, so unlike receiving TDs this is not a rare event.
+    "passTds":   {1: 1.42},
+    # Targets are booked at release (not only on a catch or a drop), so incompletions
+    # count; the pre-fix table read ~24% light.
+    "targets":   {3: 14.7, 4: 10.1},
     # Return yards go to whichever skill player returns; ~2.5 returns a game at ~9 yards.
     "returnYards": {2: 23.0, 3: 23.0},
     # Rare one-off events, used as the BONUS half of a base+bonus card.
-    "bigRuns":   {2: 0.88},
-    "bigThrows": {1: 1.75},
-    "contested": {3: 1.02, 4: 0.98},
-    "bailouts":  {3: 0.31, 4: 0.25},
-    "brokenTackles": {2: 0.64},
+    "bigRuns":   {2: 0.87},
+    "bigThrows": {1: 3.68},
+    "contested": {3: 0.92, 4: 0.69},
+    "bailouts":  {3: 1.44, 4: 0.29},
+    "brokenTackles": {2: 0.63},
 }
 # A metallic flat card should mean this much FP in a typical week (Freebie measures 26.0).
 _LADDER_FP_ANCHOR = 26.0
