@@ -2071,10 +2071,15 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
     # keeps the exact gates it was minted with.
     # Odometer's text names the card's own position's yard gates (2026-09-27). Every card
     # already stores its position as `posLabel`, which is all the gates depend on.
-    if effectName == 'odometer' and 'gatesText' not in primary:
-        from managers.cardEffects import odometerGatesText
-        primary['gatesText'] = odometerGatesText(primary.get('posLabel'))
-        return True
+    if effectName == 'odometer':
+        # Payouts became per position (2026-10-07) and are read at scoring time, so every
+        # card states its position's current table, whenever it was minted.
+        from managers.cardEffects import odometerGatesText, odometerPayText
+        want = {'gatesText': odometerGatesText(primary.get('posLabel')),
+                **odometerPayText(primary.get('posLabel'))}
+        changed = any(primary.get(k) != v for k, v in want.items())
+        primary.update(want)
+        return changed
     if effectName == 'updraft' and 'gatesText' not in primary:
         gates = primary.get('gates')
         if isinstance(gates, (list, tuple)) and gates:

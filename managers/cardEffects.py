@@ -952,7 +952,7 @@ EFFECT_TOOLTIPS = {
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
-    "odometer": "Hit the milestones. FP at each yardage gate this player reaches this week, set by position and each adding to the last, up to +145 FP.",
+    "odometer": "Hit the milestones. FP at each yardage gate this player reaches this week, set by position and each adding to the last.",
     "leg_day": "Never skip it. FP growing each week this player nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
@@ -1143,9 +1143,10 @@ EFFECT_DETAIL_TEMPLATES = {
     "fairweather_fan": "{baseReward} Floobits base, +{growthPerTick} per consecutive favorite-team win.",
     "bandwagon_express": "+{baseReward} FP base, +{growthPerTick} per consecutive favorite-team win.",
     "touchdown_jackpot": "{baseReward} Floobits on 1st roster TD, +{growthPerTick} for every subsequent roster TD. Resets weekly.",
-    # Amounts are constants.ODOMETER_GATE_FP; {gatesText} is this card's position's yard gates.
+    # Amounts are constants.ODOMETER_GATE_FP_BY_POSITION ({gatePayText}, {gateMaxFP}); {gatesText}
+    # is this card's position's yard gates.
     # Keep in step with _computeOdometer (test_odometer_text.py).
-    "odometer": "+20 / +30 / +40 / +55 FP as this player's passing, rushing and receiving yards this week reach {gatesText}. Each gate adds to the last, up to +145 FP.",
+    "odometer": "{gatePayText} FP as this player's passing, rushing and receiving yards this week reach {gatesText}. Each gate adds to the last, up to +{gateMaxFP} FP.",
     "leg_day": "+{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak.",
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
     "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
@@ -1768,7 +1769,17 @@ _LADDER_VOLUMES = {
     "contested": {3: 0.92, 4: 0.69},
     "bailouts":  {3: 1.44, 4: 0.29},
     "brokenTackles": {2: 0.63},
+    # Average depth of target (airYardsSum / throws). Altitude's bar sits a fixed distance
+    # below this mean; it was hardcoded at 6.79 and the deep-ball recalibration took it to
+    # 8.36, so the card paid ~2.2x its anchor.
+    "adot":      {1: 8.36},
 }
+# Altitude's bar sits this far under the mean aDOT (it was 5.5 against a 6.79 mean).
+_ALTITUDE_BAR_BELOW_MEAN = 1.29
+# Ace Up the Sleeve's bonus bar as a multiple of the position's mean receiving yards. It
+# was a flat 125 when a WR averaged 83.5 (1.5x); at 107.8 the flat bar fired in 35% of games.
+_ACE_BAR_OVER_MEAN = 1.5
+
 # A metallic flat card should mean this much FP in a typical week (Freebie measures 26.0).
 _LADDER_FP_ANCHOR = 26.0
 # An FPx card should deliver about this much on a typical week. Cannot go far below it:
@@ -1861,11 +1872,12 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"perYardFP": round(_ladderFpRate("returnYards", position, 23.0) * 0.85, 3),
                 "bonusFP": round(_LADDER_FP_ANCHOR * 2.2, 1), "isChanceEffect": True}
     if effectName == "altitude":
-        # League aDOT is ~6.8. A bar AT the mean pays nothing on a typical week and only
-        # ~12 FP at p90, so it sits below it and the rate carries the anchor: a typical
-        # passer clears it by ~1.3 yards, a deep thrower by ~2.7.
-        bar = 5.5
-        return {"perYardFP": round(_LADDER_FP_ANCHOR / (6.79 - bar), 1), "threshold": bar}
+        # A bar AT the mean aDOT pays nothing on a typical week and little at p90, so it
+        # sits _ALTITUDE_BAR_BELOW_MEAN under it and the rate carries the anchor. The mean
+        # is the measured `adot` volume (it was hardcoded at 6.79 and moved to 8.36).
+        bar = round(_ladderVolume("adot", position, 8.36) - _ALTITUDE_BAR_BELOW_MEAN, 2)
+        return {"perYardFP": round(_LADDER_FP_ANCHOR / _ALTITUDE_BAR_BELOW_MEAN, 1),
+                "threshold": bar}
     # ── base + bonus one-offs: a floor on the parent stat, the rare event as the kicker ──
     if effectName == "haymaker":
         return {"perYardFP": round(_LADDER_FP_ANCHOR * 0.60 / _ladderVolume("passYards", position, 229.9), 3),
@@ -1993,7 +2005,8 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"rewardType": "fp",
                 "baseFP": round((21 + rn * 0.69) * editionScale * _BAL_FP_MULT, 1),
                 "rewardValue": round((42 + rn * 1.50) * editionScale * _BAL_FP_MULT, 1),
-                "stat": "recYards", "threshold": 125}
+                "stat": "recYards",
+                "threshold": int(round(_ladderVolume("recYards", position, 83.5) * _ACE_BAR_OVER_MEAN))}
     if effectName == "possession":
         # Sized from the volume table, same as safety_blanket. These two are the SAME
         # mechanic on two positions and drifted to 2.47 and 5.5 FP per reception against
@@ -2508,6 +2521,18 @@ def odometerGatesText(position) -> str:
     return " / ".join(str(g) for g in gates) + " yards"
 
 
+def odometerPayText(position) -> dict:
+    """Odometer's per-position payouts for the card face: `gatePayText` ("+11 / +17 / ...")
+    and `gateMaxFP`, read off the same table scoring uses."""
+    from constants import ODOMETER_GATE_FP_BY_POSITION
+    if isinstance(position, str):
+        position = {v: k for k, v in POSITION_LABELS.items()}.get(position)
+    pays = ODOMETER_GATE_FP_BY_POSITION.get(position) or ()
+    if not pays:
+        return {"gatePayText": "+0", "gateMaxFP": 0}
+    return {"gatePayText": " / ".join(f"+{p}" for p in pays), "gateMaxFP": sum(pays)}
+
+
 def _buildStreakParams(effectName, playerRating, editionScale, position=None):
     """Streak card parameter builder.
 
@@ -2554,7 +2579,8 @@ def _buildStreakParams(effectName, playerRating, editionScale, position=None):
                 "growthPerTick": int(round((2 + rn * 0.1) * editionScale))}
     if effectName == "odometer":
         # Display only: scoring reads constants.ODOMETER_GATES_BY_POSITION (see _computeOdometer).
-        return {"rewardType": "fp", "gatesText": odometerGatesText(position)}
+        return {"rewardType": "fp", "gatesText": odometerGatesText(position),
+                **odometerPayText(position)}
     if effectName == "leg_day":
         return {"rewardType": "fp",
                 "baseReward": round((20.4 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1),
@@ -2949,6 +2975,54 @@ def effectPoolFor(edition: str, position: int) -> list:
     return [n for n in pool if EFFECT_EDITION_TIER.get(n) == edition]
 
 
+# ─── Band trim (2026-10-07, owner: "trim to the top of their band") ────────────
+# Cards measured well above their edition, cut to the edition's top quartile at the
+# position they mint on. Measured with simcheck_effect_marginal.py (contender arm: top-
+# quarter players, a deep collection) on a fresh standard-format season, after the ladder
+# re-measure. Band tops: holographic 43 FP, prismatic 32 FP. Each entry is
+# (factor or {position: factor}, payout keys); an FPx key (`...Mult`) scales its DELTA.
+# A card whose cause was a stale input (Altitude's aDOT, Ace Up the Sleeve's yard bar,
+# Slippery's YAC) was fixed at the input instead and is not listed. Factors only CUT: a
+# position already under its band (Mismatch on a TE) is left alone. Streak cards with a
+# carried peak (Bonsai, Metronome) are NOT here: the per-week harness cannot measure them.
+# Frozen at mint, like every builder value.
+_BAND_TRIM = {
+    # Per TD at one rate for every position: a QB scores 2+ TDs in 49% of games, a TE 3%.
+    "mismatch":      ({1: 0.33, 2: 0.52, 3: 0.71}, ("perTdFP", "bonusFP")),
+    # Pays per distinct team, so any lineup that does not stack is near its maximum.
+    "wanderer":      (0.62, ("perTeamFP",)),
+    "stampede":      ({2: 0.83}, ("baseMult", "enhancedMult")),
+    # Its 25-yard catch bonus fires in 60% of WR games since deep throws doubled.
+    "trebuchet":     ({3: 0.65}, ("baseFP", "rewardValue")),
+    # Its base alone always pays more than most prismatic cards' typical week.
+    "last_resort":   (0.48, ("baseFP", "enhancedFP")),
+    "houdini":       ({2: 0.57}, ("perYardFP", "bonusFP")),
+    "crescendo":     ({1: 0.65, 2: 0.79, 3: 0.82, 5: 0.43}, ("baseFP", "bonusFP")),
+    "promised_land": ({3: 0.78, 4: 0.63}, ("perTdFP", "bonusFP")),
+}
+
+
+def _applyBandTrim(effectName, position, primary):
+    entry = _BAND_TRIM.get(effectName)
+    if not entry:
+        return
+    factor, keys = entry
+    if isinstance(factor, dict):
+        factor = factor.get(position, 1.0)
+    if factor >= 1.0:
+        return
+    for key in keys:
+        v = primary.get(key)
+        if not isinstance(v, (int, float)):
+            continue
+        if key.endswith("Mult"):
+            primary[key] = round(1 + (v - 1) * factor, 2)
+        elif abs(v) < 1:
+            primary[key] = round(v * factor, 3)
+        else:
+            primary[key] = round(v * factor, 1)
+
+
 def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=None,
                       forceEffect: str = None, forceCategory: str = None,
                       classification: str = None) -> dict:
@@ -3012,6 +3086,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     if primary is None:
         primary = {"baseFP": round(2 * editionScale, 1)}
     primary["posLabel"] = POSITION_LABELS.get(position, "??")
+    _applyBandTrim(effectName, position, primary)
 
     # Position-specific param overrides for effects with per-position tuning
     if effectName == "crescendo":
@@ -4371,7 +4446,7 @@ def _computeOdometer(primary, ctx, cardPlayerId, eqId):
     cards carry roster-scale `gates` (and newer ones `gatesText`, for display only); scoring
     reads the per-position table so every card, old or new, pays the same rule.
     """
-    from constants import ODOMETER_GATES_BY_POSITION, ODOMETER_GATE_FP
+    from constants import ODOMETER_GATES_BY_POSITION, ODOMETER_GATE_FP_BY_POSITION
     stats = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}) or {}
     totalYards = (
         (stats.get("passing_stats", {}) or {}).get("passYards", 0)
@@ -4386,7 +4461,7 @@ def _computeOdometer(primary, ctx, cardPlayerId, eqId):
     totalFP = 0
     gatesHit = 0
     gateDetails = []
-    for yardThreshold, gateFP in zip(yardGates, ODOMETER_GATE_FP):
+    for yardThreshold, gateFP in zip(yardGates, ODOMETER_GATE_FP_BY_POSITION.get(pos, ())):
         if totalYards >= yardThreshold:
             totalFP += gateFP
             gatesHit += 1

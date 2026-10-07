@@ -129,7 +129,8 @@ def testPromisedLandSurvivesFractionalTds():
 QB_MEAN = _dbStatsToCardFormat(
     {'yards': V['passYards'][QB], 'comp': V['completions'][QB],
      'goodThrows': V['goodThrows'][QB], 'badThrows': 1.56,
-     'throws': 37.8, 'airYardsSum': 256.6, '20+': V['bigThrows'][QB]}, {}, {}, {}, 24, 5)
+     'throws': 37.8, 'airYardsSum': V['adot'][QB] * 37.8, '20+': V['bigThrows'][QB]},
+    {}, {}, {}, 24, 5)
 QB_P90 = _dbStatsToCardFormat(
     {'yards': 332, 'comp': 38, 'goodThrows': 28, 'badThrows': 0,
      'throws': 51, 'airYardsSum': 420, '20+': 4}, {}, {}, {}, 34, 5)

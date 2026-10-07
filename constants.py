@@ -875,6 +875,16 @@ ODOMETER_GATES_BY_POSITION = {
     4: (30, 45, 70, 100),      # TE
 }
 ODOMETER_GATE_FP = (20, 30, 40, 55)
+# ⚠️ TRIMMED TO THE TOP OF THE PRISMATIC BAND, PER POSITION (owner, 2026-10-07). At the flat
+# payouts above Odometer measured 2.5x the prismatic median (57/55/61/90 FP a week at
+# QB/RB/WR/TE in a contender lineup against a band top of 32; simcheck_effect_marginal.py on
+# a fresh standard season). The gates were re-measured and still sit on each position's
+# p25/50/75/90, so the excess is the payout, and TE most because prismatic only mints on
+# 80+ players, who sit far up a TE distribution. Read at SCORING time, like the gates.
+_ODOMETER_TRIM = {1: 0.56, 2: 0.59, 3: 0.52, 4: 0.36}
+ODOMETER_GATE_FP_BY_POSITION = {
+    pos: tuple(int(round(fp * f)) for fp in ODOMETER_GATE_FP) for pos, f in _ODOMETER_TRIM.items()
+}
 
 # ⚠️ HONOR ROLL'S RAMP TOPS OUT ON A BIG GAME FOR THE POSITION (2026-10-07). It pays a base
 # at its power bar and grows to the max as the player scores more. The top used to be
