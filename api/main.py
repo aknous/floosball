@@ -9924,13 +9924,15 @@ def get_weekly_modifier(response: Response):
         if not row:
             return build_success_response({"modifier": None})
 
-        modName = row.modifier
-        displayInfo = sm.MODIFIER_DISPLAY.get(modName, modName.title())
-        description = sm.MODIFIER_DESCRIPTIONS.get(modName, "")
+        # A Criticality week runs on the Core's equation alone, so the rolled modifier
+        # does not apply: `modifier` is the one in force ('steady' then).
+        info = sm.modifierInfo(row.modifier, currentSeason, currentWeek)
         return build_success_response({
-            "modifier": modName,
-            "displayName": displayInfo,
-            "description": description,
+            "modifier": info["name"],
+            "rolledModifier": info["rolledModifier"],
+            "displayName": info["displayName"],
+            "description": info["description"],
+            "suspendedByCriticality": info["suspendedByCriticality"],
             "season": currentSeason,
             "week": currentWeek,
         })

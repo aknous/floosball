@@ -2063,6 +2063,9 @@ class SeasonManager:
                         activeModifier = modRow.modifier
                 except Exception:
                     pass
+                # A Criticality week runs on the Core's equation alone: no modifier.
+                from managers.coreEquations import modifierInForce
+                activeModifier = modifierInForce(activeModifier, season, week)
 
                 # Eminence + Cornerstone: position pace + leaderboard data
                 # (same for all users this week). computeEminenceData returns 4
@@ -10294,6 +10297,27 @@ class SeasonManager:
         "wildcard": "All cards treated as matched (retired)",
     }
 
+    # Shown in place of a modifier's description on a Criticality week, when the
+    # controlling Core's equation replaces it (coreEquations.modifierInForce).
+    CRITICALITY_SUSPENDED_DESCRIPTION = "Suspended. A Core controls this week's math"
+
+    def modifierInfo(self, modName: str, season: int, week: int) -> dict:
+        """The week's modifier as the UI should show it. `name` is the modifier IN
+        FORCE, so on a Criticality week it is 'steady' and every tag keyed off it (Frenzy,
+        Amplify, Grounded) switches off by itself; `displayName` stays the rolled one,
+        and the description says it is suspended."""
+        from managers.coreEquations import modifierInForce
+        inForce = modifierInForce(modName, season, week)
+        suspended = inForce != modName
+        return {
+            "name": inForce,
+            "rolledModifier": modName,
+            "displayName": self.MODIFIER_DISPLAY.get(modName, (modName or "").title()),
+            "description": (self.CRITICALITY_SUSPENDED_DESCRIPTION if suspended
+                            else self.MODIFIER_DESCRIPTIONS.get(modName, "")),
+            "suspendedByCriticality": suspended,
+        }
+
     def _selectWeeklyModifier(self, season: int, week: int) -> str:
         """Select a weekly modifier for the given season/week.
 
@@ -10436,6 +10460,8 @@ class SeasonManager:
         slots = []
         for w in slotWeeks:
             mod = modByWeek.get(w, "steady")
+            # A Criticality week runs on the Core's equation alone (modifierInfo).
+            info = self.modifierInfo(mod, season, w)
             etHour = self._SLOT_ET_HOURS[w % 7]
             display = (etHour - 12) if etHour > 12 else 12
             ampm = "PM" if etHour >= 12 else "AM"
@@ -10443,9 +10469,11 @@ class SeasonManager:
                 "week": w,
                 "etHour": etHour,
                 "label": f"{display if display != 0 else 12}:00 {ampm}",
-                "modifier": mod,
-                "displayName": self.MODIFIER_DISPLAY.get(mod, mod.title()),
-                "description": self.MODIFIER_DESCRIPTIONS.get(mod, ""),
+                "modifier": info["name"],
+                "rolledModifier": mod,
+                "displayName": info["displayName"],
+                "description": info["description"],
+                "suspendedByCriticality": info["suspendedByCriticality"],
                 "isActive": (w == currentWeek),
                 "isPast": (w < currentWeek),
                 "isNext": (w == nextWeek),

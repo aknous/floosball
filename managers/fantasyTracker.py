@@ -489,12 +489,7 @@ class FantasyTracker:
                         season=seasonNum, week=currentWeek
                     ).first()
                     if modRow:
-                        modName = modRow.modifier
-                        preLockModifier = {
-                            "name": modName,
-                            "displayName": sm.MODIFIER_DISPLAY.get(modName, modName.title()),
-                            "description": sm.MODIFIER_DESCRIPTIONS.get(modName, ""),
-                        }
+                        preLockModifier = sm.modifierInfo(modRow.modifier, seasonNum, currentWeek)
                 return {
                     "season": seasonNum, "week": currentWeek,
                     "gamesActive": gamesActive or gamesCompleted, "entries": [],
@@ -1129,12 +1124,7 @@ class FantasyTracker:
                     season=seasonNum, week=currentWeek
                 ).first()
                 if modRow:
-                    modName = modRow.modifier
-                    modifierInfo = {
-                        "name": modName,
-                        "displayName": sm.MODIFIER_DISPLAY.get(modName, modName.title()),
-                        "description": sm.MODIFIER_DESCRIPTIONS.get(modName, ""),
-                    }
+                    modifierInfo = sm.modifierInfo(modRow.modifier, seasonNum, currentWeek)
 
             return {
                 "season": seasonNum,
@@ -1407,6 +1397,9 @@ class FantasyTracker:
                 activeModifier = modOverride.override_modifier
         except Exception:
             pass
+        # A Criticality week runs on the Core's equation alone: no modifier.
+        from managers.coreEquations import modifierInForce
+        activeModifier = modifierInForce(activeModifier, season, currentWeek)
 
         # Game performance ratings (per-game, same formula as season perf)
         gamePerformanceRatings = {}

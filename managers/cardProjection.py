@@ -614,9 +614,24 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     try:
         modRow = session.query(WeeklyModifier).filter_by(season=season, week=week).first()
         if modRow:
-            activeModifier = modRow.modifier_type or ""
+            # ⚠️ The column is `modifier`. This read `modifier_type`, which does not exist,
+            # so the AttributeError was swallowed and every projection ran as if no
+            # modifier were active (no Frenzy, no Amplify, no Grounded).
+            activeModifier = modRow.modifier or ""
     except Exception:
         pass
+    try:
+        from database.models import UserModifierOverride
+        modOverride = session.query(UserModifierOverride).filter_by(
+            user_id=userId, season=season, week=week
+        ).first()
+        if modOverride:
+            activeModifier = modOverride.override_modifier
+    except Exception:
+        pass
+    # A Criticality week runs on the Core's equation alone: no modifier.
+    from managers.coreEquations import modifierInForce
+    activeModifier = modifierInForce(activeModifier, season, week)
 
     userFloobitsBalance = 0
     try:

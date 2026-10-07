@@ -5318,6 +5318,13 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 #     explicit go from the owner.
 ANOMALY_CRITICALITY_ENABLED = False
 
+# How hard a Criticality week amplifies the term its controlling Core owns (Pyre FPx,
+# Cassian card flat FP, Halverson roster FP, Aris all three at the cube root). A build
+# specialized in that term gains up to this many times its normal week; Aris gives every
+# build between the cube root of it and its 2/3 power. Owner, 2026-10-07;
+# see managers/coreEquations.py for the equations and why they replaced the exponential ones.
+CRITICALITY_AMPLIFICATION = 4
+
 # Awakened (L4) signature powers — the mechanical L4 layer (docs/AWAKENED_POWERS_PLAN.md).
 # Separate gate from Criticality so the powers can be built + tested on a branch without going live.
 # When False: awakening assigns no signature abilities, nothing is surfaced, no game effect.
