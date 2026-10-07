@@ -4153,13 +4153,14 @@ CARD_GATE_ENABLED = True
 # the amplifier fallback) that read a position bar without a frozen edition gate. Rebalanced
 # from the median-relative data: QB was the loosest (77% clear -> 8→9), RB the strictest
 # (60% -> 9→7); WR/TE/K were on target.
-# ⚠️ LOWERED BY 2 FP ACROSS EVERY ROW (owner, 2026-09-13). Measured on real player-games the
-# bars were clearing well under the ~70% metallic / ~55% diamond the rows below were calibrated
-# for -- QB 72%/31%, WR 57%/32%, TE 44%/17% -- so the gate was a coin flip at the top of the
-# ladder rather than a gamble. ⚠️ TE IS THE OUTLIER AND -2 DOES NOT FULLY FIX IT: its bar of 4
-# sat ABOVE its own median FP of 3.0, which is the one row that contradicts the "0.6-0.75 of
-# median" rule this comment claims, so TE is worth its own pass rather than another flat step.
-CARD_GATE_FP_THRESHOLDS = {1: 7, 2: 5, 3: 6, 4: 2, 5: 4}
+# ⚠️ RESTORED TO THE PRE-SEPTEMBER BARS (owner, 2026-10-07). They were lowered by 2 FP on every
+# row on 2026-09-13, when TE's median game was 3.0 FP and the bars cleared QB 72%/31%, WR
+# 57%/32%, TE 44%/17% (metallic/diamond). Scoring has since risen (TE median 6.0, seasons 6-8),
+# and on seasons 7-8 the lowered bars cleared 84-93% at metallic and 65-88% at diamond, so the
+# bar was barely a gamble. Restored, the same games clear 71-82% at metallic and 57-84% at
+# diamond, back near the ~70% / ~55% this table is calibrated for (RB runs high at every
+# edition). FROZEN AT MINT: already-minted cards keep the bar they were minted with.
+CARD_GATE_FP_THRESHOLDS = {1: 9, 2: 7, 3: 8, 4: 4, 5: 6}
 # Higher editions only mint on higher-rated players (holo ≥75, prismatic ≥80, diamond ≥90), who
 # score ABOVE the position median — so a flat bar gets EASIER at higher rarity. To keep the gate
 # a real gamble (and offset the higher ceilings), the threshold RISES with edition. Calibrated
@@ -4167,10 +4168,10 @@ CARD_GATE_FP_THRESHOLDS = {1: 7, 2: 5, 3: 6, 4: 2, 5: 4}
 # clear rate that falls with rarity (~70% metallic → ~55% diamond). buildGateSpec picks the row
 # for the card's edition; frozen into gate.threshold at mint. The floor 'base' is gate-exempt.
 CARD_GATE_FP_THRESHOLDS_BY_EDITION = {
-    'metallic':    {1: 7,  2: 5,  3: 6,  4: 2, 5: 4},
-    'holographic': {1: 9,  2: 7,  3: 8,  4: 3, 5: 5},
-    'prismatic':   {1: 11, 2: 9,  3: 10, 4: 4, 5: 6},
-    'diamond':     {1: 13, 2: 11, 3: 12, 4: 5, 5: 7},
+    'metallic':    {1: 9,  2: 7,  3: 8,  4: 4, 5: 6},
+    'holographic': {1: 11, 2: 9,  3: 10, 4: 5, 5: 7},
+    'prismatic':   {1: 13, 2: 11, 3: 12, 4: 6, 5: 8},
+    'diamond':     {1: 15, 2: 13, 3: 14, 4: 7, 5: 9},
 }
 # All-Pro classification (prior-season All-Pro selections, holo+ only) lowers ITS OWN card's
 # gate threshold — an individual accolade, so it buys individual reliability ("the best
