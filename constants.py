@@ -876,6 +876,18 @@ ODOMETER_GATES_BY_POSITION = {
 }
 ODOMETER_GATE_FP = (20, 30, 40, 55)
 
+# ⚠️ HONOR ROLL'S RAMP TOPS OUT ON A BIG GAME FOR THE POSITION (2026-10-07). It pays a base
+# at its power bar and grows to the max as the player scores more. The top used to be
+# DOUBLE the bar, which was right while the bar was 15 FP (max at 30) and became a
+# giveaway once the bar was synced to the metallic gate (QB 7, RB 5, WR 6, TE 2, K 4):
+# the max sat at 4-14 FP, below a median game at every position, so any starter maxed it
+# every week. Reported by a player as "CRAZY busted"; measured as the third-best card in
+# the game by FP-equivalent (seasons 7-8), above every diamond, and the most-equipped card
+# among top-3 finishers. Each value is the position's 90th-percentile single-game FP
+# (prod seasons 6-8), the same "big week" rung Odometer's top gate sits on. Stored on the
+# card at mint as `fpCeiling`; cards minted before this keep double their bar.
+HONOR_ROLL_CEILING_FP_BY_POSITION = {1: 29, 2: 33, 3: 28, 4: 16, 5: 15}
+
 # Trust Fund's "weeks your roster stays unchanged" growth stops counting after this many
 # weeks. Uncapped, it grew all season: a card left alone 20 weeks paid ~395 Floobits a week
 # at tier 4, and Trust Fund alone was 39% of all card Floobits in season 7 (168 a card-week

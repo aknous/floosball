@@ -507,7 +507,16 @@ def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
     if effectName == "copycat":
         return any(b.totalFP > 0 for b in firstPassBreakdowns)
     if effectName == "double_down":
-        # Triggered = it has a card to multiply, by the rule _applyTradeoffEffects uses.
+        # Triggered = it is live and has a card to multiply, by the rule
+        # _applyTradeoffEffects uses (see _lemonsCounts). Its breakdown does not exist
+        # yet here, so Grounded and its own power bar are read directly.
+        if getattr(ctx, "activeModifier", "") == "grounded":
+            return False
+        gate = ec.get("gate")
+        if gate:
+            from managers.cardEffects import gateRatio
+            if gateRatio(gate, ctx, template.player_id) <= 0.5:
+                return False
         return _lemonsTarget(firstPassBreakdowns) is not None
     if effectName == "high_roller":
         return any(b.chanceTriggered for b in firstPassBreakdowns)
@@ -1298,7 +1307,7 @@ def calculateWeekCardBonuses(
                                              if b.effectName != "bonus_round"]
         for eq, b in zip(secondPassCards, secondPassBreakdowns):
             if b.effectName == "double_down":
-                actualTriggers[eq.id] = _lemonsTarget(_lemonsPool) is not None
+                actualTriggers[eq.id] = _lemonsCounts(b, _lemonsPool)
         savedPreTriggers = ctx._secondPassPreTriggers
         ctx._secondPassPreTriggers = actualTriggers
         ctx._secondPassBreakdowns = secondPassBreakdowns
@@ -1489,6 +1498,22 @@ def _lemonsTarget(breakdowns) -> Optional[CardBreakdown]:
     return min(cands, key=lambda b: b.primaryFP) if cands else None
 
 
+def _lemonsLive(ddBreakdown) -> bool:
+    """Whether Lemons' own multiplier is in force: its player cleared the power bar (a
+    miss leaves exactly 1.0) and the week is not Grounded (which zeroes it). In an
+    expected projection the bar is a probability, so this is true whenever there is any
+    chance, and the multiplier itself carries the expected value."""
+    return (ddBreakdown.primaryMult or 0) > 1.0
+
+
+def _lemonsCounts(ddBreakdown, others) -> bool:
+    """Whether Lemons counts as having triggered, for Group Project and Chain Reaction:
+    it is live AND has a card to multiply. Like Captain and Conductor, a projected Lemons
+    counts only when its player is more likely than not to clear the bar."""
+    return (_lemonsLive(ddBreakdown) and _ampGateWeight(ddBreakdown) > 0.5
+            and _lemonsTarget(others) is not None)
+
+
 def _conductorTargets(breakdowns) -> List[CardBreakdown]:
     """Every other flat-FP card with effect output — what Conductor lifts."""
     return [b for b in breakdowns
@@ -1501,7 +1526,10 @@ def _captainTargets(breakdowns, ctx) -> List[tuple]:
     stats = getattr(ctx, "weekPlayerStats", None) or {}
     out = []
     for b in breakdowns:
-        if b.effectName == "captain":
+        # Lemons' multiplier is a MARKER, cleared before Captain boosts anything, so it is
+        # never a target. Reading it as an FPx card made Group Project credit Captain for
+        # a boost that never happens.
+        if b.effectName in ("captain", "double_down"):
             continue
         hasOutput = ((b.outputType == "fp" and b.primaryFP > 0)
                      or (b.outputType == "floobits" and b.floobitsEarned > 0)
@@ -1542,7 +1570,7 @@ def _amplifierDidWork(ampBreakdown, others, ctx) -> bool:
     `others` must exclude the card asking (Group Project), or it would count itself."""
     name = ampBreakdown.effectName
     if name == "double_down":
-        return _lemonsTarget(others) is not None
+        return _lemonsCounts(ampBreakdown, others)
     # A trigger count is all-or-nothing, so a projected amplifier counts when it is MORE
     # likely than not to clear its bar — strictly, because a player with no weekly history
     # projects at exactly 0.5 ("unknown"), which is not a reason to count it. Live the
@@ -1655,9 +1683,16 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
         ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
         # Rounded to 2 dp so the applied multiplier is the one the card text and the
         # lineup pill print (tierScaledStrength rounds the same expression).
-        multValue = round(float(ddBreakdown.primaryMult), 2) if ddBreakdown and ddBreakdown.primaryMult else 2.5
+        #
+        # ⚠️ NO FALLBACK. A multiplier of 1.0 means Lemons' own player missed the power
+        # bar, and 0 means the week is Grounded; both mean Lemons does nothing. This read
+        # `... if primaryMult else 2.5`, so Grounded's 0 paid a full untiered x2.5 (the
+        # modifier that disables FPx effects left this one running), and a missed bar
+        # "applied" x1.0 and tagged the target card "× 1.0 (Lemons)".
+        multValue = (round(float(ddBreakdown.primaryMult), 2)
+                     if ddBreakdown and _lemonsLive(ddBreakdown) else None)
         lowest = _lemonsTarget(normalBreakdowns)
-        if lowest is not None:
+        if multValue is not None and lowest is not None:
             originalFP = lowest.primaryFP
             bonusFP = round(originalFP * (multValue - 1), 1)
             lowest.primaryFP = round(lowest.primaryFP + bonusFP, 1)
@@ -1665,13 +1700,19 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
             lowest.equation = f"{lowest.equation} × {multValue} (Lemons)"
         # Clear the marker mult so it doesn't stack on the global FPx aggregation
         if ddBreakdown:
-            ddBreakdown.primaryMult = 0
-            # Lemons' OWN row states the multiplier actually applied. Its compute writes
-            # the untiered value and the tier rescale leaves "× 2.5 on …" alone (a number
-            # followed by a word reads as context), so a tier II card's row said x2.5
-            # beside a boosted card tagged "x 2.72 (Lemons)".
-            if (ddBreakdown.equation or "").startswith("× "):
+            # Lemons' OWN row states what happened. Its compute writes the untiered value
+            # and the tier rescale leaves "× 2.5 on …" alone (a number followed by a word
+            # reads as context), so a tier II card's row said x2.5 beside a boosted card
+            # tagged "x 2.72 (Lemons)".
+            if multValue is not None and lowest is not None:
                 ddBreakdown.equation = f"× {multValue} on your lowest-earning FP card"
+            elif ddBreakdown.preMatchMult > 1 and (ddBreakdown.primaryMult or 0) <= 1:
+                ddBreakdown.equation = "Grounded: FPx effects are disabled this week"
+            elif (ddBreakdown.primaryMult or 0) <= 1:
+                ddBreakdown.equation = "Lemons didn't clear their bar"
+            else:
+                ddBreakdown.equation = "No FP-earning cards to amplify"
+            ddBreakdown.primaryMult = 0
 
 
 def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None:

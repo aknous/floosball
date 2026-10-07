@@ -903,7 +903,7 @@ EFFECT_TOOLTIPS = {
     "entourage": "Seeing stars. Bonus FP for each high-rated player on your roster.",
     "touchdown_pinata": "Every house call fills the piñata. Bonus FP per roster TD.",
     "scrappy": "Somebody has to believe in them. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each low-rated player on your roster.",
-    "honor_roll": "Make the grade. FPx that grows with every point past the bar, reaching full at double it. A bare pass is worth almost nothing.",
+    "honor_roll": "Make the grade. FPx that grows with every point past the bar, reaching full on a big game for their position. A bare pass is worth almost nothing.",
     "three_pointer": "Three points for them, bonus for you. FP for every kicker FG.",
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
@@ -1093,7 +1093,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
     "touchdown_pinata": "+{perTdFP} FP for every TD your roster scores",
     "scrappy": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each {maxStars}★-or-lower roster player.",
-    "honor_roll": "+{baseDelta} FPx once this player reaches {fpThreshold} FP, and grows if they score more, up to +{maxDelta} FPx.",
+    "honor_roll": "+{baseDelta} FPx once this player reaches {fpThreshold} FP, and grows if they score more, up to +{maxDelta} FPx at {fpCeiling} FP.",
     "three_pointer": "+{perFgFP} FP for every FG this player makes",
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
@@ -1946,7 +1946,8 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         # the detail template and _computeHedge.
         return {"floorSoloFP": round(11 + rn * 0.14, 1)}
     if effectName == "honor_roll":
-        # FPx when THIS player clears the bar, growing from there to double it.
+        # FPx when THIS player clears the bar, growing from there to a big game for the
+        # position (`fpCeiling`).
         #
         # ⚠️ `baseMult` IS THE PAYOUT AT THE BAR, and it exists because the ramp used to
         # start at zero: a card could read ACTIVE, with a full green bar, and pay
@@ -1957,10 +1958,14 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         # player and _computeHonorRoll has not read it since. Cards minted before that
         # keep the dead key, which is harmless since no detail template referenced it.
         _maxDelta = (0.42 + rn * 0.014) * editionScale * _BAL_FPX_MULT
+        from constants import HONOR_ROLL_CEILING_FP_BY_POSITION
         return {"rewardType": "mult",
                 "baseMult": round(1 + _maxDelta * HONOR_ROLL_BASE_SHARE, 2),
                 "maxMult": round(1 + _maxDelta, 2),
-                "fpThreshold": 15}
+                "fpThreshold": 15,
+                # Where the ramp reaches maxMult: a big game for this position, not double
+                # the bar (see HONOR_ROLL_CEILING_FP_BY_POSITION).
+                "fpCeiling": HONOR_ROLL_CEILING_FP_BY_POSITION.get(position, 30)}
     if effectName == "three_pointer":
         # Measured 39.0 FP/week, second highest at metallic, off only 1.98 FGs a game.
         # Sized from the volume table like the rest of the flat rungs.
@@ -3377,7 +3382,7 @@ def _computeScrappy(primary, ctx, cardPlayerId, eqId):
 def _computeHonorRoll(primary, ctx, cardPlayerId, eqId):
     """FPx bonus when THIS player clears the FP threshold (re-based off the roster).
 
-    The mult RAMPS from zero at the threshold to maxMult at double it, so the payout
+    The mult RAMPS from baseMult at the threshold to maxMult at `fpCeiling`, so the payout
     scales with how big the game was rather than switching on flat. `fpThreshold` is the
     card's own power-bar threshold (synced in buildEffectConfig), so the ramp begins at
     exactly the point the bar fills — a card that reads ACTIVE is always earning.
@@ -3389,8 +3394,11 @@ def _computeHonorRoll(primary, ctx, cardPlayerId, eqId):
     playerFP = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
     if playerFP < threshold:
         return EffectResult(equation=f"{round(playerFP, 1)} FP, needs {threshold}+ this week")
-    # Clearing the bar pays the base; beating it ramps to the max at double the bar.
-    over = min(1.0, (playerFP - threshold) / max(threshold, 1))
+    # Clearing the bar pays the base; beating it ramps to the max at `fpCeiling`, a big
+    # game for the card's position. Cards minted before the ceiling existed ramp to
+    # double their bar, which is what they were sold as.
+    ceiling = max(primary.get("fpCeiling") or 2 * threshold, threshold + 1)
+    over = min(1.0, (playerFP - threshold) / (ceiling - threshold))
     mult = round(baseMult + (maxMult - baseMult) * over, 2)
     delta = round(mult - 1.0, 2)
     eq = f"+{delta} FPx from {round(playerFP, 1)} FP (bar is {threshold})"
@@ -5152,8 +5160,13 @@ def _computeCopycat(primary, ctx, cardPlayerId, eqId):
     for b in breakdowns:
         if b.effectName == "copycat":
             continue
-        if b.totalFP > bestFP:
-            bestFP = b.totalFP
+        # ⚠️ COPY THE CARD'S OWN OUTPUT, BEFORE THE WEEKLY MODIFIER (`preMatchFP`).
+        # `totalFP` already carries Frenzy's doubling (and Longshot's, on a conditional
+        # card), and Copycat's own output is then doubled AGAIN by the same modifier, so a
+        # Frenzy week paid the copied card 4x. Measured on prod, season 8: a 100 FP
+        # Odometer (50 doubled) was copied at 100, tiered to 150 and doubled to 300.
+        if b.preMatchFP > bestFP:
+            bestFP = b.preMatchFP
     if bestFP > 0:
         eq = f"+{bestFP:.1f} FP (copied from best card)"
         return EffectResult(fpBonus=bestFP, equation=eq)
@@ -5323,17 +5336,16 @@ def _computeIronWill(primary, ctx, cardPlayerId, eqId):
 def _computeLemons(primary, ctx, cardPlayerId, eqId):
     """Multiplies the lowest non-zero card's FP. Amplification applied post-calculation."""
     rewardValue = primary.get("rewardValue", 2.5)
-    breakdowns = ctx._firstPassBreakdowns or []
-    nonZeroFP = [b for b in breakdowns if b.totalFP > 0 and b.effectName != "double_down"]
-    if nonZeroFP:
-        # Use the same "× N" notation as the affected card's tag in
-        # _applyTradeoffEffects (cardEffectCalculator.py). Avoids the
-        # earlier mismatch where this row said "+1.50 FPx" while the
-        # impacted card showed "× 2.5" — same operation, two formats.
-        eq = f"× {rewardValue} on your lowest-earning FP card"
-        return EffectResult(multBonus=rewardValue, equation=eq)
-    eq = "No FP-earning cards to amplify"
-    return EffectResult(equation=eq)
+    # ⚠️ ALWAYS CARRY THE MULTIPLIER, even with no first-pass FP card. Its target is
+    # picked later (_applyTradeoffEffects) from BOTH passes, so a hand whose only FP
+    # comes from a second-pass card still has something to multiply. This used to return
+    # no multiplier here, and _applyTradeoffEffects papered over it with a hardcoded 2.5
+    # fallback, which also fired whenever the multiplier was legitimately gone (a missed
+    # power bar is 1.0, Grounded is 0) and paid an untiered x2.5 anyway. Whether there
+    # is a target, and the row's text when there is none, is decided there.
+    # Same "× N" notation as the affected card's tag in _applyTradeoffEffects.
+    eq = f"× {rewardValue} on your lowest-earning FP card"
+    return EffectResult(multBonus=rewardValue, equation=eq)
 
 
 def _computeLastResort(primary, ctx, cardPlayerId, eqId):
