@@ -3446,6 +3446,11 @@ class SeasonManager:
                         'receiving': gd.get('receiving'),
                         'kicking': gd.get('kicking'),
                         'defense': gd.get('defense'),
+                        # ⚠️ Without this key the per-game row's returning_stats is NULL:
+                        # d0d115d added the column to the save and never to this dict, so
+                        # prod saved no return yards on any game row through season 8
+                        # (Runback / House Call priced off a volume nothing records).
+                        'returning': gd.get('returning'),
                     }
         return playerStats
 
