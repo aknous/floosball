@@ -93,6 +93,23 @@ class ComplacentTests(unittest.TestCase):
         self.assertNotEqual(state(COMPLACENT_HANDOVER_GAMES - 1, 0, 1), 'COMPLACENT')
         self.assertEqual(state(COMPLACENT_HANDOVER_GAMES, 0, 1), 'COMPLACENT')
 
+    def testALossEndsComplacency(self):
+        # THE SEASON-9 WAFFLES: 13-1 after their first loss, still .70+ for six more
+        # losses. A losing streak is not coasting — it falls to COOLING_OFF.
+        for wins, losses, streak in ((13, 1, -1), (13, 2, -2)):
+            got = state(wins, losses, streak)
+            self.assertNotEqual(got, 'COMPLACENT', f'{wins}-{losses} streak {streak}')
+            self.assertEqual(got, 'COOLING_OFF', f'{wins}-{losses} streak {streak}')
+
+    def testWinningAgainAfterTheLossCanStillCoast(self):
+        self.assertEqual(state(13, 3, 1), 'COMPLACENT')
+
+
+class MultiplierTests(unittest.TestCase):
+    def testComplacentIsNoHarsherThanCoolingOff(self):
+        from constants import FORM_STATE_RATING_MULT as M
+        self.assertGreaterEqual(M['COMPLACENT'], M['COOLING_OFF'])
+
 
 class OtherStatesTests(unittest.TestCase):
     def testEarlySeasonReadsUnknownRatherThanComplacent(self):

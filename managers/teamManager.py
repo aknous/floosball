@@ -1022,8 +1022,10 @@ class TeamManager:
         Update ELO ratings for both teams after a game based on the result and margin of victory.
 
         Args:
-            preGameHomeWp: Home win probability at kickoff as 0-1 decimal (stored on game object).
-                           Falls back to ELO-derived probability if not provided.
+            preGameHomeWp: ELO's home win probability at kickoff as 0-1 decimal
+                           (`Game.preGameEloHomeWinProbability`). Falls back to the
+                           ELO-derived probability if not provided. ⚠️ Must be ELO's
+                           own odds, never a format's displayed WP — see the Game attr.
             preGameAwayWp: Away win probability at kickoff as 0-1 decimal.
         """
         import math

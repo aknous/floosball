@@ -1938,6 +1938,7 @@ class Game:
                 'awayQ4': getattr(self, 'awayScoreQ4', 0),
                 'awayOT': getattr(self, 'awayScoreOT', 0),
                 'preGameHomeWinProb': round(getattr(self, 'preGameHomeWinProbability', 0.5), 3),
+                'preGameEloHomeWinProb': round(getattr(self, 'preGameEloHomeWinProbability', 0.5), 3),
                 # Disposition / mental stack snapshots — read by
                 # analyze_disposition.py. Each phase is the avg starter
                 # overallRating after that modifier ran (baseline is
@@ -9517,6 +9518,18 @@ class Game:
         self.preGameHomeWinProbability = self.homeTeamWinProbability / 100.0
         self.preGameAwayWinProbability = self.awayTeamWinProbability / 100.0
 
+        # ⚠️ ELO'S OWN ODDS, KEPT APART FROM THE DISPLAYED KICKOFF NUMBER (2026-10-07).
+        # In standard the two are identical (WP at kickoff is pure ELO), but a format may
+        # reshape the displayed WP — Frames reported 30% ELO + 70% coin flip at 0-0,
+        # Innings 35% + 65% — and the ELO update and the upset alert both read the
+        # displayed number. Measured on 322 season-9 Frames games, favorites won at ELO's
+        # rate (ELO 62%, actual 64%) against the squashed 54%, so the squash was simply
+        # wrong: every favorite's win paid ELO as if it were nearly a coin flip, which
+        # inflated the strong teams' ratings, and the upset alert (which needs a 35/65
+        # split) could never fire. Anything that asks "who was expected to win" reads this.
+        self.preGameEloHomeWinProbability = 1.0 / (1.0 + 10 ** (-((self.homeTeamElo or 1500) - (self.awayTeamElo or 1500)) / 400.0))
+        self.preGameEloAwayWinProbability = 1.0 - self.preGameEloHomeWinProbability
+
         # Track previous win probability for WPA (Win Probability Added) calculations
         self.previousHomeWinProbability = self.homeTeamWinProbability
         self.previousAwayWinProbability = self.awayTeamWinProbability
@@ -13264,8 +13277,8 @@ class Game:
         eloHasSettled = bool(isPlayoff) or ((self.week or 0) + 1) >= UPSET_MIN_WEEK
 
         isUpsetAlert = False
-        if eloHasSettled and hasattr(self, 'preGameHomeWinProbability') and self.currentQuarter >= 2:
-            preGameHomeWp = self.preGameHomeWinProbability  # 0-1 decimal
+        if eloHasSettled and hasattr(self, 'preGameEloHomeWinProbability') and self.currentQuarter >= 2:
+            preGameHomeWp = self.preGameEloHomeWinProbability  # 0-1 decimal, ELO's own odds
             if preGameHomeWp < 0.35 and newHomeWp >= 65.0 and teamInPlayoffSpot(self.awayTeam):
                 isUpsetAlert = True
             elif preGameHomeWp > 0.65 and newAwayWp >= 65.0 and teamInPlayoffSpot(self.homeTeam):
