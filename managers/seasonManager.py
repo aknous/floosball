@@ -1264,8 +1264,8 @@ class SeasonManager:
                     _eloHome,
                     _eloAway,
                     gameInstance.winningTeam,
-                    getattr(gameInstance, 'preGameHomeWinProbability', None),
-                    getattr(gameInstance, 'preGameAwayWinProbability', None)
+                    getattr(gameInstance, 'preGameEloHomeWinProbability', None),
+                    getattr(gameInstance, 'preGameEloAwayWinProbability', None)
                 )
 
             # Broadcast standings update after ELO has been updated
@@ -6301,8 +6301,8 @@ class SeasonManager:
                     _eloHome,
                     _eloAway,
                     gameInstance.winningTeam,
-                    getattr(gameInstance, 'preGameHomeWinProbability', None),
-                    getattr(gameInstance, 'preGameAwayWinProbability', None)
+                    getattr(gameInstance, 'preGameEloHomeWinProbability', None),
+                    getattr(gameInstance, 'preGameEloAwayWinProbability', None)
                 )
 
             # ⚠️ NO RECORD CHECK ON A PLAYOFF GAME. Records are a REGULAR-SEASON body of
