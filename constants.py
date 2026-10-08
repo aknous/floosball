@@ -1201,7 +1201,9 @@ FORM_STATE_RATING_MULT = {
     'STEADY':      1.00,
     'SHAKY':       0.985,  # Mild slip
     'COOLING_OFF': 0.96,   # Was 0.97 — slightly stronger fade
-    'COMPLACENT':  0.92,   # Was 0.93 — slightly more bite on elite teams
+    'COMPLACENT':  0.96,   # Was 0.92 (owner, 2026-10-07): the harshest drag in the
+                           # table on the mildest trigger; with the losing-streak path
+                           # closed (computeFormState) it now matches COOLING_OFF.
     'SPIRALING':   0.99,   # Was 0.97 — disposition-analyzer data showed 28x
                            # higher SPIRALING incidence on underdogs vs
                            # favorites (39% vs 1.4%), so the multiplier was

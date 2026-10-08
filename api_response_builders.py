@@ -195,10 +195,21 @@ class TeamResponseBuilder(ResponseBuilder):
         # state ("They built up wins and feel untouchable").
         #
         # One constant for both sides so they cannot drift apart and reopen the gap.
+        #
+        # ⚠️ A LOSS ENDS IT (owner, 2026-10-07). The streak gate read `streak <= 2`,
+        # which a LOSING streak satisfies, so a banked record held the state on through
+        # every loss after it: the Waffles (season 9) went 13-1, lost once, and wore
+        # COMPLACENT for all seven games of the next day (1-6), and a 13-1 team needs six
+        # more losses to fall under .70 — the better the start, the longer the penalty.
+        # Measured over season 9: COMPLACENT teams won 28% of games against a 52%
+        # pre-game win probability. Coasting is something a team does while it is
+        # WINNING; a loss is the wake-up call, and a winner that is slipping is what
+        # COOLING_OFF (below) exists for. Both paths now require that the team is not on
+        # a losing streak.
         pedigreeFire = (isPedigreed and games < COMPLACENT_HANDOVER_GAMES
-                        and avgVuln >= 0.06)
+                        and avgVuln >= 0.06 and streak >= 0)
         recordFire = (games >= COMPLACENT_HANDOVER_GAMES and winPct >= 0.70
-                      and avgVuln >= 0.06 and streak <= 2)
+                      and avgVuln >= 0.06 and 1 <= streak <= 2)
         if pedigreeFire or recordFire:
             return 'COMPLACENT'
 
