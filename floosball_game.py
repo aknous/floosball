@@ -8157,6 +8157,11 @@ class Game:
         self._hoopPairResult = {}
         self.clockRunning = False
         self._pendingPossessionChange = False
+        # A score that ends a frame sets _pendingKickoff, and the kickoff block is skipped
+        # because this reset owns the frame start. Left set, the flag fired on the NEXT
+        # possession change: a fumble later in the frame printed "<team> kicks off"
+        # (prod game 4073, frame 2).
+        self._pendingKickoff = False
         # eventMessage so the frame marker goes out live over the WebSocket (else it only
         # shows on a REST re-fetch — same bug as the chess out-of-time turnover).
         self.broadcastGameState(includeLastPlay=False, eventMessage=frameEvent, isPossessionChange=True)
