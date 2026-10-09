@@ -292,6 +292,16 @@ class PlayerAttributes(Base):
     true_skill_arm_strength: Mapped[int] = mapped_column(Integer, default=0)
     true_skill_accuracy: Mapped[int] = mapped_column(Integer, default=0)
     true_skill_leg_strength: Mapped[int] = mapped_column(Integer, default=0)
+    # Highest value each developing attribute has reached; a declining attribute keeps
+    # at least DEV_PEAK_FLOOR_FRACTION of it. 0 = not yet recorded.
+    peak_speed: Mapped[int] = mapped_column(Integer, default=0)
+    peak_hands: Mapped[int] = mapped_column(Integer, default=0)
+    peak_reach: Mapped[int] = mapped_column(Integer, default=0)
+    peak_agility: Mapped[int] = mapped_column(Integer, default=0)
+    peak_power: Mapped[int] = mapped_column(Integer, default=0)
+    peak_arm_strength: Mapped[int] = mapped_column(Integer, default=0)
+    peak_accuracy: Mapped[int] = mapped_column(Integer, default=0)
+    peak_leg_strength: Mapped[int] = mapped_column(Integer, default=0)
 
     # Mental/skill attributes
     route_running: Mapped[int] = mapped_column(Integer)

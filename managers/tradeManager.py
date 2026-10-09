@@ -1055,7 +1055,8 @@ class TradeMarket:
         skill, his natural development — the "expected" on his page) plus the share of the
         gap to his ceiling this GM credits itself with (`FO_CEILING_CREDIT` x its
         player-development lean, the same credit `trueForwardRating` uses). Anyone else
-        uses `trueForwardRating`: a prime player holds, one past his longevity falls.
+        uses `trueForwardRating`: a prime player holds, and one at or past his peak season
+        is projected with the sim's own development at its average.
 
         ⚠️ THE MARKET PRICED EVERY SEASON AT TODAY'S RATING, and only the BUYER looked
         forward (through `perceivedValue`), so a seller saw a rising player at today's

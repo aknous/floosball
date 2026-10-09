@@ -18,8 +18,9 @@ class FakePlayer:
     """Minimal stand-in exposing exactly what the brain reads."""
 
     def __init__(self, name, rating, position=Position.QB,
-                 expected=None, ceiling=None, willRetire=False):
+                 expected=None, ceiling=None, willRetire=False, pastPeak=None):
         self.name = name
+        self._pastPeak = pastPeak
         self.playerRating = rating
         self.position = position
         self.willRetire = willRetire
@@ -31,6 +32,11 @@ class FakePlayer:
 
     def computeCeilingRating(self):
         return self._ceiling
+
+    def projectedRatingPastPeak(self, devBias=0):
+        """Next season's rating for a player past his peak (None while rising). A real
+        Player computes it from the sim's development; a fake states it."""
+        return self._pastPeak
 
 
 class FakeCoach:
@@ -87,7 +93,7 @@ def test_forward_projection_direction():
     brain = _brain(yearsPastByName={'Old': 2})
     developing = FakePlayer('Kid', 70, ceiling=82)
     prime = FakePlayer('Now', 88)
-    regressing = FakePlayer('Old', 86)
+    regressing = FakePlayer('Old', 86, pastPeak=84)
     coach = FakeCoach()
 
     assert brain.trueForwardRating(developing, coach) > developing.playerRating
@@ -118,7 +124,7 @@ def test_scouting_gates_the_forward_read():
     brain = _brain(yearsPastByName={'Fading': 2})
     rng = random.Random(1234)
 
-    fading = FakePlayer('Fading', 90)          # looks great, falls off
+    fading = FakePlayer('Fading', 90, pastPeak=88)   # looks great, falls off
     sharp = FakeCoach(scouting=100)
     poor = FakeCoach(scouting=60)
 

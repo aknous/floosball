@@ -22,10 +22,15 @@ from constants import (
     DEV_DECLINE_STEEPEN_PER_SEASON, DEV_DECLINE_PAST_LONGEVITY_KICK,
     DEV_DECLINE_MAX_STEEPEN, DEV_PROSPECT_SPREAD, DEV_PROSPECT_SEASONS,
     DEV_ATTRIBUTE_FLOOR, DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH,
-    DEV_DECLINE_FACTOR_MODE,
+    DEV_DECLINE_FACTOR_MODE, DEV_PEAK_FLOOR_FRACTION,
     DEV_OVERSHOOT_BASE_CHANCE, DEV_OVERSHOOT_BIAS_PER_POINT,
 )
 from logger_config import get_logger
+
+# Each developing attribute's PEAK field: the highest value it has reached, which sets
+# its decline floor (DEV_PEAK_FLOOR_FRACTION). 0 = not yet recorded.
+PEAK_ATTR_NAMES = {a: 'peak' + a[0].upper() + a[1:] for a in (
+    'speed', 'power', 'agility', 'reach', 'hands', 'armStrength', 'accuracy', 'legStrength')}
 
 logger = get_logger("floosball.development")
 
@@ -122,20 +127,14 @@ class PlayerDevelopment:
                           declineFactor=PlayerDevelopment.declineProfile(player))
 
     @staticmethod
-    def developAttribute(current: int, trueSkill: int, potential: int, ctx: DevContext) -> int:
-        """Apply one offseason's change to a single trained attribute.
+    def declineFloor(peak: int) -> int:
+        """The lowest a declining attribute may fall: DEV_PEAK_FLOOR_FRACTION of its
+        peak, or the absolute DEV_ATTRIBUTE_FLOOR, whichever is higher."""
+        return max(DEV_ATTRIBUTE_FLOOR, round((peak or 0) * DEV_PEAK_FLOOR_FRACTION))
 
-        Phase sets the base direction; devBias accelerates the climb (rising
-        only); prospects get a boom/bust spread.
-
-        Growth is capped at the player's TRUE SKILL (the mature target they
-        reliably develop into) — NOT their potential. Each non-declining season
-        there's a gated chance (raised by devBias) that the player OVERSHOOTS,
-        lifting the cap to their potential ceiling for that season — the rare
-        overachiever who exceeds projection. Decline is uncapped on the downside
-        down to DEV_ATTRIBUTE_FLOOR. (trueSkill <= 0 → no true-skill data; fall
-        back to the potential ceiling so unmapped/legacy attrs still behave.)
-        """
+    @staticmethod
+    def _changeRange(ctx: DevContext):
+        """The (lo, hi) range one offseason's raw change is drawn from, uniformly."""
         if ctx.phase == CareerPhase.RISING:
             lo, hi = DEV_RISE_RANGE
             lo += ctx.devBias
@@ -151,27 +150,87 @@ class PlayerDevelopment:
             # Boom/bust: widen both tails; good dev skews the top tail up.
             lo -= DEV_PROSPECT_SPREAD
             hi += DEV_PROSPECT_SPREAD + max(0, ctx.devBias)
+        return lo, hi
 
-        change = randint(lo, hi)
+    @staticmethod
+    def _growthCeiling(trueSkill: int, potential: int) -> int:
+        return trueSkill if trueSkill and trueSkill > 0 else potential
+
+    @staticmethod
+    def _canOvershoot(change: int, trueSkill: int, potential: int, ctx: DevContext) -> bool:
+        """Whether this roll gets an overshoot chance: growth, not declining, and a
+        potential above the true-skill cap."""
+        return (change > 0 and ctx.phase != CareerPhase.DECLINING
+                and potential > PlayerDevelopment._growthCeiling(trueSkill, potential))
+
+    @staticmethod
+    def _overshootChance(ctx: DevContext) -> float:
+        return DEV_OVERSHOOT_BASE_CHANCE + max(0, ctx.devBias) * DEV_OVERSHOOT_BIAS_PER_POINT
+
+    @staticmethod
+    def _settle(current: int, change: int, trueSkill: int, potential: int, ctx: DevContext,
+                peak: int, overshoot: bool) -> int:
+        """The attribute after a raw change from `_changeRange`, given whether the
+        overshoot roll came up. Deterministic: `developAttribute` rolls and calls this,
+        `expectedAttribute` averages it over every roll."""
         # Per-player decline severity: scale the drop so some players age gracefully
         # and others fall off a cliff, instead of every vet following the same arc.
-        # Downside only — the rare early-decline uptick isn't amplified.
         if ctx.phase == CareerPhase.DECLINING and change < 0:
             change = round(change * ctx.declineFactor)
         # Positive growth is capped at TRUE SKILL (the reliable target). A gated
         # per-season overshoot roll — likelier with good coaching/facilities —
         # lifts the cap to the potential ceiling, letting a few players exceed
-        # their projection. Declining players never overshoot. Decline is
-        # uncapped on the downside (to the floor).
+        # their projection. Declining players never overshoot.
         if change > 0:
-            ceiling = trueSkill if trueSkill and trueSkill > 0 else potential
-            if ctx.phase != CareerPhase.DECLINING and potential > ceiling:
-                overshootChance = DEV_OVERSHOOT_BASE_CHANCE + max(0, ctx.devBias) * DEV_OVERSHOOT_BIAS_PER_POINT
-                if random.random() < overshootChance:
-                    ceiling = potential
+            ceiling = PlayerDevelopment._growthCeiling(trueSkill, potential)
+            if overshoot:
+                ceiling = potential
             change = min(change, max(0, ceiling - current))
 
-        return max(DEV_ATTRIBUTE_FLOOR, min(MAX_ATTRIBUTE_VALUE, current + change))
+        floor = PlayerDevelopment.declineFloor(peak)
+        return min(MAX_ATTRIBUTE_VALUE, max(current + change, min(current, floor)))
+
+    @staticmethod
+    def developAttribute(current: int, trueSkill: int, potential: int, ctx: DevContext,
+                         peak: int = 0) -> int:
+        """Apply one offseason's change to a single trained attribute.
+
+        Phase sets the base direction; devBias accelerates the climb (rising
+        only); prospects get a boom/bust spread.
+
+        Growth is capped at the player's TRUE SKILL (the mature target they
+        reliably develop into) — NOT their potential. Each non-declining season
+        there's a gated chance (raised by devBias) that the player OVERSHOOTS,
+        lifting the cap to their potential ceiling for that season — the rare
+        overachiever who exceeds projection. Decline stops at `declineFloor(peak)`:
+        80% of the highest value the attribute reached, never below 60. The floor
+        never LIFTS an attribute already under it; it only stops it falling.
+        (trueSkill <= 0 → no true-skill data; fall back to the potential ceiling so
+        unmapped/legacy attrs still behave.)
+        """
+        lo, hi = PlayerDevelopment._changeRange(ctx)
+        change = randint(lo, hi)
+        overshoot = (PlayerDevelopment._canOvershoot(change, trueSkill, potential, ctx)
+                     and random.random() < PlayerDevelopment._overshootChance(ctx))
+        return PlayerDevelopment._settle(current, change, trueSkill, potential, ctx, peak, overshoot)
+
+    @staticmethod
+    def expectedAttribute(current: int, trueSkill: int, potential: int, ctx: DevContext,
+                          peak: int = 0) -> float:
+        """The AVERAGE of `developAttribute` over every roll, computed exactly: each
+        change in the range is equally likely, and an overshoot-eligible roll splits
+        on the overshoot chance. What the front office projects with."""
+        lo, hi = PlayerDevelopment._changeRange(ctx)
+        chance = PlayerDevelopment._overshootChance(ctx)
+        total = 0.0
+        for change in range(lo, hi + 1):
+            plain = PlayerDevelopment._settle(current, change, trueSkill, potential, ctx, peak, False)
+            if PlayerDevelopment._canOvershoot(change, trueSkill, potential, ctx):
+                over = PlayerDevelopment._settle(current, change, trueSkill, potential, ctx, peak, True)
+                total += (1 - chance) * plain + chance * over
+            else:
+                total += plain
+        return total / (hi - lo + 1)
 
     @staticmethod
     def update_intangible_attributes(attributes: Any) -> None:
@@ -188,29 +247,85 @@ class PlayerDevelopment:
         current = getattr(attributes, attrName, 0)
         trueSkill = getattr(attributes, trueSkillName, 0)
         potential = getattr(attributes, potentialName, MAX_ATTRIBUTE_VALUE)
-        setattr(attributes, attrName,
-                PlayerDevelopment.developAttribute(current, trueSkill, potential, ctx))
+        peak = PlayerDevelopment._resolvePeak(attributes, attrName, current, trueSkill, ctx)
+        newValue = PlayerDevelopment.developAttribute(current, trueSkill, potential, ctx, peak=peak)
+        setattr(attributes, attrName, newValue)
+        peakName = PEAK_ATTR_NAMES.get(attrName)
+        if peakName:
+            setattr(attributes, peakName, max(peak, newValue))
+
+    @staticmethod
+    def _resolvePeak(attributes: Any, attrName: str, current: int, trueSkill: int,
+                     ctx: DevContext) -> int:
+        """The attribute's peak for this offseason (never below today's value)."""
+        peakName = PEAK_ATTR_NAMES.get(attrName)
+        peak = int(getattr(attributes, peakName, 0) or 0) if peakName else 0
+        if peak <= 0:
+            # Not recorded yet (every player before peaks were tracked, and a new one).
+            # A rising player's best is today's value. One already past his peak season
+            # most likely got as far as his true skill, the target development carries a
+            # player to, so that is the best estimate of a high nobody recorded.
+            peak = current
+            if ctx.phase == CareerPhase.DECLINING and trueSkill:
+                peak = max(current, trueSkill)
+        return max(peak, current)
+
+    # The attributes each position trains, as (attribute, trueSkill, potential) names.
+    TRAINED_ATTRIBUTES = {
+        'QB': [('armStrength', 'trueSkillArmStrength', 'potentialArmStrength'),
+               ('accuracy', 'trueSkillAccuracy', 'potentialAccuracy'),
+               ('agility', 'trueSkillAgility', 'potentialAgility')],
+        'RB': [('speed', 'trueSkillSpeed', 'potentialSpeed'),
+               ('power', 'trueSkillPower', 'potentialPower'),
+               ('agility', 'trueSkillAgility', 'potentialAgility'),
+               ('reach', 'trueSkillReach', 'potentialReach')],
+        'WR': [('speed', 'trueSkillSpeed', 'potentialSpeed'),
+               ('hands', 'trueSkillHands', 'potentialHands'),
+               ('agility', 'trueSkillAgility', 'potentialAgility'),
+               ('reach', 'trueSkillReach', 'potentialReach')],
+        'K': [('legStrength', 'trueSkillLegStrength', 'potentialLegStrength'),
+              ('accuracy', 'trueSkillAccuracy', 'potentialAccuracy')],
+    }
+    TRAINED_ATTRIBUTES['TE'] = TRAINED_ATTRIBUTES['WR']
+
+    @staticmethod
+    def _developAll(attributes: Any, positionType: str, ctx: DevContext) -> None:
+        for attrName, trueName, potName in PlayerDevelopment.TRAINED_ATTRIBUTES[positionType]:
+            PlayerDevelopment._dev(attributes, attrName, trueName, potName, ctx)
 
     @staticmethod
     def develop_quarterback_attributes(attributes: Any, ctx: DevContext) -> None:
-        PlayerDevelopment._dev(attributes, 'armStrength', 'trueSkillArmStrength', 'potentialArmStrength', ctx)
-        PlayerDevelopment._dev(attributes, 'accuracy', 'trueSkillAccuracy', 'potentialAccuracy', ctx)
-        PlayerDevelopment._dev(attributes, 'agility', 'trueSkillAgility', 'potentialAgility', ctx)
+        PlayerDevelopment._developAll(attributes, 'QB', ctx)
 
     @staticmethod
     def develop_skill_position_attributes(attributes: Any, position_type: str, ctx: DevContext) -> None:
-        PlayerDevelopment._dev(attributes, 'speed', 'trueSkillSpeed', 'potentialSpeed', ctx)
-        if position_type == "RB":
-            PlayerDevelopment._dev(attributes, 'power', 'trueSkillPower', 'potentialPower', ctx)
-        else:  # WR / TE
-            PlayerDevelopment._dev(attributes, 'hands', 'trueSkillHands', 'potentialHands', ctx)
-        PlayerDevelopment._dev(attributes, 'agility', 'trueSkillAgility', 'potentialAgility', ctx)
-        PlayerDevelopment._dev(attributes, 'reach', 'trueSkillReach', 'potentialReach', ctx)
+        PlayerDevelopment._developAll(attributes, 'RB' if position_type == 'RB' else 'WR', ctx)
 
     @staticmethod
     def develop_kicker_attributes(attributes: Any, ctx: DevContext) -> None:
-        PlayerDevelopment._dev(attributes, 'legStrength', 'trueSkillLegStrength', 'potentialLegStrength', ctx)
-        PlayerDevelopment._dev(attributes, 'accuracy', 'trueSkillAccuracy', 'potentialAccuracy', ctx)
+        PlayerDevelopment._developAll(attributes, 'K', ctx)
+
+    @staticmethod
+    def expectedAttributes(player: Any, devBias: int) -> Dict[str, float]:
+        """{attribute: expected value after this offseason's development} for every
+        attribute the player's position trains, from the same rules and the same
+        career context the offseason uses. Late blooms and the intangible drift are
+        left out: the bloom is a hidden roll and the drift averages to zero."""
+        position = getattr(getattr(player, 'position', None), 'name', None)
+        trained = PlayerDevelopment.TRAINED_ATTRIBUTES.get(position)
+        attributes = getattr(player, 'attributes', None)
+        if not trained or attributes is None:
+            return {}
+        ctx = PlayerDevelopment.careerContext(player, devBias)
+        out = {}
+        for attrName, trueName, potName in trained:
+            current = getattr(attributes, attrName, 0)
+            trueSkill = getattr(attributes, trueName, 0)
+            potential = getattr(attributes, potName, MAX_ATTRIBUTE_VALUE)
+            peak = PlayerDevelopment._resolvePeak(attributes, attrName, current, trueSkill, ctx)
+            out[attrName] = PlayerDevelopment.expectedAttribute(current, trueSkill, potential,
+                                                                ctx, peak=peak)
+        return out
 
     @staticmethod
     def selfDevelopmentBias(player: Any) -> int:

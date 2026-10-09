@@ -767,6 +767,20 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # Peak columns on player_attributes: the highest value each developing attribute
+        # has reached, which sets its decline floor. 0 → development records it the
+        # next time the player develops.
+        for col in [
+            'peak_speed', 'peak_hands', 'peak_reach', 'peak_agility', 'peak_power',
+            'peak_arm_strength', 'peak_accuracy', 'peak_leg_strength',
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} INTEGER DEFAULT 0"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [
