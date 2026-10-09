@@ -3526,10 +3526,7 @@ class PlayerManager:
         # Snapshot full pre-signing pool so REST endpoint can serve it during broadcast replay
         self._freeAgentSnapshot = sorted(
             [{"name": p.name, "position": p.position.name,
-              "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
-              # Never played a pro game — the supply trickle that replaced the
-              # rookie draft, so fans can tell fresh blood from a journeyman.
-              "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0}
+              "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
              for p in self.freeAgents],
             key=lambda p: -p["rating"]
         )

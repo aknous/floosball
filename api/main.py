@@ -7541,6 +7541,90 @@ async def admin_achievements(_auth: None = Depends(_checkAdminAuth)):
 from api.auth import getOptionalUser as _getOptionalUser
 from database.models import User as _User
 
+def _withFrontOfficeMoves(sm, transactions: list) -> list:
+    """The offseason transaction list with each team's re-signings and departures
+    taken from the recap log (`seasonManager.frontOfficeMovesByTeam`).
+
+    ⚠️ READ HERE, NOT ONLY WHEN THE PRE-DRAFT PASS RUNS. The transaction list lives in
+    memory, so a restart mid-offseason drops every entry made before it, and an
+    offseason whose pass ran under the old code holds empty re-sign lists (production
+    season 9). The recap log has both, so the board reads it every time. A team's
+    existing entry keeps its place in the list; a team with moves but no entry gets one
+    at the front, where the pre-draft pass would have put it."""
+    try:
+        moves = sm.frontOfficeMovesByTeam()
+    except Exception:
+        return transactions
+    teamManager = getattr(floosball_app, 'teamManager', None)
+    abbrByName = {t.name: getattr(t, 'abbr', '') for t in (getattr(teamManager, 'teams', None) or [])}
+    out, seen = [], set()
+    for t in transactions:
+        if t.get('type') == 'team_setup':
+            tid = t.get('teamId')
+            m = moves.get(tid)
+            if m is not None:
+                t = {**t, 'resigns': m['resigns'], 'cuts': m['cuts']}
+            seen.add(tid)
+        elif not t.get('teamAbbr') and t.get('team') in abbrByName:
+            t = {**t, 'teamAbbr': abbrByName[t.get('team')]}
+        out.append(t)
+    missing = [{'type': 'team_setup', 'team': m['team'], 'teamAbbr': m['teamAbbr'], 'teamId': tid,
+                'resigns': m['resigns'], 'cuts': m['cuts'], 'promotions': []}
+               for tid, m in moves.items() if tid not in seen and tid is not None]
+    return missing + out
+
+
+def _offseasonDraftClass() -> list:
+    """This offseason's rookie class for the Prospects board, at every phase: the
+    players still to be drafted, the ones taken (with the team that took them) and the
+    ones nobody took.
+
+    ⚠️ THE DRAFT CLEARS THE FLAG THAT IDENTIFIES THE CLASS. `is_upcoming_rookie` goes the
+    moment a player is picked (or released undrafted), so `/api/draft/class` comes back
+    empty after the draft. The picks are read from this season's `rookie_pick` recap
+    events, which are durable across a restart; the undrafted are the players released
+    undrafted who have not yet played a season.
+    """
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
+    takenBy = {}
+    if seasonNum is not None:
+        from database.connection import get_session
+        from database.models import SeasonRecapEvent
+        session = get_session()
+        try:
+            rows = (session.query(SeasonRecapEvent.player_id, SeasonRecapEvent.team_abbr)
+                    .filter(SeasonRecapEvent.season == seasonNum,
+                            SeasonRecapEvent.event_type == 'rookie_pick').all())
+            takenBy = {pid: abbr for pid, abbr in rows if pid is not None}
+        except Exception:
+            takenBy = {}
+        finally:
+            session.close()
+    entries = []
+    for p in pm.activePlayers:
+        pid = getattr(p, 'id', None)
+        upcoming = bool(getattr(p, 'is_upcoming_rookie', False))
+        undrafted = (bool(getattr(p, 'is_undrafted', False))
+                     and (getattr(p, 'seasonsPlayed', 0) or 0) == 0
+                     and (getattr(p, 'prospect_seasons', 0) or 0) == 0
+                     and pid not in takenBy)
+        if not (upcoming or pid in takenBy or undrafted):
+            continue
+        entries.append({
+            "id": pid,
+            "name": p.name,
+            "position": p.position.name,
+            "rating": round(getattr(p, 'playerRating', 0), 1),
+            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+            "draftedBy": takenBy.get(pid),
+            "undrafted": undrafted,
+        })
+    entries.sort(key=lambda e: -e["rating"])
+    return entries
+
+
 @app.get("/api/offseason")
 async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     """Offseason state: free agents, draft order, user's ballot"""
@@ -7562,9 +7646,6 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                 "position": p.position.name,
                 "rating": round(p.playerRating, 1),
                 "tier": p.playerTier.name,
-                # New to the league: no pro season played. With the rookie draft
-                # gone this is the only way in, so it's worth calling out.
-                "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0,
             }
             for p in sorted(pm.freeAgents, key=lambda p: -p.playerRating)
             if isinstance(getattr(p, 'team', None), str)
@@ -7621,14 +7702,18 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     transactions = getattr(sm, '_offseasonTransactions', [])
     if _tradesHidden():
         transactions = [t for t in transactions if t.get('type') != 'trade']
+    # The pool cull is never shown (its names return to the name pool); an offseason
+    # that ran under older code still holds the entries in memory.
+    transactions = [t for t in transactions if t.get('type') != 'pool_cull']
+    if isOffseason:
+        transactions = _withFrontOfficeMoves(sm, transactions)
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
     faWindowEnd = getattr(sm, '_faWindowEnd', None)
     # Always include FA pool during offseason so ballot rank markers work after window closes
     # Defensive: only include players whose .team is actually 'Free Agent' (not a team object)
     faPool = [
         {"id": p.id, "name": p.name, "position": p.position.name,
-         "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
-         "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0}
+         "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
         for p in pm.freeAgents
         if isinstance(getattr(p, 'team', None), str)
     ] if isOffseason else []
@@ -7686,7 +7771,8 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         "gmResolutions": gmResolutions,
         "faVoteResults": faVoteResults,
         "faPositionPriority": getattr(sm, '_offseasonFaPositionPriority', {}) or {},
-        "rookies": [],   # no rookie draft; kept so older clients still parse
+        # This offseason's draft class, with who took each player (the Prospects board).
+        "rookies": _offseasonDraftClass() if isOffseason else [],
         "phase": phase,
         "draftComplete": draftComplete,
     }
