@@ -5495,6 +5495,20 @@ LEAD_THREAT_FG_MIN_PROB = 0.75
 # that is protecting its lead — for that 2%, which is why the gate is asymmetric.
 LEAD_ANSWER_MIN_SECONDS = 50
 
+# ── Frames: every frame ending is managed like the end of a game (owner, 2026-10-09) ──
+# A frame is a mini-game, and the end-of-period clock decisions (timeouts on both sides,
+# spikes, sideline throws, the field-goal and touchdown drains, the last-play kick and
+# Hail Mary, the late fourth-down branches) used to be gated on Q2/Q4, so they only ever
+# fired at the end of frames 3 and 6. Measured over 60 games, offensive timeouts in the
+# last 2:00 of frames 1/2/4/5 ran 0.00-0.32 a game against 3.45 at frame 3.
+# Timeouts each team gets at the start of EVERY frame (not 3 a half). There is no
+# two-minute warning in Frames (FramesFormat.usesQuarterBreaks is False).
+FRAMES_TIMEOUTS_PER_FRAME = 2
+# The end-of-frame window: with this much frame left or less, the frame's ending is the
+# deadline the clock decisions manage toward (FramesFormat.periodEnd). The standard
+# decisions' own thresholds (2:00, 3:00, 5:00) sit inside it, as they sit inside a quarter.
+FRAMES_END_WINDOW_SECS = 300
+
 GLITCH_CARDS_ENABLED = True
 
 # Trigger base, by the on-card player's position on the attention ladder. Chosen over an

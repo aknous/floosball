@@ -56,6 +56,10 @@ class StubGame:
     fgMakeProbability = fg.Game.fgMakeProbability
     _estimateFgProbability = fg.Game._estimateFgProbability
     _offensiveScoreWinsNow = fg.Game._offensiveScoreWinsNow
+    # The period-end and margin helpers the clock decisions now ask (standard format).
+    _periodEnd = fg.Game._periodEnd
+    _clockMargin = fg.Game._clockMargin
+    _twoMinuteWarningPending = fg.Game._twoMinuteWarningPending
 
     def __init__(self, *, quarter=4, secs=50, defScore=17, offScore=14,
                  yardsToEndzone=30, timeouts=3, maxFg=55, accuracy=80,
@@ -86,6 +90,11 @@ class StubGame:
         # who took the OT coin flip: the offense, or (default) the defense
         self.otFirstPossTeam = self.offensiveTeam if offenseHadFirstPoss else self.defensiveTeam
         self._oneScore = fg.Game._oneScore.__get__(self)
+        from game_formats import GameFormat
+        self.format = GameFormat()
+
+    def _frameDecisionDiff(self):
+        return None
 
     def broadcastGameState(self, **kw):
         pass

@@ -28,6 +28,11 @@ class StubGame:
     _maybeCallTimeoutToSaveSnap = fg.Game._maybeCallTimeoutToSaveSnap
     _callTimeout = fg.Game._callTimeout
     _isGarbageTime = fg.Game._isGarbageTime
+    _periodEnd = fg.Game._periodEnd
+    _clockMargin = fg.Game._clockMargin
+
+    def _frameDecisionDiff(self):
+        return None
 
     # ⚠️ The timeout helper now checks NO-HUDDLE before spending one — standing at the
     # line is the cheaper way to save a snap and it is free, so an offense that can do it
@@ -43,7 +48,8 @@ class StubGame:
     # The real Game always has a `format` (a property resolving from gameRules), so a
     # stub without one is the stub being wrong. None reads as standard — same convention
     # as test_last_snap_fg's stub.
-    format = None
+    from game_formats import GameFormat as _Standard
+    format = _Standard()
 
     def _offenseEffectiveSecs(self):
         return self.gameClockSeconds

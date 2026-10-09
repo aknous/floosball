@@ -56,9 +56,18 @@ def _framesGame(index):
     return game
 
 
+# Every try after a touchdown, made or missed: a kickoff follows the TOUCHDOWN, and the
+# try sits between them in the feed.
+_TRY_RESULTS = {'ExtraPointGood', 'ExtraPointNoGood', 'Touchdown2PtGood', 'Touchdown2PtNoGood',
+                'ConversionGood', 'ConversionNoGood'}
+
+
 def _scored(play):
-    """True if this play put points on the board (TD, FG, safety or a try)."""
+    """True if this play put points on the board (TD, FG, safety) or was the try after
+    a touchdown."""
     if getattr(play, 'scoreChange', False):
+        return True
+    if getattr(getattr(play, 'playResult', None), 'name', '') in _TRY_RESULTS:
         return True
     name = getattr(getattr(play, 'playType', None), 'name', '')
     return name in ('ExtraPoint', 'TwoPointConversion', 'Conversion')
