@@ -260,6 +260,27 @@ class GameFormat:
         would just double it up."""
         return True
 
+    def periodEnd(self, game, forDefense: bool = False):
+        """(kind, secs): the deadline the end-of-period clock decisions manage toward.
+
+        kind: 'half' (end of Q2: the possession is free, so score at any margin),
+        'game' (end of Q4: a lead is worth protecting and a deficit must be chased),
+        'overtime', or None when no period ending is in play. secs is the time left
+        to that deadline, as seen by the offense (or the defense, `forDefense`).
+        Standard reads the quarter and the game clock, the same for both sides."""
+        q = game.currentQuarter
+        if q >= 5:
+            return ('overtime', game.gameClockSeconds)
+        if q == 4:
+            return ('game', game.gameClockSeconds)
+        if q == 2:
+            return ('half', game.gameClockSeconds)
+        return (None, game.gameClockSeconds)
+
+    def halftimeTimeouts(self):
+        """Timeouts each team is reset to at halftime, or None to leave them alone."""
+        return 3
+
     def usesQuarterBreaks(self) -> bool:
         """Whether the format has QUARTER structure at all — quarter-start callouts
         ('Start Nth Quarter') and the two-minute warning. True for clock/quarter
@@ -869,6 +890,54 @@ class FramesFormat(GameFormat):
     def usesQuarterBreaks(self) -> bool:
         return False   # frames have no quarters — no quarter callouts or 2-min warning
 
+    def halftimeTimeouts(self):
+        return None    # timeouts reset per FRAME (FRAMES_TIMEOUTS_PER_FRAME), not per half
+
+    def periodEnd(self, game, forDefense: bool = False):
+        """Every frame ending is a period ending (owner, 2026-10-09). With
+        FRAMES_END_WINDOW_SECS of the frame left or less, the deadline is the FRAME buzzer
+        and it is a 'game' ending: a frame lead is worth protecting, a frame deficit must
+        be chased.
+
+        ⚠️ A FRAME OUT OF REACH IS A 'half' ENDING FOR THE SIDE BEHIND IN IT, AND ONLY
+        THAT SIDE. When the trailing side cannot catch up in the time left, the frame is
+        decided and only the total score is still at stake (it breaks a frames tie), so
+        that side plays the frame out the way a standard half ends: score if you can,
+        field goals included, using its timeouts. The side ahead stays a 'game' ending,
+        which is the owner's frame-leader rule (2026-07-22): keep playing, without
+        urgency, and never stop the clock to do it. Never in the final frame, where a
+        decided frame decides the match (or, with the frames level, the total score is
+        already the margin `_frameDecisionDiff` hands every decision). Overtime is past
+        all frames and reads as standard."""
+        if game.currentQuarter >= 5:
+            return super().periodEnd(game, forDefense)
+        secs = game._frameSecsRemaining()
+        if secs is None:
+            return super().periodEnd(game, forDefense)
+        from constants import FRAMES_END_WINDOW_SECS
+        if secs > FRAMES_END_WINDOW_SECS:
+            return (None, secs)
+        isFinal = int(getattr(game, '_frameIndex', 0)) >= self._frames(game) - 1
+        if not isFinal and self._frameSettled(game, secs):
+            h, a = framePoints(game)
+            sideIsHome = (game.offensiveTeam is game.homeTeam) != bool(forDefense)
+            behind = (h < a) if sideIsHome else (a < h)
+            if behind:
+                return ('half', secs)
+        return ('game', secs)
+
+    @staticmethod
+    def _frameSettled(game, secs) -> bool:
+        """The frame's result can no longer change: the side behind in it cannot catch up
+        in the time left. The same reach ladder `_isGarbageTime` uses for the end of Q4."""
+        h, a = framePoints(game)
+        deficit = abs(h - a)
+        if deficit == 0:
+            return False
+        if secs <= 120:
+            return deficit > 2 * game._maxPossession()
+        return deficit > 3 * game._oneScore()
+
     def _elapsed(self, game) -> int:
         # Regulation seconds elapsed (capped at the full game; OT is past all frames).
         total = self._regSeconds(game)
@@ -923,13 +992,21 @@ class FramesFormat(GameFormat):
         # mid-game re-plan (frame boundaries don't line up with quarters).
         if awarded and getattr(game, '_frameIndex', 0) < N:
             game._frameBoundaryPending = True
+            self._resetFrameTimeouts(game)
             try:
                 game._maybeReadjustGameplans('frame')
             except Exception:
                 pass
 
+    @staticmethod
+    def _resetFrameTimeouts(game) -> None:
+        from constants import FRAMES_TIMEOUTS_PER_FRAME
+        game.homeTimeoutsRemaining = FRAMES_TIMEOUTS_PER_FRAME
+        game.awayTimeoutsRemaining = FRAMES_TIMEOUTS_PER_FRAME
+
     def onPeriodStart(self, game) -> None:
         if game.currentQuarter == 1:
+            self._resetFrameTimeouts(game)
             game._frameIndex = 0
             game._frameStartHome = 0
             game._frameStartAway = 0

@@ -577,6 +577,14 @@ class PlayerManager:
                 player.attributes.trueSkillArmStrength = getattr(attrs, 'true_skill_arm_strength', 0) or player.attributes.armStrength
                 player.attributes.trueSkillAccuracy = getattr(attrs, 'true_skill_accuracy', 0) or player.attributes.accuracy
                 player.attributes.trueSkillLegStrength = getattr(attrs, 'true_skill_leg_strength', 0) or player.attributes.legStrength
+                player.attributes.peakSpeed = getattr(attrs, 'peak_speed', 0) or 0
+                player.attributes.peakHands = getattr(attrs, 'peak_hands', 0) or 0
+                player.attributes.peakReach = getattr(attrs, 'peak_reach', 0) or 0
+                player.attributes.peakAgility = getattr(attrs, 'peak_agility', 0) or 0
+                player.attributes.peakPower = getattr(attrs, 'peak_power', 0) or 0
+                player.attributes.peakArmStrength = getattr(attrs, 'peak_arm_strength', 0) or 0
+                player.attributes.peakAccuracy = getattr(attrs, 'peak_accuracy', 0) or 0
+                player.attributes.peakLegStrength = getattr(attrs, 'peak_leg_strength', 0) or 0
                 player.attributes.routeRunning = attrs.route_running
                 player.attributes.vision = attrs.vision
                 player.attributes.blocking = attrs.blocking
@@ -2005,6 +2013,14 @@ class PlayerManager:
                             true_skill_arm_strength=getattr(attrs, 'trueSkillArmStrength', 0),
                             true_skill_accuracy=getattr(attrs, 'trueSkillAccuracy', 0),
                             true_skill_leg_strength=getattr(attrs, 'trueSkillLegStrength', 0),
+                            peak_speed=getattr(attrs, 'peakSpeed', 0),
+                            peak_hands=getattr(attrs, 'peakHands', 0),
+                            peak_reach=getattr(attrs, 'peakReach', 0),
+                            peak_agility=getattr(attrs, 'peakAgility', 0),
+                            peak_power=getattr(attrs, 'peakPower', 0),
+                            peak_arm_strength=getattr(attrs, 'peakArmStrength', 0),
+                            peak_accuracy=getattr(attrs, 'peakAccuracy', 0),
+                            peak_leg_strength=getattr(attrs, 'peakLegStrength', 0),
                             route_running=attrs.routeRunning,
                             vision=attrs.vision,
                             blocking=attrs.blocking,
@@ -2064,6 +2080,14 @@ class PlayerManager:
                         db_attrs.true_skill_arm_strength = getattr(attrs, 'trueSkillArmStrength', 0)
                         db_attrs.true_skill_accuracy = getattr(attrs, 'trueSkillAccuracy', 0)
                         db_attrs.true_skill_leg_strength = getattr(attrs, 'trueSkillLegStrength', 0)
+                        db_attrs.peak_speed = getattr(attrs, 'peakSpeed', 0)
+                        db_attrs.peak_hands = getattr(attrs, 'peakHands', 0)
+                        db_attrs.peak_reach = getattr(attrs, 'peakReach', 0)
+                        db_attrs.peak_agility = getattr(attrs, 'peakAgility', 0)
+                        db_attrs.peak_power = getattr(attrs, 'peakPower', 0)
+                        db_attrs.peak_arm_strength = getattr(attrs, 'peakArmStrength', 0)
+                        db_attrs.peak_accuracy = getattr(attrs, 'peakAccuracy', 0)
+                        db_attrs.peak_leg_strength = getattr(attrs, 'peakLegStrength', 0)
                         db_attrs.route_running = attrs.routeRunning
                         db_attrs.vision = attrs.vision
                         db_attrs.blocking = attrs.blocking
@@ -3502,10 +3526,7 @@ class PlayerManager:
         # Snapshot full pre-signing pool so REST endpoint can serve it during broadcast replay
         self._freeAgentSnapshot = sorted(
             [{"name": p.name, "position": p.position.name,
-              "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
-              # Never played a pro game — the supply trickle that replaced the
-              # rookie draft, so fans can tell fresh blood from a journeyman.
-              "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0}
+              "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
              for p in self.freeAgents],
             key=lambda p: -p["rating"]
         )

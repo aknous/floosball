@@ -32,6 +32,10 @@ class StubGame:
     _oneScore = fg.Game._oneScore
     _maxPossession = fg.Game._maxPossession
     _fgValue = fg.Game._fgValue
+    # The period-end and margin helpers the clock decisions now ask (standard format).
+    _periodEnd = fg.Game._periodEnd
+    _clockMargin = fg.Game._clockMargin
+    _twoMinuteWarningPending = fg.Game._twoMinuteWarningPending
 
     def __init__(self, *, diff=-5, yte=3, ytg=None, down=1, secs=55, quarter=4):
         self.currentQuarter = quarter
@@ -43,7 +47,8 @@ class StubGame:
         self.yardsToFirstDown = yte if ytg is None else ytg
         self.down = down
         self.gameRules = Rules()
-        self.format = None
+        from game_formats import GameFormat
+        self.format = GameFormat()
 
     def _offenseEffectiveSecs(self): return self.gameClockSeconds
     def _frameDecisionDiff(self): return None

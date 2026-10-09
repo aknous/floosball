@@ -52,12 +52,22 @@ class Fmt:
     def __init__(self, key):
         self.key = key
 
+    def periodEnd(self, game, forDefense=False):
+        # The standard quarter reading (chess clock does not override it).
+        from game_formats import GameFormat
+        return GameFormat.periodEnd(self, game, forDefense)
+
 
 class StubGame:
     _maybeCallTimeoutToSaveSnap = fg.Game._maybeCallTimeoutToSaveSnap
     _callTimeout = fg.Game._callTimeout
     _isGarbageTime = fg.Game._isGarbageTime
     _chessClockLow = fg.Game._chessClockLow
+    _periodEnd = fg.Game._periodEnd
+    _clockMargin = fg.Game._clockMargin
+
+    def _frameDecisionDiff(self):
+        return None
 
     def __init__(self, *, budget, homeScore, awayScore, quarter=4, secs=298,
                  timeouts=3, clockRunning=True, playType=PlayType.Run, fmt='chess_clock'):

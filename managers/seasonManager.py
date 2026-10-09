@@ -7016,10 +7016,13 @@ class SeasonManager:
         if not self._isOffseasonStepComplete('prospect_window'):
             try:
                 windowResult = self.playerManager._advanceProspectWindow()
+                _tm = self.serviceContainer.getService('team_manager')
+                _abbrByName = {t.name: getattr(t, 'abbr', '') for t in (getattr(_tm, 'teams', None) or [])}
                 for rel in windowResult.get('released', []):
                     self._offseasonTransactions.append({
                         'type': 'prospect_release',
-                        'team': rel.get('fromTeam'), 'teamAbbr': '',
+                        'team': rel.get('fromTeam'),
+                        'teamAbbr': _abbrByName.get(rel.get('fromTeam'), ''),
                         'playerId': rel.get('playerId'),
                         'player': rel.get('name'), 'position': rel.get('position'),
                         'rating': rel.get('rating'),
@@ -7045,15 +7048,13 @@ class SeasonManager:
         if not self._isOffseasonStepComplete('pool_cull'):
             try:
                 seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+                # ⚠️ NOT PUBLISHED (owner, 2026-10-09). A culled player's name goes back
+                # into the name pool, so the less anyone sees of him the better: no
+                # transaction, no feed line. Logged only.
                 cullResult = self.playerManager.cullUnsignedPool(seasonNum)
-                for gone in cullResult.get('removed', []):
-                    self._offseasonTransactions.append({
-                        'type': 'pool_cull',
-                        'team': '', 'teamAbbr': '',
-                        'playerId': gone.get('playerId'),
-                        'player': gone.get('name'), 'position': gone.get('position'),
-                        'rating': gone.get('rating'),
-                    })
+                removed = cullResult.get('removed', [])
+                if removed:
+                    logger.info(f"Pool cull removed {len(removed)} never-rostered player(s)")
             except Exception as e:
                 logger.error(f"Pool cull failed: {e}")
             self._markOffseasonStepComplete('pool_cull')
@@ -7864,13 +7865,58 @@ class SeasonManager:
             logger.warning(f"Could not read draft pick ownership: {e}")
             return pairs
 
+    def frontOfficeMovesByTeam(self) -> dict:
+        """{teamId: {'team', 'teamAbbr', 'resigns': [...], 'cuts': [...]}} for this
+        offseason, read from the durable recap log.
+
+        ⚠️ THE OFFSEASON BOARD'S RE-SIGNINGS CAME FROM FAN-VOTE RESULTS, AND THERE ARE
+        NONE. `_runPreDraftPass` listed a team's re-signings from `gmResults` entries of
+        type `resign_player`, which only the binding fan-vote system produced; it was
+        deleted when the front office went autonomous, so every team read zero
+        re-signings (production season 9: 28 `resign` recap rows, 0 on the board). The
+        same source told a front-office cut from an expired contract, so every cut read
+        as "expired". The recap log records each as it happens (`resign`, `walked`,
+        `cut`) and survives a restart, which the in-memory transaction list does not.
+        A trade's forced cut carries a trade id and belongs to the trade, not here."""
+        season = self.currentSeason.seasonNumber if self.currentSeason else None
+        if not season:
+            return {}
+        from database.connection import get_session
+        from database.models import SeasonRecapEvent
+        session = get_session()
+        try:
+            rows = (session.query(SeasonRecapEvent)
+                    .filter(SeasonRecapEvent.season == season,
+                            SeasonRecapEvent.event_type.in_(('resign', 'walked', 'cut')))
+                    .order_by(SeasonRecapEvent.id).all())
+            moves: dict = {}
+            for r in rows:
+                if r.event_type == 'cut' and getattr(r, 'trade_id', None) is not None:
+                    continue
+                tm = moves.setdefault(r.team_id, {'team': r.team_name, 'teamAbbr': r.team_abbr,
+                                                  'resigns': [], 'cuts': []})
+                entry = {'id': r.player_id, 'name': r.player_name, 'position': r.position,
+                         'rating': r.rating, 'tier': r.tier}
+                if r.event_type == 'resign':
+                    tm['resigns'].append(entry)
+                else:
+                    entry['reason'] = 'cut' if r.event_type == 'cut' else 'expired'
+                    tm['cuts'].append(entry)
+            return moves
+        except Exception as e:
+            logger.warning(f"Could not read front-office moves: {e}")
+            return {}
+        finally:
+            session.close()
+
     async def _runPreDraftPass(self, teamsWorstFirst: list, gmResults: list) -> None:
         """Roll through teams worst→best BEFORE the rookie draft begins.
 
         For each team, broadcast a setup event with:
-          - resigns: players whose GM re-sign vote succeeded (still rostered)
-          - cuts: players who left the roster this offseason (GM vote + contract
-            expiration — both set previousTeam and reset freeAgentYears to 0)
+          - resigns: players the front office re-signed
+          - cuts: players who left the roster this offseason, a front-office cut
+            ('cut') or an expired contract ('expired')
+        Both come from the recap log (`frontOfficeMovesByTeam`).
           - promotions: prospects moved onto the roster. Promotion is RUN HERE
             (not during the FA draft) so the prospect slot opens up before the
             rookie draft fills it.
@@ -7887,31 +7933,6 @@ class SeasonManager:
                 self._promoteProspectsAutonomously(team)
             return
 
-        # Index resign successes by team for O(1) lookup
-        resignsByTeam: dict = {}
-        # Track which players were released via GM cut vote (vs. contract expiry)
-        # so the UI can show CUT (team decision) vs EXPIRED (natural departure).
-        gmCutPlayerNames: set = set()
-        for r in gmResults or []:
-            if r.get('outcome') != 'success':
-                continue
-            vt = r.get('voteType')
-            if vt == 'resign_player':
-                tid = r.get('teamId')
-                resignsByTeam.setdefault(tid, []).append(r.get('targetPlayerName'))
-            elif vt == 'cut_player':
-                gmCutPlayerNames.add(r.get('targetPlayerName'))
-
-        # Collect cuts (FAs with previousTeam from this offseason)
-        cutsByTeamName: dict = {}
-        for p in self.playerManager.freeAgents:
-            if getattr(p, 'freeAgentYears', 99) != 0:
-                continue
-            prev = getattr(p, 'previousTeam', None)
-            if not prev:
-                continue
-            cutsByTeamName.setdefault(prev, []).append(p)
-
         # Predraft is no longer a visible roll-through — front-office decisions
         # land in one shot. Compute resigns/cuts/promotions per team, persist
         # them, broadcast each team_setup event so subscribed UIs render the
@@ -7925,38 +7946,15 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Could not broadcast predraft start: {e}")
 
+        # Re-signings and departures, from the recap log (frontOfficeMovesByTeam).
+        movesByTeam = self.frontOfficeMovesByTeam()
         for team in teamsWorstFirst:
             teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
             teamId = getattr(team, 'id', None)
-
-            # Build resign list — look up player details from the roster
-            resignList = []
-            resignNames = set(resignsByTeam.get(teamId, []))
-            if resignNames:
-                for slot, p in team.rosterDict.items():
-                    if p and p.name in resignNames:
-                        resignList.append({
-                            'id': getattr(p, 'id', None),
-                            'name': p.name,
-                            'position': p.position.name,
-                            'rating': round(p.playerRating, 1),
-                            'tier': p.playerTier.name,
-                        })
-
-            # Build cut list. GM-voted cuts are tagged 'gm_vote'; contract
-            # expirations are 'expired' (player walked to FA naturally — not
-            # the team's active decision).
-            cutList = []
-            for p in cutsByTeamName.get(team.name, []):
-                reason = 'gm_vote' if p.name in gmCutPlayerNames else 'expired'
-                cutList.append({
-                    'id': getattr(p, 'id', None),
-                    'name': p.name,
-                    'position': p.position.name,
-                    'rating': round(p.playerRating, 1),
-                    'tier': p.playerTier.name,
-                    'reason': reason,
-                })
+            teamMoves = movesByTeam.get(teamId) or {}
+            resignList = list(teamMoves.get('resigns') or [])
+            # A cut is the team's decision; 'expired' is a contract running out.
+            cutList = list(teamMoves.get('cuts') or [])
 
             # Promotions used to fire here, but they're now deferred to the
             # FA draft kickoff (see _applyFanVotedPromotions). That gives

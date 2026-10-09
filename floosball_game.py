@@ -1659,7 +1659,8 @@ class Game:
         Down 7 and 8 are included even though a touchdown only TIES: a tie sends the game
         to overtime, and leaving the opponent time lets them win it in regulation instead.
         """
-        if self.currentQuarter < 4:
+        # The end of Q4/OT, or the end of any frame (`_periodEnd`).
+        if self._periodEnd()[0] not in ('game', 'overtime'):
             return False
         secs = self._offenseEffectiveSecs()
         # Above the window the clock is not yet the deciding factor; below it there is no
@@ -2433,6 +2434,23 @@ class Game:
             return False
         deficit = abs(scoreDiff)
         q = self.currentQuarter
+        # Frames: a lost cause is judged on the FRAME clock, and only in the final frame.
+        # Earlier, a frame the trailing side cannot catch is still worth points, because
+        # the total score breaks a frames tie (`FramesFormat.periodEnd` reads it as a
+        # 'half' ending), and a frame with time left is not lost.
+        if getattr(self.format, 'key', '') == 'frames' and q < 5:
+            kind, fsecs = self._periodEnd()
+            try:
+                isFinal = int(getattr(self, '_frameIndex', 0)) >= self.format._frames(self) - 1
+            except Exception:
+                isFinal = False
+            if not isFinal or kind == 'half':
+                return False
+            if fsecs > 300:
+                return deficit > 4 * self._oneScore()
+            if fsecs > 120:
+                return deficit > 3 * self._oneScore()
+            return deficit > 2 * self._maxPossession()
         if q <= 2:
             return False  # first half — plenty of time
         secs = self.gameClockSeconds
@@ -2553,12 +2571,18 @@ class Game:
         # is deliberately left ungated rather than carrying a guard that cannot fire.
         if not self._deadBallStopsClock():
             return False
-        if self.currentQuarter not in (2, 4):
+        # The end of Q2 or Q4, or of any frame (`_periodEnd`); in Frames, from the margin
+        # in the frame (or the total score in the final frame with the frames level).
+        _kind, _periodSecs = self._periodEnd()
+        if _kind not in ('half', 'game'):
             return False
+        _frameMargin = self._frameDecisionDiff()
+        if _frameMargin is not None:
+            scoreDiff = _frameMargin
         # A leading team late in Q4 wants the clock RUNNING — never stop it.
         # But in Q2 a leading team still stops the clock to score before the
         # half (the half ends regardless, so there's no lead to protect).
-        if self.currentQuarter == 4 and scoreDiff > 0:
+        if _kind == 'game' and scoreDiff > 0:
             return False
         if self._isGarbageTime(scoreDiff):
             return False
@@ -2570,7 +2594,7 @@ class Game:
             return False
 
         clockIQ = self._coachClockIQ(coach)
-        secs = self.gameClockSeconds
+        secs = _periodSecs
         isHome = (self.offensiveTeam == self.homeTeam)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
         noTimeouts = (timeoutsLeft == 0)
@@ -2659,11 +2683,13 @@ class Game:
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
         if timeoutsLeft <= 0:
             return
-        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        # From the frame margin in Frames; the end of any frame is a period ending.
+        scoreDiff = self._clockMargin()
         if self._isGarbageTime(scoreDiff):
             return
-        endOfHalf = self.currentQuarter == 2
-        endOfGameNeed = (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff <= 0
+        _kind = self._periodEnd()[0]
+        endOfHalf = _kind == 'half'
+        endOfGameNeed = _kind in ('game', 'overtime') and scoreDiff <= 0
         # Chess clock: a budget that's GETTING low is a preserve-time situation in
         # ANY quarter — spend a timeout to save the huddle drain.
         # ⚠️ AT ANY SCORE, LEADING INCLUDED. A lockout is a turnover at the spot whatever
@@ -2689,7 +2715,11 @@ class Game:
         Q4/OT: triggers up to 5 min out with urgency scaling; under 2 min uses original high-urgency logic.
         Q2: triggers under 60 sec (moderate, end-of-half is less critical).
         """
-        if self.currentQuarter not in (2, 4) and self.currentQuarter < 5:
+        # The end of Q2/Q4/OT, or of any frame, on its own clock (`_periodEnd`). Gated on
+        # the quarter alone, a Frames defense could only ever call one at the end of
+        # frames 3 and 6.
+        _kind, secs = self._periodEnd(forDefense=True)
+        if _kind is None:
             return
         if not self.clockRunning:
             return
@@ -2697,11 +2727,11 @@ class Game:
         # waste a timeout on the dead clock before a snap runs.
         if self._clockStoppedByWarning:
             return
-        secs = self.gameClockSeconds
-        # Determine if the defensive team is trailing
+        # Determine if the defensive team is trailing. In Frames, trailing in the FRAME
+        # (or on the total score in the final frame with the frames level): the raw total
+        # left a defense losing the frame reading itself as ahead.
         defIsHome = (self.defensiveTeam == self.homeTeam)
-        defScore = self.homeScore if defIsHome else self.awayScore
-        offScore = self.awayScore if defIsHome else self.homeScore
+        defMargin = self._clockMargin(forDefense=True)
         # Q4/OT: a trailing defense burns timeouts to get the ball back. A leading or
         # tied one normally wants the clock to run out — UNLESS the lead is about to
         # evaporate anyway.
@@ -2716,8 +2746,8 @@ class Game:
         #
         # Q2: any team stops the clock to get the ball back before the half, regardless of
         # score, so the exception is not needed there.
-        if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
-            if not self._leadIsAboutToEvaporate(defScore - offScore):
+        if _kind in ('game', 'overtime') and defMargin >= 0:
+            if not self._leadIsAboutToEvaporate(defMargin):
                 return
             # ⚠️ IN OVERTIME THERE MAY BE NO ANSWER TO BUY AT ANY CLOCK READING, which
             # the seconds floor below cannot express. Once the offense is past the first
@@ -2754,9 +2784,9 @@ class Game:
             # to be real.
             if secs < LEAD_ANSWER_MIN_SECONDS:
                 return
-        deficit = offScore - defScore
+        deficit = -defMargin
         # Don't waste timeouts in an unwinnable game
-        defScoreDiff = defScore - offScore  # negative when trailing
+        defScoreDiff = defMargin  # negative when trailing
         if self._isGarbageTime(defScoreDiff):
             return
         defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
@@ -2766,7 +2796,7 @@ class Game:
         # pays off close to the end. Inside 2:00 for a one-score game; extended
         # to 3:00 only when down multiple scores (genuinely needs the clock).
         # Calling them at 4-5 min in a tight game is the "no coach does that" case.
-        isEndGame = self.currentQuarter == 4 or self.currentQuarter >= 5
+        isEndGame = _kind in ('game', 'overtime')
         multiScore = deficit > self._maxPossession()
         if isEndGame:
             threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
@@ -2775,9 +2805,7 @@ class Game:
         if secs > threshold:
             return
         # Don't waste a timeout right before the free two-minute-warning stop.
-        if (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
-                and self.gameRules.timeoutClockThreshold < secs
-                <= self.gameRules.timeoutClockThreshold + 15):
+        if self._twoMinuteWarningPending(secs):
             return
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
@@ -3421,6 +3449,35 @@ class Game:
         fs = self._frameSecsRemaining()
         return fs is not None and fs <= threshold
 
+    def _periodEnd(self, forDefense: bool = False):
+        """(kind, secs) of the deadline the end-of-period clock decisions manage toward:
+        'half', 'game', 'overtime' or None, and the time left to it, for the offense (or
+        the defense). The format decides (GameFormat.periodEnd): standard reads the
+        quarter and the game clock, Frames reads the FRAME, so every frame ending is
+        managed and not just frames 3 and 6. Decisions ask this instead of testing
+        `currentQuarter in (2, 4)`."""
+        return self.format.periodEnd(self, forDefense)
+
+    def _clockMargin(self, forDefense: bool = False) -> int:
+        """The margin the clock decisions reason from, from the offense's side (or the
+        defense's). Standard: the score. Frames: what it takes to win the FRAME, or the
+        total score in the final frame when the frames would finish level
+        (`_frameDecisionDiff`)."""
+        margin = self._frameDecisionDiff()
+        if margin is None:
+            isHome = self.offensiveTeam is self.homeTeam
+            margin = ((self.homeScore - self.awayScore) if isHome
+                      else (self.awayScore - self.homeScore))
+        return -margin if forDefense else margin
+
+    def _twoMinuteWarningPending(self, secs: int) -> bool:
+        """A free two-minute-warning stoppage is still to come, just above 2:00, so a
+        timeout now would be wasted. Never in a format without the warning (Frames)."""
+        return (self.format.usesQuarterBreaks()
+                and self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                and self.gameRules.timeoutClockThreshold < secs
+                <= self.gameRules.timeoutClockThreshold + 15)
+
     def _offenseEffectiveSecs(self) -> int:
         """Seconds of urgency the offense faces — how soon it MUST score. Standard: the
         game clock. Chess clock: the SOONER of the game clock and the offense's own budget.
@@ -3620,6 +3677,10 @@ class Game:
         _frameDiff = self._frameDecisionDiff()
         if _frameDiff is not None:
             scoreDiff = _frameDiff
+        # The period ending the late-game branches below manage toward: the end of Q2/Q4/
+        # OT, or of any frame, on its own clock (`_periodEnd`). They were gated on the
+        # quarter, so in Frames they only ever ran at the end of frames 3 and 6.
+        _periodKind, _periodSecs = self._periodEnd()
         # ⚠️ KNEEL IT OUT IF THAT ENDS THE GAME — checked before every scoring option
         # below, because none of them can beat a decided result. Leading in Q4/OT with
         # enough clock-drain in hand, the offense simply runs it to 0:00: a field goal can
@@ -3685,7 +3746,7 @@ class Game:
         # scoring chance in a no-clock format (innings: the last try of the final at-bat — the
         # game clock/lockout signals don't exist there). Down more than a FG (of the FRAME, in
         # frames) in any of those → a futile 3, so go for the TD.
-        lateHopeless = ((self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        lateHopeless = ((_periodKind in ('game', 'overtime') and _periodSecs <= 300)
                         or self._defenseLockedOut() or self._chessClockLow(120)
                         or self._frameEndSoon()
                         or self.format.isLastScoringChance(self, self.offensiveTeam))
@@ -3729,8 +3790,8 @@ class Game:
         # offense should go for it / dink a hoop instead of busting the kick.
         if not self.format.allowFieldGoal(self, self.gameRules.fieldGoalPoints):
             inFieldGoalRange = False
-        leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
-                       and self.gameClockSeconds <= 120)
+        leadingLate = (scoreDiff > 0 and _periodKind in ('game', 'overtime')
+                       and _periodSecs <= 120)
 
         # chess_clock: when the DEFENSE is locked out, never punt — a failed 4th down
         # just returns the ball to us at our own 20 (the possession gate), so a punt
@@ -3815,16 +3876,16 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
             isLateGameDesperation = (
-                (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 150)
-                or (self.currentQuarter == 2 and scoreDiff <= 0
-                    and self.gameClockSeconds < 60 and self.yardsToSafety > 50)
+                (_periodKind == 'game' and scoreDiff < 0 and _periodSecs < 150)
+                or (_periodKind == 'half' and scoreDiff <= 0
+                    and _periodSecs < 60 and self.yardsToSafety > 50)
             )
             if not isLateGameDesperation:
                 self.play.playType = PlayType.Punt
                 return
             # Under 2 minutes trailing in Q4: NEVER punt — there's no realistic way
             # to get the ball back and still score, so go for it regardless of coach.
-            if not (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 120):
+            if not (_periodKind == 'game' and scoreDiff < 0 and _periodSecs < 120):
                 gameIQ = self._coachClockIQ(coach)
                 # Only a genuinely poor clock-manager concedes with a punt here; an
                 # average-or-better coach goes for it. (The old gate let an average
@@ -3852,9 +3913,10 @@ class Game:
         # makeable FG) instead of giving the ball up. Aggressive coaches
         # pull the trigger earlier; even the most conservative coach
         # stops punting once the clock dips under 15s.
-        if self.currentQuarter == 2 and self.yardsToSafety > 35:
+        # (Frames: a frame out of reach either way ends like a half — `_periodEnd`.)
+        if _periodKind == 'half' and self.yardsToSafety > 35:
             shotTimeThreshold = max(15, round(25 + aggrNorm * 10))
-            if self.gameClockSeconds <= shotTimeThreshold:
+            if _periodSecs <= shotTimeThreshold:
                 if inFieldGoalRange:
                     self.play.playType = PlayType.FieldGoal
                     return
@@ -3898,7 +3960,7 @@ class Game:
             return
 
         if scoreDiff > 0:
-            if self.currentQuarter == 4 and self.gameClockSeconds < 300:
+            if _periodKind == 'game' and _periodSecs < 300:
                 # Leading with little time: burn clock, don't risk a FG miss.
                 # NEVER kneel on 4th down — a kneel there is a turnover on downs, so
                 # a team should run an ACTUAL play (or kick / punt) instead. Running
@@ -3942,7 +4004,7 @@ class Game:
         elif scoreDiff < 0 and inFieldGoalRange:
             deficit = abs(scoreDiff)
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
-            if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold:
+            if _periodKind == 'game' and _periodSecs < self.gameRules.timeoutClockThreshold:
                 gameIQ = self._coachClockIQ(coach)
                 if deficit <= self._fgValue():
                     # FG ties or wins — chip shots are automatic, longer FGs nearly so
@@ -3963,7 +4025,7 @@ class Game:
                     # Down 4-8: FG doesn't tie — need a TD eventually
                     # With more time, bad coaches may still settle for FG to "stay close"
                     # As time dwindles, FG becomes pointless — below 45 sec, no one kicks
-                    secs = self.gameClockSeconds
+                    secs = _periodSecs
                     if secs >= 45:
                         timeFactor = (secs - 45) / (self.gameRules.timeoutClockThreshold - 45)
                         # Bad coaches (low IQ) more likely to settle; good coaches go for TD
@@ -4013,8 +4075,8 @@ class Game:
 
         elif scoreDiff < 0:
             deficit = abs(scoreDiff)
-            secs = self.gameClockSeconds
-            if self.currentQuarter == 4:
+            secs = _periodSecs
+            if _periodKind == 'game':
                 gameIQ = self._coachClockIQ(coach)
                 aggrMod = aggrNorm * 0.15  # risk tolerance: aggressive +0.15, conservative -0.15
 
@@ -4072,7 +4134,7 @@ class Game:
                         return
 
             # Q2 two-minute drill: go for it past midfield with under 60 sec
-            elif self.currentQuarter == 2 and secs < 60 and self.yardsToSafety > 50:
+            elif _periodKind == 'half' and secs < 60 and self.yardsToSafety > 50:
                 if self.yardsToFirstDown <= 3:
                     self.play.passPlay(self._selectPassPlay('short'))
                 elif self.yardsToFirstDown <= 10:
@@ -4092,8 +4154,8 @@ class Game:
         # FG (or a winning TD) instead of kicking from longer range and giving
         # the ball back with significant time left. Chip-shot range still
         # defaults to the kick (high prob > the conversion gamble).
-        if (self.currentQuarter == 4 and scoreDiff == 0 and inFieldGoalRange
-                and self.gameClockSeconds >= 30
+        if (_periodKind == 'game' and scoreDiff == 0 and inFieldGoalRange
+                and _periodSecs >= 30
                 and self.yardsToFirstDown <= 5
                 and self.yardsToEndzone > 15
                 and fgProb < 0.92):
@@ -4187,7 +4249,7 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
             elif self.yardsToFirstDown == 2:
-                if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -3 * self._oneScore() and self.currentQuarter == 4 and self.gameClockSeconds < 600):
+                if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -3 * self._oneScore() and _periodKind == 'game' and _periodSecs < 600):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(5, goForItThreshold - 3)):
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -4195,7 +4257,7 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
             else:
-                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and self.currentQuarter == 4 and self.gameClockSeconds < 300):
+                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and _periodKind == 'game' and _periodSecs < 300):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(4, goForItThreshold - 4)):
                         self.play.passPlay(self._selectPassPlay('medium'))
@@ -6923,6 +6985,9 @@ class Game:
         decisionDiff = self._frameDecisionDiff()
         if decisionDiff is None:
             decisionDiff = scoreDiff
+        # The period ending the clock decisions below manage toward, and the time left
+        # to it: Q2/Q4/OT in standard, every frame's ending in Frames (`_periodEnd`).
+        _periodKind, _periodSecs = self._periodEnd()
         coach = getattr(self.offensiveTeam, 'coach', None)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
 
@@ -7129,7 +7194,9 @@ class Game:
             # that would have earned the field position never got going. Measured: 83% of
             # halves that expired with the ball in range still had a timeout in hand,
             # averaging 2.3 unspent.
-            endOfHalfDrive = (self.currentQuarter == 2
+            # Frames: a frame out of reach either way reads as a 'half' ending — play for
+            # the total score, which breaks a frames tie.
+            endOfHalfDrive = (_periodKind == 'half'
                               and self._offenseEffectiveSecs() <= 120
                               and not self._isGarbageTime(scoreDiff))
             endOfHalfPush = (endOfHalfDrive
@@ -7258,9 +7325,10 @@ class Game:
             # take the safe winner instead of risking a turnover trying for a TD.
             # 4th down or last realistic play → kick now. Otherwise, drain clock
             # with a safe run unless the coach is aggressive enough to push.
-            if ((self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff == 0
-                    and self.gameClockSeconds <= 45
-                    and not self._isGarbageTime(scoreDiff)):
+            # Frames: tied in the FRAME, so the kick wins the frame.
+            if (_periodKind in ('game', 'overtime') and decisionDiff == 0
+                    and _periodSecs <= 45
+                    and not self._isGarbageTime(decisionDiff)):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 if self.yardsToEndzone <= kickerMax:
@@ -7588,10 +7656,12 @@ class Game:
                     self.play.spike()
                     return
 
-            # Spike: Q2/Q4/OT, clock running, no timeouts, trailing/tied
-            # Urgency scales with remaining time — almost always spike under 30s,
-            # less likely at 90s+ (sometimes better to just run a play)
-            secs = self.gameClockSeconds
+            # Spike: Q2/Q4/OT (or any frame's ending), clock running, no timeouts,
+            # trailing/tied. Urgency scales with remaining time — almost always spike
+            # under 30s, less likely at 90s+ (sometimes better to just run a play).
+            # In Frames the time and the margin are the FRAME's (`_periodEnd`,
+            # `decisionDiff`).
+            secs = _periodSecs
             # Down gate: spiking forfeits a down, so it's a 1st/2nd-down tool.
             # On 3rd down it's only defensible to stop the clock for a tying/
             # winning FG that's in range AND would be the last play (no time
@@ -7601,7 +7671,7 @@ class Game:
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
             spikeFgException = (self.down == self.gameRules.downsPerSeries - 1
-                                and (self.currentQuarter == 2 or -self._fgValue() <= scoreDiff <= 0)
+                                and (_periodKind == 'half' or -self._fgValue() <= decisionDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
             # A down-1/2 spike is only worth it if a productive snap can STILL FOLLOW it.
@@ -7614,18 +7684,18 @@ class Game:
             spikeDownOK = ((self.down <= self.gameRules.downsPerSeries - 2
                             and self._estimateAvailablePlays() >= 1)
                            or spikeFgException)
-            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
+            if (_periodKind is not None
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
                     and timeoutsLeft == 0
-                    and (scoreDiff <= 0 or self.currentQuarter == 2)  # Q2: stop the clock regardless of score
+                    and (decisionDiff <= 0 or _periodKind == 'half')  # Q2: stop the clock regardless of score
                     and spikeDownOK
                     # ⚠️ AND ONLY IF SPIKING STILL STOPS THE CLOCK. Otherwise this is a
                     # forfeited down in exchange for nothing — the same failure as
                     # throwing to the sideline under a running clock, and measured at
                     # 1.43 wasted downs a game before this gate.
                     and self._deadBallStopsClock()
-                    and not self._isGarbageTime(scoreDiff)):
+                    and not self._isGarbageTime(decisionDiff)):
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
                 else:
@@ -7645,8 +7715,8 @@ class Game:
             # timeout to stop the clock only matters inside the final two minutes
             # — extended to 3:00 only when down multiple scores. Calling them at
             # 4-5 min is the "no coach does that" case the window used to allow.
-            isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
-            multiScore = scoreDiff < -self._maxPossession()
+            isLateGame = _periodKind is not None
+            multiScore = decisionDiff < -self._maxPossession()
             # A tied / one-score offense in (or a play away from) FG range must
             # bank clock for a game-tying/winning FG — same 3:00 urgency as a
             # multi-score team, not the 2:00 cap that let it bleed time before.
@@ -7654,17 +7724,15 @@ class Game:
             _toKickerMaxFg = (_toKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _toKicker else 0
             # In FG range and it matters: trailing/tied any quarter, OR Q2 at any
             # score (score before the half). Drives the high-urgency timeout.
-            fgStopPriority = (scoreDiff <= 0 or self.currentQuarter == 2) and self.yardsToEndzone <= _toKickerMaxFg + 8
-            toWindow = (180 if (self.currentQuarter >= 4 and (multiScore or fgStopPriority))
+            fgStopPriority = (decisionDiff <= 0 or _periodKind == 'half') and self.yardsToEndzone <= _toKickerMaxFg + 8
+            toWindow = (180 if (_periodKind in ('game', 'overtime') and (multiScore or fgStopPriority))
                         else self.gameRules.timeoutClockThreshold)
-            twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
-                              and self.gameRules.timeoutClockThreshold < secs
-                              <= self.gameRules.timeoutClockThreshold + 15)
+            twoMinImminent = self._twoMinuteWarningPending(secs)
             # Q2: stop the clock regardless of score (endOfHalfPush) — a leading
             # team still wants to score before the break. Q4/OT stays trailing/
             # tied-gated so a leading team drains the clock instead.
-            if (isLateGame and (scoreDiff <= 0 or endOfHalfDrive) and self.clockRunning
-                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
+            if (isLateGame and (decisionDiff <= 0 or endOfHalfDrive) and self.clockRunning
+                    and timeoutsLeft > 0 and not self._isGarbageTime(decisionDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow):
                 if secs <= self.gameRules.timeoutClockThreshold:
@@ -7682,7 +7750,7 @@ class Game:
                 if _random.random() < toChance:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'timeout',
-                        'reason': ('Stop clock to score before the half' if (endOfHalfDrive and scoreDiff > 0)
+                        'reason': ('Stop clock to score before the half' if (endOfHalfDrive and decisionDiff > 0)
                                    else 'Stop clock while trailing/tied'),
                         'clockRemaining': secs,
                         'timeoutsLeft': timeoutsLeft,
@@ -7742,7 +7810,7 @@ class Game:
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
+        if _periodKind == 'half' and _periodSecs < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
             if self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -7752,9 +7820,9 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
+        if _periodKind == 'game' and _periodSecs < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
             if (-self._fgValue() <= decisionDiff <= self._fgValue() and not self._framesFgFutile()) and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
-                canAdvance = self.gameClockSeconds >= 30
+                canAdvance = _periodSecs >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
                 if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
@@ -7776,10 +7844,10 @@ class Game:
         # Gated on _estimateAvailablePlays() == 0 (the engine's "last play" signal)
         # so it does NOT fire on an early down when there's still time to take a
         # shot at the winning TD first. (Non-charged kickers never reach here.)
-        if (kickerCharged and self.currentQuarter in (2, 4)
+        if (kickerCharged and _periodKind in ('half', 'game')
                 and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
                 and self._estimateAvailablePlays() == 0):
-            fgWorthwhile = (self.currentQuarter == 2) or (-self._fgValue() <= scoreDiff <= 0)
+            fgWorthwhile = (_periodKind == 'half') or (-self._fgValue() <= decisionDiff <= 0)
             if fgWorthwhile:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'chargedLastPlayFG',
@@ -7817,8 +7885,10 @@ class Game:
         # exactly this reason. It is `scoreDiff` off frames, so every other format is
         # unchanged.
         _hmDiff = decisionDiff
-        _gameHailMary = (self.currentQuarter == 4 and _hmDiff < 0
-                         and self.gameClockSeconds <= 12)
+        # The last play of Q4, or of a frame the offense is losing (`_periodEnd`): the
+        # drive ends with the frame.
+        _gameHailMary = (_periodKind == 'game' and _hmDiff < 0
+                         and _periodSecs <= 12)
         _driveHailMary = _dcLastPlay and _hmDiff <= 0   # trailing or tied
         if ((_gameHailMary or _driveHailMary)
                 and self.yardsToEndzone >= 30
@@ -7877,8 +7947,8 @@ class Game:
             # range cap so it doesn't attempt an absurd distance.
             if (self.play.playType == PlayType.Punt and kickerCharged
                     and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
-                fgHelps = scoreDiff >= -self._fgValue() or not (
-                    (self.currentQuarter >= 4 and self.gameClockSeconds <= 300) or self._defenseLockedOut())
+                fgHelps = decisionDiff >= -self._fgValue() or not (
+                    (_periodKind in ('game', 'overtime') and _periodSecs <= 300) or self._defenseLockedOut())
                 if fgHelps:
                     self.play.playType = PlayType.FieldGoal
             # Record decision after the fact
@@ -8157,6 +8227,11 @@ class Game:
         self._hoopPairResult = {}
         self.clockRunning = False
         self._pendingPossessionChange = False
+        # A score that ends a frame sets _pendingKickoff, and the kickoff block is skipped
+        # because this reset owns the frame start. Left set, the flag fired on the NEXT
+        # possession change: a fumble later in the frame printed "<team> kicks off"
+        # (prod game 4073, frame 2).
+        self._pendingKickoff = False
         # eventMessage so the frame marker goes out live over the WebSocket (else it only
         # shows on a REST re-fetch — same bug as the chess out-of-time turnover).
         self.broadcastGameState(includeLastPlay=False, eventMessage=frameEvent, isPossessionChange=True)
@@ -13712,6 +13787,14 @@ class Game:
         # would otherwise race to score early and hand the game back.
         if self._isTdDrainMode():
             return ('burnClock', 40)
+        # ⚠️ IN FRAMES THE RULES BELOW READ THE WRONG SCOREBOARD. They are the standard
+        # end-of-half and second-half rules, keyed on the quarter and the TOTAL score, so
+        # a team losing the frame but ahead on the total burned the clock on a Q4 lead,
+        # and one winning the frame but behind on the total hurried. The frame branch
+        # above is the tempo rule for Frames; overtime is past all frames and reads as
+        # standard.
+        if _fdiff is not None and q < 5:
+            return ('neutral', DEFAULT_BASE)
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
         # ⚠️ END OF THE HALF IS URGENT AT ANY SCORE, and this is the lever that matters
@@ -15427,9 +15510,11 @@ class Game:
             self.currentQuarter = 3
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.isHalftime = False
-            # Reset timeouts for second half
-            self.homeTimeoutsRemaining = 3
-            self.awayTimeoutsRemaining = 3
+            # Reset timeouts for second half (Frames resets per frame instead)
+            _halfTos = self.format.halftimeTimeouts()
+            if _halfTos is not None:
+                self.homeTimeoutsRemaining = _halfTos
+                self.awayTimeoutsRemaining = _halfTos
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 3:
             self.currentQuarter = 4

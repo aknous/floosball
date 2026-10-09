@@ -139,9 +139,17 @@ DEV_PROSPECT_SEASONS = 1         # career seasons (pro + pipeline) <= this → v
 # fast a rookie closes the entry discount (~2-3 seasons).
 DEV_OVERSHOOT_BASE_CHANCE = 0.12     # per rising/peak season, per attribute
 DEV_OVERSHOOT_BIAS_PER_POINT = 0.05  # each devBias point added to that chance
-# Trained attributes can fade this low in decline (below MIN_ATTRIBUTE_VALUE so
-# aging vets actually drop into lower tiers and the league spreads out).
-DEV_ATTRIBUTE_FLOOR = 55
+# Two floors on a declining skill attribute; the higher one holds (owner, 2026-10-09).
+# Without them decline ran until retirement, ending only at an absolute floor of 55.
+#   - Absolute: no skill attribute is pushed below this, matching the lowest
+#     generated value (MIN_ATTRIBUTE_VALUE).
+#   - Relative: a declining attribute keeps at least this share of the highest value
+#     it ever reached (`peak*` on PlayerAttributes), so a star ages into a solid
+#     veteran rather than a replacement-level one.
+# Neither LIFTS an attribute already below it (a prospect who debuts under 60, or a
+# veteran who aged past the line before the floor existed); they only stop it falling.
+DEV_ATTRIBUTE_FLOOR = 60
+DEV_PEAK_FLOOR_FRACTION = 0.80
 
 # Random Generation Ranges
 TIER_S_MIN = 95
@@ -2878,10 +2886,10 @@ FO_CEILING_CREDIT = 0.45          # fraction of the remaining (ceiling - current
 # floor here 'developing' would describe the whole league.
 FO_DEVELOPING_HEADROOM = 2
 
-# Age decline. A player past their longevity clock is projected DOWN — this is
-# the "sell high before the cliff" read that separates a sharp GM from a poor one.
-FO_DECLINE_PER_YEAR_PAST = 0.06   # rating fraction shed per season past longevity
-FO_DECLINE_MAX = 0.40             # cap so an ancient vet never projects to nothing
+# Age decline: no constants. A player at or past his peak season is projected with the
+# sim's own development at its average (frontOfficeBrain._nextSeasonRatingPastPeak), so
+# the GM's read of aging cannot drift from what aging does. FO_DECLINE_PER_YEAR_PAST /
+# FO_DECLINE_MAX were a separate guess and were removed 2026-10-09 (see trueForwardRating).
 
 # Re-sign decision. A walk-year incumbent only takes one of the scarce re-sign
 # slots if their perceived value beats the replacement the team can REALISTICALLY sign
@@ -5486,6 +5494,20 @@ LEAD_THREAT_FG_MIN_PROB = 0.75
 # otherwise, so a 2% chance beats none. The leader is trading a real asset — the clock
 # that is protecting its lead — for that 2%, which is why the gate is asymmetric.
 LEAD_ANSWER_MIN_SECONDS = 50
+
+# ── Frames: every frame ending is managed like the end of a game (owner, 2026-10-09) ──
+# A frame is a mini-game, and the end-of-period clock decisions (timeouts on both sides,
+# spikes, sideline throws, the field-goal and touchdown drains, the last-play kick and
+# Hail Mary, the late fourth-down branches) used to be gated on Q2/Q4, so they only ever
+# fired at the end of frames 3 and 6. Measured over 60 games, offensive timeouts in the
+# last 2:00 of frames 1/2/4/5 ran 0.00-0.32 a game against 3.45 at frame 3.
+# Timeouts each team gets at the start of EVERY frame (not 3 a half). There is no
+# two-minute warning in Frames (FramesFormat.usesQuarterBreaks is False).
+FRAMES_TIMEOUTS_PER_FRAME = 2
+# The end-of-frame window: with this much frame left or less, the frame's ending is the
+# deadline the clock decisions manage toward (FramesFormat.periodEnd). The standard
+# decisions' own thresholds (2:00, 3:00, 5:00) sit inside it, as they sit inside a quarter.
+FRAMES_END_WINDOW_SECS = 300
 
 GLITCH_CARDS_ENABLED = True
 

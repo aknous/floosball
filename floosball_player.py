@@ -18,7 +18,7 @@ import floosball_methods as FloosMethods
 from floosball_team import Team
 from constants import POTENTIAL_HEADROOM
 from stat_tracker import StatTracker
-from player_development import PlayerDevelopment
+from player_development import PlayerDevelopment, PEAK_ATTR_NAMES
 
 def mergeStatDefaults(statsDict):
     """Backfill stat keys a stored dict predates, in place, and return it.
@@ -575,6 +575,39 @@ class Player:
             if saved:
                 self.updateRating()  # restore live ratings
 
+    def projectedRatingPastPeak(self, devBias: int = 0):
+        """The rating this player is expected to carry next season if he is at or past
+        his peak season, else None (a rising player is valued on his developing read).
+        What the front office projects aging with. See computeNextSeasonRating."""
+        from player_development import CareerPhase
+        if PlayerDevelopment.careerContext(self, 0).phase == CareerPhase.RISING:
+            return None
+        return self.computeNextSeasonRating(devBias)
+
+    def computeNextSeasonRating(self, devBias: int = 0) -> int:
+        """Rating this player is expected to carry next season: this offseason's
+        development applied at its average (`PlayerDevelopment.expectedAttributes`,
+        the same rules, decline severity and floors the offseason uses), then the
+        rating recomputed. Leaves the player untouched."""
+        attrs = getattr(self, 'attributes', None)
+        current = int(round(getattr(self, 'playerRating', 0) or 0))
+        if attrs is None:
+            return current
+        expected = PlayerDevelopment.expectedAttributes(self, devBias)
+        saved = {name: getattr(attrs, name) for name in expected}
+        try:
+            for name, value in expected.items():
+                setattr(attrs, name, value)
+            if not saved:
+                return current
+            self.updateRating()
+            return int(round(getattr(self, 'playerRating', 0) or 0))
+        finally:
+            for name, value in saved.items():
+                setattr(attrs, name, value)
+            if saved:
+                self.updateRating()  # restore live ratings
+
     def addPassTd(self, yards, isRegularSeason):
         self.stat_tracker.add_pass_td(yards, isRegularSeason)
 
@@ -735,6 +768,11 @@ class PlayerAttributes:
         self.trueSkillArmStrength = 0
         self.trueSkillAccuracy = 0
         self.trueSkillLegStrength = 0
+
+        # Peak: the highest value each developing attribute has reached (see
+        # PEAK_ATTR_NAMES). 0 until development records it.
+        for _peakName in PEAK_ATTR_NAMES.values():
+            setattr(self, _peakName, 0)
 
         #physical skills
         self.routeRunning = 0

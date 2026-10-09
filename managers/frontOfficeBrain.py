@@ -60,7 +60,6 @@ from constants import (
     VENUE_POSITION_WEIGHT,
     FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX, FO_SCOUT_NOISE_FLOOR,
     FO_CEILING_CREDIT, FO_DEVELOPING_HEADROOM,
-    FO_DECLINE_PER_YEAR_PAST, FO_DECLINE_MAX,
     FO_RESIGN_SURPLUS_MARGIN, FO_RESIGN_MIN_RATING, FO_FA_CONTENTION,
     FO_CUT_ENABLED, FO_CUT_UPGRADE_MARGIN, FO_CUT_MAX_PER_TEAM,
     FO_CUT_MIN_CONFIDENCE,
@@ -327,16 +326,22 @@ class FrontOfficeBrain:
         scouting error is applied. This is ground truth — `perceivedValue` is
         what a given GM manages to see of it."""
         current = float(getattr(player, 'playerRating', 0) or 0)
+
+        # ⚠️ PAST HIS PEAK, THE SIM'S OWN DEVELOPMENT ANSWERS (2026-10-09). This used to
+        # be a separate guess: hold until longevity, then shed 6% a season past it, the
+        # whole accumulated amount taken in ONE season and capped at 40%. Measured against
+        # the sim over 9,099 career offseasons it was wrong both ways. Decline starts the
+        # season after a player's peak (~60% of longevity), so for 3-4 seasons the GM
+        # forecast growth (+1 to +1.5) for a player losing 1-1.5 a season. And past
+        # longevity the sim never takes more than ~2 rating points a season (only the
+        # trained physical attributes age, floored at 80% of peak), while the guess took
+        # 4 to 28. Now it is the offseason's rules at their average, so the two cannot
+        # drift apart.
+        nextSeason = self._nextSeasonRatingPastPeak(player, coach)
+        if nextSeason is not None:
+            return float(nextSeason)
+
         arc = self.classifyArc(player)
-
-        if arc == ARC_REGRESSING:
-            yearsPast = self._yearsPastLongevity(player)
-            # +1 because a player who just hit longevity (yearsPast 0) is
-            # already declining into next season, not holding steady.
-            decline = _clamp(FO_DECLINE_PER_YEAR_PAST * (yearsPast + 1),
-                             0.0, FO_DECLINE_MAX)
-            return current * (1.0 - decline)
-
         if arc == ARC_DEVELOPING:
             ceiling = float(self._ceilingRating(player, team))
             # How much of the remaining ceiling gap this GM expects to realise.
@@ -347,6 +352,34 @@ class FrontOfficeBrain:
             return current + (ceiling - current) * FO_CEILING_CREDIT * devLean
 
         return current
+
+    def _nextSeasonRatingPastPeak(self, player, coach=None):
+        """The sim's expected rating next season for a player at or past his peak
+        season; None for one still rising (or anything that cannot be projected), which
+        the caller values on its developing/prime reading instead."""
+        compute = getattr(player, 'projectedRatingPastPeak', None)
+        if not callable(compute):
+            return None
+        # The same devBias the offseason applies for this coach (it only moves the
+        # overshoot chance at the peak season; decline ignores it).
+        devRating = getattr(coach, 'playerDevelopment', None) or 80
+        devBias = round((devRating - 60) / 10)
+        # Cached for the brain's life (one offseason): every team values every player,
+        # several passes over, and a projection costs ~50us against the old formula's
+        # near-nothing. Keyed on what it reads, so a player whose rating or clock moved
+        # is projected afresh.
+        key = (getattr(player, 'id', None) or id(player), devBias,
+               getattr(player, 'playerRating', None), getattr(player, 'seasonsPlayed', None),
+               getattr(player, 'prospect_seasons', None))
+        cache = self.__dict__.setdefault('_nextSeasonCache', {})
+        if key in cache:
+            return cache[key]
+        try:
+            result = compute(devBias)
+        except Exception:
+            result = None
+        cache[key] = result
+        return result
 
     def _attrLean(self, coach, attr: str, bonus: float = 0.0) -> float:
         """Normalize a 60-100 coach attribute to 0.0-1.0. A missing coach reads
