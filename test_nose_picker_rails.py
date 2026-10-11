@@ -56,6 +56,14 @@ expect("ONE hand-made pick beside fifteen auto-fills does NOT",
 expect("an all-auto week does not", not picksWereSubmittedManually([Pick(True)] * 16))
 expect("a week with no picks at all does not", not picksWereSubmittedManually([]))
 expect("nor does None", not picksWereSubmittedManually(None))
+# ⚠️ And the strict rule went too far (owner, 2026-10-07): one auto-filled game out of a
+# slate broke a streak held by hand for months. 75%+ hand-made picks holds it.
+expect("ONE auto-fill out of sixteen no longer breaks it",
+       picksWereSubmittedManually([Pick(False)] * 15 + [Pick(True)]))
+expect("12 of 16 by hand holds (exactly the 75% line)",
+       picksWereSubmittedManually([Pick(False)] * 12 + [Pick(True)] * 4))
+expect("11 of 16 by hand does not",
+       not picksWereSubmittedManually([Pick(False)] * 11 + [Pick(True)] * 5))
 
 # ⚠️ ONE DEFINITION, FOUR READERS. The week-end settle, the live display and both
 # projection paths each had their own copy and all four carried the same bug. A new

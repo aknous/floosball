@@ -24,10 +24,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import logging  # noqa: E402
 logging.disable(logging.CRITICAL)
 
-from constants import ODOMETER_GATES_BY_POSITION, ODOMETER_GATE_FP  # noqa: E402
+from constants import ODOMETER_GATES_BY_POSITION, ODOMETER_GATE_FP_BY_POSITION  # noqa: E402
 from managers.cardEffects import (  # noqa: E402
     _computeOdometer, EFFECT_DETAIL_TEMPLATES, EFFECT_TOOLTIPS, buildEffectConfig,
-    effectValidPositions, odometerGatesText,
+    effectValidPositions, odometerGatesText, odometerPayText,
 )
 
 
@@ -44,22 +44,30 @@ def pay(position, passYards=0, runYards=0, rcvYards=0, primary=None):
 
 class OdometerTest(unittest.TestCase):
     TEXT = EFFECT_DETAIL_TEMPLATES['odometer']
-    CAP = sum(ODOMETER_GATE_FP)
 
     def test_each_position_pays_its_own_gates_cumulatively(self):
         for pos, gates in ODOMETER_GATES_BY_POSITION.items():
+            pays = ODOMETER_GATE_FP_BY_POSITION[pos]
             running = 0.0
-            for yards, amount in zip(gates, ODOMETER_GATE_FP):
+            for yards, amount in zip(gates, pays):
                 self.assertEqual(pay(pos, runYards=yards - 1), running, f'pos {pos} paid before {yards}')
                 running += amount
                 self.assertEqual(pay(pos, runYards=yards), running, f'pos {pos} at {yards}')
-            self.assertEqual(pay(pos, runYards=5000), self.CAP)
+            self.assertEqual(pay(pos, runYards=5000), sum(pays))
 
-    def test_the_text_states_the_payouts_and_the_cap(self):
-        nums = [int(x) for x in re.findall(r'\+(\d+)', self.TEXT)]
-        self.assertEqual(tuple(nums[:4]), ODOMETER_GATE_FP)
-        self.assertEqual(nums[4], self.CAP)
-        self.assertIn(f"up to +{self.CAP} FP", EFFECT_TOOLTIPS['odometer'])
+    def test_a_minted_card_states_its_own_payouts_and_cap(self):
+        """Payouts are per position (2026-10-07), so the card face must name its own."""
+        for pos, pays in ODOMETER_GATE_FP_BY_POSITION.items():
+            detail = buildEffectConfig('prismatic', 85, pos, forceEffect='odometer')['detail']
+            nums = [int(x) for x in re.findall(r'\+(\d+)', detail)]
+            self.assertEqual(tuple(nums[:4]), pays, detail)
+            self.assertEqual(nums[4], sum(pays), detail)
+
+    def test_an_old_card_is_backfilled_to_its_positions_payouts(self):
+        from database.connection import _backfillEffectParams
+        old = {'rewardType': 'fp', 'posLabel': 'TE', 'gatesText': odometerGatesText(4)}
+        self.assertTrue(_backfillEffectParams(old, 'odometer'))
+        self.assertEqual(old['gateMaxFP'], sum(ODOMETER_GATE_FP_BY_POSITION[4]))
 
     def test_a_minted_card_names_its_own_gates(self):
         for pos, gates in ODOMETER_GATES_BY_POSITION.items():
@@ -83,14 +91,20 @@ class OdometerTest(unittest.TestCase):
 
 class PlacedInThePrismaticBand(unittest.TestCase):
     """Any position clears gate k about as often as any other: the gates are that
-    position's own ~25/50/75/90th-percentile weekly yardage, so the mean payout is the same
-    rule everywhere. Sized to sit with prismatic FP peers (~52 FP a week)."""
+    position's own ~25/50/75/90th-percentile weekly yardage. The payouts were trimmed per
+    position to the top of the prismatic band (2026-10-07): at the flat +20/+30/+40/+55 the
+    card measured 2.5x the prismatic median in a contender lineup."""
 
     def test_expected_payout_is_in_the_prismatic_band(self):
         clear = (0.75, 0.50, 0.25, 0.10)
-        expected = sum(p * a for p, a in zip(clear, ODOMETER_GATE_FP))
-        self.assertGreater(expected, 40)
-        self.assertLess(expected, 60)
+        for pos, pays in ODOMETER_GATE_FP_BY_POSITION.items():
+            expected = sum(p * a for p, a in zip(clear, pays))
+            self.assertGreater(expected, 12, pos)
+            self.assertLess(expected, 32, pos)
+
+    def test_no_position_pays_the_old_flat_table(self):
+        for pos, pays in ODOMETER_GATE_FP_BY_POSITION.items():
+            self.assertLess(sum(pays), 145, pos)
 
 
 if __name__ == '__main__':

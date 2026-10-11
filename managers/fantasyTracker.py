@@ -489,12 +489,7 @@ class FantasyTracker:
                         season=seasonNum, week=currentWeek
                     ).first()
                     if modRow:
-                        modName = modRow.modifier
-                        preLockModifier = {
-                            "name": modName,
-                            "displayName": sm.MODIFIER_DISPLAY.get(modName, modName.title()),
-                            "description": sm.MODIFIER_DESCRIPTIONS.get(modName, ""),
-                        }
+                        preLockModifier = sm.modifierInfo(modRow.modifier, seasonNum, currentWeek)
                 return {
                     "season": seasonNum, "week": currentWeek,
                     "gamesActive": gamesActive or gamesCompleted, "entries": [],
@@ -980,16 +975,8 @@ class FantasyTracker:
                         if eName == "providence" and primary.get("chanceBonus"):
                             chanceAmplifiers.append({"name": "Providence",
                                                      "bonus": round(primary["chanceBonus"] * _tmult, 2)})
-                        elif eName == "catalyst":
-                            _sc = _tss("catalyst", primary, _tmult)
-                            fpPer1Pct = _sc.get("fpPer1Pct", primary.get("fpPer1Pct", 12))
-                            baseline = primary.get("baseline", 55)
-                            maxBoost = _sc.get("maxBoost", primary.get("maxBoost", 0.10))
-                            if weekRawFP > baseline:
-                                catBoost = min(maxBoost, (weekRawFP - baseline) / fpPer1Pct / 100)
-                            else:
-                                catBoost = 0.0
-                            chanceAmplifiers.append({"name": "Catalyst", "bonus": round(catBoost, 2)})
+                        # Catalyst no longer raises odds (2026-10-07); its jackpot boost is
+                        # reported separately below, as the calculator computed it.
                     # External chance bonuses (Fortune's Favor, fortunate modifier)
                     if calcCtx.activeModifier == "fortunate":
                         chanceAmplifiers.append({"name": "Fortunate", "bonus": 0.15})
@@ -1000,6 +987,8 @@ class FantasyTracker:
                             "amplifiers": chanceAmplifiers,
                             "totalBonus": round(calcCtx.chanceBonus, 2),
                             "hasAdvantage": calcCtx.hasAdvantage,
+                            "advantageRolls": calcCtx.advantageRolls if calcCtx.hasAdvantage else 0,
+                            "catalystJackpotBoost": round(getattr(calcCtx, "catalystJackpotBoost", 0.0), 2),
                         },
                         "streak": {
                             "count": calcCtx.streakCardCount,
@@ -1129,12 +1118,7 @@ class FantasyTracker:
                     season=seasonNum, week=currentWeek
                 ).first()
                 if modRow:
-                    modName = modRow.modifier
-                    modifierInfo = {
-                        "name": modName,
-                        "displayName": sm.MODIFIER_DISPLAY.get(modName, modName.title()),
-                        "description": sm.MODIFIER_DESCRIPTIONS.get(modName, ""),
-                    }
+                    modifierInfo = sm.modifierInfo(modRow.modifier, seasonNum, currentWeek)
 
             return {
                 "season": seasonNum,
@@ -1407,6 +1391,9 @@ class FantasyTracker:
                 activeModifier = modOverride.override_modifier
         except Exception:
             pass
+        # A Criticality week runs on the Core's equation alone: no modifier.
+        from managers.coreEquations import modifierInForce
+        activeModifier = modifierInForce(activeModifier, season, currentWeek)
 
         # Game performance ratings (per-game, same formula as season perf)
         gamePerformanceRatings = {}
@@ -1818,10 +1805,14 @@ class FantasyTracker:
                     and favoriteTeamOpponentElo > favoriteTeamElo
                 )
             elif condition == "player_cleared_bar":
+                # The card's OWN power bar, as in cardEffects.checkStreakCondition.
                 from constants import CARD_GATE_FP_THRESHOLDS
+                from managers.cardEffects import cardBarThreshold
                 cardPlayerId = eq.user_card.card_template.player_id
                 pos = playerPositionMap.get(cardPlayerId, 0)
-                thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
+                thr = cardBarThreshold(eq.user_card.card_template.effect_config)
+                if thr is None:
+                    thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
                 fp = weekPlayerStats.get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
                 conditionMet = fp >= thr
 

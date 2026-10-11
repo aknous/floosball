@@ -75,6 +75,9 @@ from constants import (
     FO_ATTITUDE_ENABLED, FO_ATTITUDE_NEUTRAL, FO_ATTITUDE_PENALTY_PER_POINT,
     FO_ATTITUDE_ROOM_SENSITIVITY, FO_ATTITUDE_ROOM_MIN, FO_ATTITUDE_ROOM_MAX,
     SENTIMENT_BAR_MAX_RAISE, SENTIMENT_BAR_MIN_SCALE,
+    FO_STANDING_ENABLED, FO_STANDING_HORIZON_SEASONS, FO_RESULTS_WEIGHT,
+    FO_RESULTS_PERF_SCALE, FO_RESULTS_TEAM_SCALE, FO_RESULTS_TEAM_SHARE,
+    FO_MOVE_ON_SHIFT, FO_PROSPECT_LAST_WINDOW_BAR, FO_PROSPECT_LAST_WINDOW_TODAY_GAP,
 )
 
 logger = logging.getLogger(__name__)
@@ -729,6 +732,143 @@ class FrontOfficeBrain:
 
     # ---------------------------------------------------------- re-sign
 
+    # ------------------------------------------------------- starter standing
+
+    def starterStanding(self, starter, team=None, coach=None) -> float:
+        """Value points to add to a STARTER's side when the question is whether to keep
+        him or replace him (with a prospect, or by letting him walk at re-sign).
+        Positive = harder to replace. (owner, 2026-10-10)
+
+        Two terms, each weighed by this GM's own attributes:
+          - aging (`_agingDrag`, playerDevelopment): a past-peak starter's decline over
+            the rest of the commitment, which his one-season value does not see.
+          - results (`_resultsCredit`, adaptability): whether he played past or below
+            his rating last season, amplified when the team's record agrees.
+        Fans already enter through `decisionValue` (the tilt, scaled by fanTrust) and the
+        verdict rules, and aggressiveness moves the BAR (`moveOnBar`), not the value.
+        In the same units as `decisionValue` (position-weighted), so it adds to it.
+        """
+        if not FO_STANDING_ENABLED or starter is None:
+            return 0.0
+        points = self._agingDrag(starter, coach, team) + self._resultsCredit(starter, team, coach)
+        if not points:
+            return 0.0
+        return points * positionValue(starter, venueBiasFor(team))
+
+    def _agingDrag(self, starter, coach=None, team=None) -> float:
+        """Rating points (<= 0) for a past-peak starter's decline beyond next season.
+
+        His value already prices next season (`_nextSeasonRatingPastPeak`, the sim's own
+        aging rules at their average); the decline is extended over the remaining
+        FO_STANDING_HORIZON_SEASONS - 1 seasons at that same rate, which understates it
+        (decline steepens) rather than inventing a curve.
+        ⚠️ SEEN BY EVERY GM, SHARPER BY A GOOD SCOUT: age is public, so the floor is half
+        the decline; scouting vision supplies the other half. A poor scout is not blind
+        to a veteran getting old, only to how fast.
+        Weighed by playerDevelopment (2 x lean, so a neutral GM is 1.0): a development
+        GM believes in the curve, in both directions.
+        """
+        try:
+            nextSeason = self._nextSeasonRatingPastPeak(starter, coach)
+        except Exception:
+            nextSeason = None
+        if nextSeason is None:
+            return 0.0
+        current = float(getattr(starter, 'playerRating', 0) or 0)
+        decline = max(0.0, current - float(nextSeason))
+        if decline <= 0:
+            return 0.0
+        extraSeasons = max(0, int(FO_STANDING_HORIZON_SEASONS) - 1)
+        seen = 0.5 + 0.5 * self.scoutingVision(coach, team)
+        weight = 2.0 * self._attrLean(coach, 'playerDevelopment')
+        return -decline * extraSeasons * seen * weight
+
+    def _resultsCredit(self, starter, team=None, coach=None) -> float:
+        """Rating points for how last season went: did he play to his rating, and did the
+        team win with him.
+
+        `c` is his performance minus the rating he carried that season, over
+        FO_RESULTS_PERF_SCALE (clamped to +-1); `t` is the team's win% over .500, over
+        FO_RESULTS_TEAM_SCALE (clamped). The team term only AMPLIFIES what he did, in the
+        direction he did it: won and he played well -> more credit; lost and he played
+        badly -> more blame; a good player on a losing team keeps less of his credit and a
+        poor one on a winner takes less of the blame (he was carried).
+        Read only from the season just played, since a stale season is not "how it went".
+        Weighed by adaptability (2 x lean): a GM who reacts to evidence.
+        """
+        pid = getattr(starter, 'id', None)
+        perfMap = getattr(self, 'performanceMap', None) or {}
+        history = (perfMap.get(pid) or []) if pid is not None else []
+        if not history:
+            return 0.0
+        seasonNum, rating, perf = history[-1]
+        season = getattr(self, 'season', 0)
+        if season and int(seasonNum) != int(season):
+            return 0.0
+        if not rating or not perf:
+            return 0.0
+        c = _clamp((float(perf) - float(rating)) / FO_RESULTS_PERF_SCALE, -1.0, 1.0)
+        winPct = self._teamWinPct(team)
+        t = 0.0 if winPct is None else _clamp((winPct - 0.5) / FO_RESULTS_TEAM_SCALE, -1.0, 1.0)
+        weight = 2.0 * self._attrLean(coach, 'adaptability')
+        return FO_RESULTS_WEIGHT * (c + FO_RESULTS_TEAM_SHARE * t * abs(c)) * weight
+
+    @staticmethod
+    def _teamWinPct(team):
+        """The team's win% in the season just played, or None with no games.
+        ⚠️ The record lives in `seasonTeamStats`; a Team has no `wins` attribute."""
+        if team is None:
+            return None
+        stats = getattr(team, 'seasonTeamStats', None) or {}
+        try:
+            wins = float(stats.get('wins', 0) or 0)
+            losses = float(stats.get('losses', 0) or 0)
+            ties = float(stats.get('ties', 0) or 0)
+        except Exception:
+            return None
+        played = wins + losses + ties
+        return (wins + 0.5 * ties) / played if played else None
+
+    def moveOnBar(self, coach, base: float, floor: float = None) -> float:
+        """The value a replacement must beat the starter by: `base`, moved by this GM's
+        aggressiveness (FO_MOVE_ON_SHIFT each way, 0 at a neutral 80). Aggressive lowers
+        it, conservative raises it. `floor` keeps a bar from going below a point that
+        would mean replacing a man with someone worse where that is never wanted."""
+        agg = self._attrLean(coach, 'aggressiveness')
+        bar = float(base) + (1.0 - 2.0 * agg) * FO_MOVE_ON_SHIFT
+        return max(bar, floor) if floor is not None else bar
+
+    def prospectEdgeOver(self, prospect, starter, team=None, coach=None) -> float:
+        """How far this GM rates the prospect above the starter, standing included. The
+        caller compares it to `moveOnBar`. One definition for the promotion pass and the
+        re-sign check, so the two cannot disagree about the same pair of players."""
+        return (self.decisionValue(prospect, coach, team=team)
+                - self.decisionValue(starter, coach, team=team)
+                - self.starterStanding(starter, team, coach))
+
+    @staticmethod
+    def roughlyMatchesToday(prospect, starter) -> bool:
+        """Is the prospect within FO_PROSPECT_LAST_WINDOW_TODAY_GAP of the starter's
+        rating today? The last-window floor under the value comparison."""
+        return (float(getattr(prospect, 'playerRating', 0) or 0)
+                >= float(getattr(starter, 'playerRating', 0) or 0)
+                - FO_PROSPECT_LAST_WINDOW_TODAY_GAP)
+
+    def prospectReplacesStarter(self, prospect, starter, team=None, coach=None,
+                                finalWindow: bool = False) -> bool:
+        """Would this GM put the prospect in the starter's place?
+
+        On the prospect's LAST window he only has to roughly match the starter: on value
+        (FO_PROSPECT_LAST_WINDOW_BAR) and within half a tier today
+        (`roughlyMatchesToday`), because the alternative is losing him for nothing.
+        Otherwise he must clear the ordinary cut margin. Either bar moves with the GM's
+        aggressiveness. The rated-higher-today rule for an earlier window, and every
+        protection on the starter, are the caller's."""
+        if finalWindow and not self.roughlyMatchesToday(prospect, starter):
+            return False
+        base = FO_PROSPECT_LAST_WINDOW_BAR if finalWindow else FO_CUT_UPGRADE_MARGIN
+        return self.prospectEdgeOver(prospect, starter, team, coach) >= self.moveOnBar(coach, base)
+
     def bestReplacementValue(self, player, coach=None, pool=None, rng=None,
                              pickDepth=0, team=None) -> float:
         """Value of the replacement this team can REALISTICALLY sign at the
@@ -877,7 +1017,8 @@ class FrontOfficeBrain:
             return True
         return self.teamAppeal(team) >= self.appealDemand(player)
 
-    def buildDraftBoard(self, team, pool, coach=None, rng=None, alsoValue=None):
+    def buildDraftBoard(self, team, pool, coach=None, rng=None, alsoValue=None,
+                        incumbents=None):
         """This team's own ranking of the free agents who would sign here.
 
         Two teams see two different boards: the order is `decisionValue`, which
@@ -892,6 +1033,11 @@ class FrontOfficeBrain:
         position-weighted and a raw playerRating is not, so scoring prospects
         the old way would have made every cross-position comparison at pick time
         a unit mismatch.
+
+        `incumbents` (the team's rostered starters) are priced the same way PLUS their
+        `starterStanding`, because the only thing their board value is read for is the
+        draft's cut-for-upgrade, which is a keep-or-replace decision like any other
+        (owner, 2026-10-10).
 
         Returns {playerId: value}. Free agents who won't sign here are absent,
         which is what keeps them out of both the ranking and the
@@ -932,6 +1078,12 @@ class FrontOfficeBrain:
             if p is None or pid is None:
                 continue
             board[pid] = self.decisionValue(p, coach, rng=rng, team=team)
+        for p in incumbents or []:
+            pid = getattr(p, 'id', None)
+            if p is None or pid is None:
+                continue
+            board[pid] = (self.decisionValue(p, coach, rng=rng, team=team)
+                          + self.starterStanding(p, team, coach))
         # Hung on the brain rather than returned, so no caller signature changes and a caller
         # that does not care is unaffected.
         self.preferenceNotes[getattr(team, 'id', None)] = {'refused': refused,
@@ -939,7 +1091,8 @@ class FrontOfficeBrain:
         return board
 
     def upgradeConfidence(self, player, coach=None, pool=None, rng=None,
-                          teamsAhead=0, team=None, margin=None) -> float:
+                          teamsAhead=0, team=None, margin=None,
+                          incumbentBonus: float = 0.0) -> float:
         """P(this club ends up with someone BETTER at this slot) — not P(it gets
         the particular man it wants).
 
@@ -969,13 +1122,17 @@ class FrontOfficeBrain:
 
         Returns 0.0 when nothing in the pool is an upgrade, which correctly reads
         as "there is no move to make here".
+
+        `incumbentBonus` is added to the incumbent's side (the re-sign path passes his
+        `starterStanding`), so a starter who won games playing past his rating takes a
+        bigger upgrade to replace, and a fading one a smaller.
         """
         if margin is None:
             margin = FO_CUT_UPGRADE_MARGIN
         if pool is None:
             pool = getattr(self.playerManager, 'freeAgents', None) or []
         pos = getattr(player, 'position', None)
-        incumbent = self.decisionValue(player, coach, rng=rng, team=team)
+        incumbent = self.decisionValue(player, coach, rng=rng, team=team) + incumbentBonus
 
         upgrades = 0
         for fa in pool:
@@ -1025,7 +1182,8 @@ class FrontOfficeBrain:
         return int(index * FO_FA_CONTENTION)
 
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
-                             pickDepth=0, team=None, teamsAhead=0, internal=None):
+                             pickDepth=0, team=None, teamsAhead=0, internal=None,
+                             lastChance=None):
         """Rank walk-year incumbents by how much they beat the best replacement
         at their own position ("surplus").
 
@@ -1056,15 +1214,30 @@ class FrontOfficeBrain:
             incumbents = sorted(
                 [pl for pl in expiring
                  if getattr(getattr(pl, 'position', None), 'value', None) == posV],
-                key=lambda pl: self.decisionValue(pl, coach, rng=rng, team=team))
+                key=lambda pl: self.decisionValue(pl, coach, rng=rng, team=team)
+                + self.starterStanding(pl, team, coach))
             for pl, (altValue, alt) in zip(incumbents, altValues):
+                # ⚠️ THE SAME WEIGHING AS THE PROMOTION PASS (`prospectEdgeOver`): the
+                # starter's standing (aging, results) on his side, the bar moved by this
+                # GM's aggressiveness, so the re-sign and the promotion cannot disagree
+                # about the same two players.
                 # ⚠️ AND AT LEAST AS GOOD TODAY. Walking a starter cannot be undone, and a
                 # prospect's edge here is a projection, a belief. Without this the Sodas
                 # let a 76 QB walk for a 66 prospect they projected higher.
-                if (altValue >= self.decisionValue(pl, coach, rng=rng, team=team)
-                        + FO_RESIGN_SURPLUS_MARGIN
-                        and float(getattr(alt, 'playerRating', 0) or 0)
-                        >= float(getattr(pl, 'playerRating', 0) or 0)):
+                # ⚠️ EXCEPT A PROSPECT ON HIS LAST CHANCE (`lastChance`, ids of prospects
+                # whose final promotion is this offseason's FA kickoff): weighed as that
+                # promotion will weigh him, roughly matching on value and today's rating.
+                # Re-signing the starter over him otherwise decides the promotion before it
+                # happens, and the prospect is lost for nothing (Midnights, season 8-9).
+                if id(alt) in (lastChance or ()):
+                    covers = self.prospectReplacesStarter(alt, pl, team, coach,
+                                                          finalWindow=True)
+                else:
+                    covers = (self.prospectEdgeOver(alt, pl, team, coach)
+                              >= self.moveOnBar(coach, FO_RESIGN_SURPLUS_MARGIN)
+                              and float(getattr(alt, 'playerRating', 0) or 0)
+                              >= float(getattr(pl, 'playerRating', 0) or 0))
+                if covers:
                     coveredIds.add(id(pl))
 
         from managers.playerManager import fanVerdict
@@ -1083,7 +1256,10 @@ class FrontOfficeBrain:
                 continue
             if not self.worthResigningOnStars(player, coach, team):
                 continue
-            incumbent = self.decisionValue(player, coach, rng=rng, team=team)
+            # Who he is beyond his rating (owner, 2026-10-10): a fading veteran is worth
+            # less over a new contract, one who won games playing past his rating more.
+            standing = self.starterStanding(player, team, coach)
+            incumbent = self.decisionValue(player, coach, rng=rng, team=team) + standing
             # ⚠️ WHAT WOULD I ACTUALLY LOSE, not "does one named free agent beat him".
             # This used to price `bestReplacementValue` — the pickDepth-th best on the
             # board — and let the incumbent walk whenever that one player won. It is the
@@ -1093,9 +1269,13 @@ class FrontOfficeBrain:
             # letting their best walk-year player go and re-signing two lesser ones;
             # measured, a walked player out-rated a kept one in 65% of team-seasons and
             # a quarter of those were not explicable by position weighting.
+            # An aggressive GM counts a smaller upgrade as worth moving on for, but
+            # never a worse player (floor 0).
             replaceable = self.upgradeConfidence(
                 player, coach=coach, pool=pool, rng=rng,
-                teamsAhead=teamsAhead, team=team, margin=FO_RESIGN_SURPLUS_MARGIN)
+                teamsAhead=teamsAhead, team=team,
+                margin=self.moveOnBar(coach, FO_RESIGN_SURPLUS_MARGIN, floor=0.0),
+                incumbentBonus=standing)
             # Expected loss from letting him go: what he is worth, times how likely it
             # is that nobody better is actually there when this club picks.
             # ⚠️ This is what stops a star walking on paper depth. A great player is
@@ -1132,7 +1312,8 @@ class FrontOfficeBrain:
         return projected >= FO_RESIGN_MIN_RATING
 
     def chooseResigns(self, expiring, limit, coach=None, pool=None, rng=None,
-                      pickDepth=0, team=None, teamsAhead=0, internal=None):
+                      pickDepth=0, team=None, teamsAhead=0, internal=None,
+                      lastChance=None):
         """The re-sign decision: at most `limit` keepers, best surplus first.
 
         `limit` is the caller's — RESIGN_LIMIT_PER_OFFSEASON is a parity
@@ -1148,7 +1329,7 @@ class FrontOfficeBrain:
         return [p for p, _priority in self.rankResignCandidates(
             expiring, coach=coach, pool=pool, rng=rng,
             pickDepth=pickDepth, team=team, teamsAhead=teamsAhead,
-            internal=internal)[:limit]]
+            internal=internal, lastChance=lastChance)[:limit]]
 
     # -------------------------------------------------------------- cuts
 
@@ -1188,9 +1369,11 @@ class FrontOfficeBrain:
             # otherwise only asks about players, and every partial mock of that manager
             # in the tests would need a new method. The default of 0 matches no stamp,
             # so an unstamped brain simply leaves the player cuttable.
-            from managers.playerManager import isCutProtected, fanVerdict
+            from managers.playerManager import isCutProtected, fanVerdict, signedThisOffseason
             if isCutProtected(player, self.season):
                 continue
+            if signedThisOffseason(player):
+                continue                      # signed or re-signed this offseason
             verdict = fanVerdict(player, getattr(self, 'sentimentMap', None) or {})
             if verdict == 'keep':
                 continue                      # his fans want him: never cut
@@ -1202,8 +1385,12 @@ class FrontOfficeBrain:
             # he is. `includeSentiment=False` is what stops one fan opinion being
             # counted twice. (Re-signs and draft boards keep the value-side tilt: there
             # the club is choosing AMONG players and the order is the decision.)
+            # Who he is beyond his rating (owner, 2026-10-10): the same standing and
+            # aggressiveness-moved bar the re-sign and promotion decisions use, so a
+            # starter one path keeps is not one another path cuts.
+            standing = self.starterStanding(player, team, coach)
             incumbent = self.decisionValue(player, coach, rng=rng, team=team,
-                                           includeSentiment=False)
+                                           includeSentiment=False) + standing
             replacement = self.bestReplacementValue(player, coach, pool=pool,
                                                     rng=rng, pickDepth=pickDepth,
                                                     team=team)
@@ -1211,7 +1398,8 @@ class FrontOfficeBrain:
             # A player his fans clearly do not want clears the lowest bar there is.
             barScale = (SENTIMENT_BAR_MIN_SCALE if disliked
                         else self.sentimentBarScale(player, coach))
-            if upgrade < FO_CUT_UPGRADE_MARGIN * barScale:
+            margin = self.moveOnBar(coach, FO_CUT_UPGRADE_MARGIN, floor=0.0)
+            if upgrade < margin * barScale:
                 continue
             # ⚠️ AND the club must be CONFIDENT it can actually come away better
             # off. The size of the gap says the move is worth making; this says
@@ -1219,7 +1407,8 @@ class FrontOfficeBrain:
             # already taken the top of the board 92% of the time.
             confidence = self.upgradeConfidence(
                 player, coach=coach, pool=pool, rng=rng,
-                teamsAhead=teamsAhead, team=team)
+                teamsAhead=teamsAhead, team=team, margin=margin,
+                incumbentBonus=standing)
             if confidence < FO_CUT_MIN_CONFIDENCE:
                 continue
             ranked.append((player, slot, upgrade, disliked))

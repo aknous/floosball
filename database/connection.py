@@ -62,6 +62,7 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
+    _returnGnegyToMidnights()
     _backfillTradeMoves()
     _reconcileTeamTitles()
     _normalizeNamePool()
@@ -2064,22 +2065,50 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
     Returns True if `primary` was changed. Add a case when an effect's keys change; a
     key RENAME with the same meaning belongs here too.
     """
-    if effectName == 'honor_roll' and 'baseMult' not in primary:
+    if effectName == 'honor_roll':
+        changed = False
         maxMult = primary.get('maxMult')
-        if isinstance(maxMult, (int, float)) and maxMult > 1.0:
+        if 'baseMult' not in primary and isinstance(maxMult, (int, float)) and maxMult > 1.0:
             from managers.cardEffects import HONOR_ROLL_BASE_SHARE
             primary['baseMult'] = round(1 + (maxMult - 1) * HONOR_ROLL_BASE_SHARE, 2)
-            return True
+            changed = True
+        # The ramp's ceiling became a stored, per-position `fpCeiling` (2026-10-07). A
+        # card minted before it ramps to DOUBLE its bar (the compute's fallback), so that
+        # is the value its text must state; the card keeps paying exactly what it did.
+        threshold = primary.get('fpThreshold')
+        if 'fpCeiling' not in primary and isinstance(threshold, (int, float)) and threshold > 0:
+            primary['fpCeiling'] = int(2 * threshold)
+            changed = True
+        return changed
     # Updraft's detail used to interpolate `gates` directly, which put a raw Python list
     # on the card face: "bonus at each of [299, 391, 483]". `gatesText` is the same
     # numbers written as prose. Derived from what IS stored, so an already-minted card
     # keeps the exact gates it was minted with.
     # Odometer's text names the card's own position's yard gates (2026-09-27). Every card
     # already stores its position as `posLabel`, which is all the gates depend on.
-    if effectName == 'odometer' and 'gatesText' not in primary:
-        from managers.cardEffects import odometerGatesText
-        primary['gatesText'] = odometerGatesText(primary.get('posLabel'))
+    if effectName == 'catalyst' and 'perFpPct' not in primary:
+        # Catalyst enlarges jackpots instead of raising odds (2026-10-07); its params are
+        # fixed by design, so an old card takes the current ones.
+        from managers.cardEffects import (CATALYST_BASELINE_FP, CATALYST_PER_FP_PCT,
+                                          CATALYST_MAX_BOOST)
+        from managers.cardEffects import _POSITION_MEDIAN_FP, _SNAKE_EYES_REF_MEDIAN, POSITION_LABELS
+        pos = {v: k for k, v in POSITION_LABELS.items()}.get(primary.get('posLabel'))
+        cs = _POSITION_MEDIAN_FP.get(pos, _SNAKE_EYES_REF_MEDIAN) / _SNAKE_EYES_REF_MEDIAN
+        perFp = round(CATALYST_PER_FP_PCT / cs, 4)
+        primary.update({"baselineSolo": round(CATALYST_BASELINE_FP * cs, 1), "perFpPct": perFp,
+                        "perFpPctDisplay": round(perFp * 100, 1),
+                        "maxBoost": CATALYST_MAX_BOOST,
+                        "maxBoostDisplay": int(round(CATALYST_MAX_BOOST * 100))})
         return True
+    if effectName == 'odometer':
+        # Payouts became per position (2026-10-07) and are read at scoring time, so every
+        # card states its position's current table, whenever it was minted.
+        from managers.cardEffects import odometerGatesText, odometerPayText
+        want = {'gatesText': odometerGatesText(primary.get('posLabel')),
+                **odometerPayText(primary.get('posLabel'))}
+        changed = any(primary.get(k) != v for k, v in want.items())
+        primary.update(want)
+        return changed
     if effectName == 'updraft' and 'gatesText' not in primary:
         gates = primary.get('gates')
         if isinstance(gates, (list, tuple)) and gates:
@@ -2116,6 +2145,12 @@ def _refreshCardEffectText():
 
     refreshEffects = {
         "odometer", "snake_eyes",
+        # Diamond rework (2026-10-07): Sharpshooter became a precision amplifier, and its
+        # mechanic lives in the scoring pre-pass, so it reaches already-minted cards and
+        # their text must say so. Advantage and Catalyst changed what they do the same way.
+        "sharpshooter", "advantage", "catalyst",
+        # Nose Picker's streak holds at 75%+ hand-made picks (2026-10-07), scoring time.
+        "nose_picker",
         # Trust Fund growth capped at TRUST_FUND_GROWTH_WEEKS_CAP (2026-09-27).
         "trust_fund",
         # FPx delta-notation sweep — existing cards stored 1.x values in
@@ -3926,6 +3961,91 @@ def _backfillProspectContracts():
     except Exception as e:
         session.rollback()
         logger.warning(f"Prospect-contract backfill failed: {e}")
+    finally:
+        session.close()
+
+
+_GNEGY_SWAP_MARKER = 'gnegy_returned_s10'
+GNEGY_ID, DINGERS_ID = 234, 188
+MIDNIGHTS_ID, TUESDAYS_ID = 20, 13
+
+
+def _returnGnegyToMidnights():
+    """ONE-SHOT (owner, 2026-10-10): put RB Gibson Gnegy back on the Midnights and send
+    Dingers Culpepper to the Tuesdays on a new contract.
+
+    Gnegy was the Midnights' prospect. His last promotion chance (the season-8 FA draft
+    kickoff) priced him against Dingers on rating alone and lost on the cut margin; he
+    washed out at season 9's step 3.78 and the Tuesdays signed him. Under the starter-
+    standing rules he would have been promoted, so the two are swapped:
+      - Gnegy keeps the 2-season deal he signed and becomes a promoted prospect
+        (`on_prospect_contract`, so he cannot be cut until it expires);
+      - Dingers signs with the Tuesdays for the sim's normal term (`_getPlayerTerm`,
+        rolled here), a new deal, so his re-sign count with a team starts over.
+    Silent: no recap event (owner).
+
+    ⚠️ AT BOOT, NOT AGAINST THE LIVE DATABASE. The running sim holds rosters in memory and
+    writes them back at every week boundary, so a direct edit is reverted; `init_db` runs
+    before players load. ⚠️ GUARDED ON THE STATE IT WAS WRITTEN AGAINST (season 10 not yet
+    played, each player on the team named above); anything else records a skip instead of
+    moving players. Remove once it has run on prod.
+    """
+    import types
+    from sqlalchemy import text
+    from database.models import AppSetting
+    session = SessionLocal()
+    try:
+        if session.query(AppSetting).filter(AppSetting.key == _GNEGY_SWAP_MARKER).first():
+            return
+        state = session.execute(text("SELECT current_season FROM simulation_state WHERE id = 1")).fetchone()
+        rows = {r[0]: r for r in session.execute(text(
+            "SELECT p.id, p.team_id, p.tier, p.seasons_played, a.longevity FROM players p "
+            "LEFT JOIN player_attributes a ON a.player_id = p.id WHERE p.id IN (:g, :d)"),
+            {'g': GNEGY_ID, 'd': DINGERS_ID})}
+        played = session.execute(text(
+            "SELECT COUNT(*) FROM games WHERE season = 10 AND status = 'final'")).scalar() or 0
+        reason = None
+        if not state or state[0] != 10:
+            reason = f'season is {state[0] if state else None}, not 10'
+        elif played:
+            reason = f'{played} season-10 games already played'
+        elif GNEGY_ID not in rows or rows[GNEGY_ID][1] != TUESDAYS_ID:
+            reason = 'Gnegy is not on the Tuesdays'
+        elif DINGERS_ID not in rows or rows[DINGERS_ID][1] != MIDNIGHTS_ID:
+            reason = 'Dingers is not on the Midnights'
+        if reason:
+            session.add(AppSetting(key=_GNEGY_SWAP_MARKER, value=f'skipped: {reason}'))
+            session.commit()
+            logger.warning(f"Gnegy swap skipped: {reason}")
+            return
+
+        import floosball_player as FloosPlayer
+        from managers.playerManager import PlayerManager
+        _pid, _team, tier, seasons, longevity = rows[DINGERS_ID]
+        shim = types.SimpleNamespace(
+            playerTier=FloosPlayer.PlayerTier[tier], seasonsPlayed=seasons or 0,
+            attributes=types.SimpleNamespace(longevity=longevity or 6))
+        dingersTerm = int(PlayerManager._getPlayerTerm(None, shim))
+
+        session.execute(text(
+            "UPDATE players SET team_id = :t, on_prospect_contract = 1 WHERE id = :p"),
+            {'t': MIDNIGHTS_ID, 'p': GNEGY_ID})
+        session.execute(text(
+            "UPDATE players SET team_id = :t, term = :n, term_remaining = :n, "
+            "team_resign_count = 0, free_agent_years = 0 WHERE id = :p"),
+            {'t': TUESDAYS_ID, 'n': dingersTerm, 'p': DINGERS_ID})
+        # Any season-10 card already minted names the club it was minted under.
+        for pid, tid in ((GNEGY_ID, MIDNIGHTS_ID), (DINGERS_ID, TUESDAYS_ID)):
+            session.execute(text(
+                "UPDATE card_templates SET team_id = :t WHERE player_id = :p AND season_created = 10"),
+                {'t': tid, 'p': pid})
+        session.add(AppSetting(key=_GNEGY_SWAP_MARKER, value=f'done: Dingers term {dingersTerm}'))
+        session.commit()
+        logger.info(f"Gnegy swap: Gibson Gnegy -> Midnights (prospect contract), "
+                    f"Dingers Culpepper -> Tuesdays ({dingersTerm} season(s))")
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"Gnegy swap failed: {e}")
     finally:
         session.close()
 

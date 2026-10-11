@@ -8,8 +8,13 @@ prevent. A user asked what "up to X FPx on a big game" meant and this is what wa
 underneath it.
 
 The ramp is the other half of the answer: the bonus is not flat once unlocked, it grows
-from zero at the bar to the full figure at DOUBLE the bar, so "a big game" means twice
-what it took to switch the card on.
+from a base at the bar to the full figure at `fpCeiling`, a big game for the card's
+position (its 90th-percentile single-game FP).
+
+⚠️ THE CEILING USED TO BE DOUBLE THE BAR (2026-10-07). That was right while the bar was a
+flat 15; once the bar was synced to the metallic gate (2-7 FP) double it sat below a
+median game at every position, and every starter maxed the card every week. Cards minted
+before `fpCeiling` existed still ramp to double their bar, which is what they were sold as.
 """
 
 import os
@@ -76,18 +81,45 @@ class HonorRollTests(unittest.TestCase):
         self.assertLess(quarter, half)
         self.assertLess(half, full)
 
-    def testABigGameMeansDoubleTheBar(self):
-        cfg = cfgFor('metallic', QB)
-        thr = cfg['primary']['fpThreshold']
-        full = _computeHonorRoll(cfg['primary'], Ctx(thr * 2), 7, 1).multBonus
-        self.assertAlmostEqual(full, cfg['primary']['maxMult'], places=2)
+    def testABigGameIsTheCeiling(self):
+        for position in (QB, RB, WR, TE, K):
+            cfg = cfgFor('metallic', position)
+            ceil = cfg['primary']['fpCeiling']
+            full = _computeHonorRoll(cfg['primary'], Ctx(ceil), 7, 1).multBonus
+            self.assertAlmostEqual(full, cfg['primary']['maxMult'], places=2)
 
-    def testItIsCappedAboveDoubleTheBar(self):
+    def testItIsCappedAboveTheCeiling(self):
         cfg = cfgFor('metallic', QB)
-        thr = cfg['primary']['fpThreshold']
-        full = _computeHonorRoll(cfg['primary'], Ctx(thr * 2), 7, 1).multBonus
-        beyond = _computeHonorRoll(cfg['primary'], Ctx(thr * 5), 7, 1).multBonus
+        ceil = cfg['primary']['fpCeiling']
+        full = _computeHonorRoll(cfg['primary'], Ctx(ceil), 7, 1).multBonus
+        beyond = _computeHonorRoll(cfg['primary'], Ctx(ceil * 3), 7, 1).multBonus
         self.assertEqual(beyond, full)
+
+    def testAnOrdinaryGameDoesNotMaxIt(self):
+        """THE FIX. Double the metallic bar (4-14 FP) is below a median game at every
+        position, so an ordinary starter maxed the card every week."""
+        for position in (QB, RB, WR, TE, K):
+            p = cfgFor('metallic', position)['primary']
+            self.assertGreater(p['fpCeiling'], 2 * p['fpThreshold'], position)
+            twice = _computeHonorRoll(p, Ctx(2 * p['fpThreshold']), 7, 1).multBonus
+            self.assertLess(twice, p['maxMult'], position)
+
+    def testACardMintedBeforeTheCeilingStillRampsToDoubleItsBar(self):
+        cfg = cfgFor('metallic', QB)
+        legacy = dict(cfg['primary'])
+        legacy.pop('fpCeiling')
+        thr = legacy['fpThreshold']
+        full = _computeHonorRoll(legacy, Ctx(thr * 2), 7, 1).multBonus
+        self.assertAlmostEqual(full, legacy['maxMult'], places=2)
+
+    def testTheBackfillGivesOldCardsTheirOwnCeiling(self):
+        from database.connection import _backfillEffectParams
+        legacy = dict(cfgFor('metallic', QB)['primary'])
+        legacy.pop('fpCeiling')
+        legacy.pop('baseMult')
+        self.assertTrue(_backfillEffectParams(legacy, 'honor_roll'))
+        self.assertEqual(legacy['fpCeiling'], 2 * legacy['fpThreshold'])
+        self.assertIn('baseMult', legacy)
 
     def testClearingTheBarPaysTheBaseRatherThanNothing(self):
         """The last dead point. At EXACTLY the bar the ramp used to pay +0.00."""
@@ -109,8 +141,7 @@ class HonorRollTests(unittest.TestCase):
         cfg = cfgFor('metallic', QB)
         legacy = dict(cfg['primary'])
         legacy.pop('baseMult', None)
-        thr = legacy['fpThreshold']
-        result = _computeHonorRoll(legacy, Ctx(thr * 2), 7, 1)
+        result = _computeHonorRoll(legacy, Ctx(legacy['fpCeiling']), 7, 1)
         self.assertAlmostEqual(result.multBonus, legacy['maxMult'], places=2)
 
     def testTheAdvertisedThresholdIsTheOneItScoresAgainst(self):

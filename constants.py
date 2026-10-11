@@ -883,6 +883,28 @@ ODOMETER_GATES_BY_POSITION = {
     4: (30, 45, 70, 100),      # TE
 }
 ODOMETER_GATE_FP = (20, 30, 40, 55)
+# ⚠️ TRIMMED TO THE TOP OF THE PRISMATIC BAND, PER POSITION (owner, 2026-10-07). At the flat
+# payouts above Odometer measured 2.5x the prismatic median (57/55/61/90 FP a week at
+# QB/RB/WR/TE in a contender lineup against a band top of 32; simcheck_effect_marginal.py on
+# a fresh standard season). The gates were re-measured and still sit on each position's
+# p25/50/75/90, so the excess is the payout, and TE most because prismatic only mints on
+# 80+ players, who sit far up a TE distribution. Read at SCORING time, like the gates.
+_ODOMETER_TRIM = {1: 0.56, 2: 0.59, 3: 0.52, 4: 0.36}
+ODOMETER_GATE_FP_BY_POSITION = {
+    pos: tuple(int(round(fp * f)) for fp in ODOMETER_GATE_FP) for pos, f in _ODOMETER_TRIM.items()
+}
+
+# ⚠️ HONOR ROLL'S RAMP TOPS OUT ON A BIG GAME FOR THE POSITION (2026-10-07). It pays a base
+# at its power bar and grows to the max as the player scores more. The top used to be
+# DOUBLE the bar, which was right while the bar was 15 FP (max at 30) and became a
+# giveaway once the bar was synced to the metallic gate (QB 7, RB 5, WR 6, TE 2, K 4):
+# the max sat at 4-14 FP, below a median game at every position, so any starter maxed it
+# every week. Reported by a player as "CRAZY busted"; measured as the third-best card in
+# the game by FP-equivalent (seasons 7-8), above every diamond, and the most-equipped card
+# among top-3 finishers. Each value is the position's 90th-percentile single-game FP
+# (prod seasons 6-8), the same "big week" rung Odometer's top gate sits on. Stored on the
+# card at mint as `fpCeiling`; cards minted before this keep double their bar.
+HONOR_ROLL_CEILING_FP_BY_POSITION = {1: 29, 2: 33, 3: 28, 4: 16, 5: 15}
 
 # Trust Fund's "weeks your roster stays unchanged" growth stops counting after this many
 # weeks. Uncapped, it grew all season: a card left alone 20 weeks paid ~395 Floobits a week
@@ -3051,6 +3073,46 @@ FO_ATTITUDE_ROOM_SENSITIVITY = 0.02     # per point the room sits away from neut
 FO_ATTITUDE_ROOM_MIN = 0.60             # the best room in the league absorbs this much
 FO_ATTITUDE_ROOM_MAX = 1.40             # the worst compounds it this much
 
+# ---- Starter standing: who the man in the slot is, beyond his rating ----
+# (owner, 2026-10-10). Keeping a starter or replacing him (with a prospect, or by letting
+# him walk at re-sign) is weighed on more than the two values: where the starter is in
+# his career, whether he has been playing to or past his rating, whether the team won
+# with him, and how ready this GM is to move on. Each GM weighs it differently off
+# attributes it already has. `frontOfficeBrain.starterStanding` / `moveOnBar`.
+FO_STANDING_ENABLED = True
+# ⚠️ THE DECISION COMMITS SEVERAL SEASONS, AND THE VALUE ONLY LOOKS AT ONE. A past-peak
+# starter's value is next season's projection (`trueForwardRating`), but keeping him
+# over a prospect (or re-signing him) is a multi-season choice: a promotion contract
+# runs at least the prospect's seasons left, and re-sign terms run 2-5. So his projected
+# decline is extended over the rest of this horizon. A developing starter needs no such
+# term, because his value already credits growth toward his ceiling.
+FO_STANDING_HORIZON_SEASONS = 3
+# Rating points a starter's standing moves for playing a full FO_RESULTS_PERF_SCALE
+# over (or under) his rating last season, at a neutral GM. Sized to about one cut
+# margin: a season of clearly better football than the sheet says is worth roughly
+# what the league already demands of any upgrade.
+FO_RESULTS_WEIGHT = 3.0
+FO_RESULTS_PERF_SCALE = 10.0   # performance-minus-rating points for the full term
+# Team results scale it by up to half again: winning with a starter who played well
+# makes him harder to move, losing with one who played badly makes it time to move on.
+# A good player on a bad team (or a poor one carried by a good team) gets the smaller
+# share of the credit or blame. Win% over .500, full at +-FO_RESULTS_TEAM_SCALE.
+FO_RESULTS_TEAM_SCALE = 0.25
+FO_RESULTS_TEAM_SHARE = 0.5
+# How far a GM's aggressiveness moves the bar for replacing a starter, in value points
+# each way: an aggressive GM bets on the prospect (or the market) on a close call, a
+# conservative one keeps the man he knows. Neutral (80) moves nothing.
+FO_MOVE_ON_SHIFT = 2.0
+# A prospect on his LAST window only has to roughly match the starter (owner,
+# 2026-10-10): the alternative is losing him for nothing. Earlier windows still need
+# FO_CUT_UPGRADE_MARGIN and to be rated higher today.
+FO_PROSPECT_LAST_WINDOW_BAR = 0.0
+# ⚠️ AND HE HAS TO ROUGHLY MATCH HIM TODAY, not only in projection: within half a star
+# tier (tiers are 8 rating points wide). Without it, aging and the prospect's projected
+# growth let a last-window prospect take the job from a clearly better player. Measured
+# on a prod copy: Anaheim cut Mandy Hernder (TE, 90, three years left) for an 82.
+FO_PROSPECT_LAST_WINDOW_TODAY_GAP = 4.0
+
 # ---- Fan sentiment on a DEPARTURE clears a bar; on a CHOICE it tips the order ----
 # ⚠️ THESE ARE DIFFERENT QUESTIONS AND ONE TERM CANNOT SERVE BOTH.
 #
@@ -4151,13 +4213,14 @@ CARD_GATE_ENABLED = True
 # the amplifier fallback) that read a position bar without a frozen edition gate. Rebalanced
 # from the median-relative data: QB was the loosest (77% clear -> 8→9), RB the strictest
 # (60% -> 9→7); WR/TE/K were on target.
-# ⚠️ LOWERED BY 2 FP ACROSS EVERY ROW (owner, 2026-09-13). Measured on real player-games the
-# bars were clearing well under the ~70% metallic / ~55% diamond the rows below were calibrated
-# for -- QB 72%/31%, WR 57%/32%, TE 44%/17% -- so the gate was a coin flip at the top of the
-# ladder rather than a gamble. ⚠️ TE IS THE OUTLIER AND -2 DOES NOT FULLY FIX IT: its bar of 4
-# sat ABOVE its own median FP of 3.0, which is the one row that contradicts the "0.6-0.75 of
-# median" rule this comment claims, so TE is worth its own pass rather than another flat step.
-CARD_GATE_FP_THRESHOLDS = {1: 7, 2: 5, 3: 6, 4: 2, 5: 4}
+# ⚠️ RESTORED TO THE PRE-SEPTEMBER BARS (owner, 2026-10-07). They were lowered by 2 FP on every
+# row on 2026-09-13, when TE's median game was 3.0 FP and the bars cleared QB 72%/31%, WR
+# 57%/32%, TE 44%/17% (metallic/diamond). Scoring has since risen (TE median 6.0, seasons 6-8),
+# and on seasons 7-8 the lowered bars cleared 84-93% at metallic and 65-88% at diamond, so the
+# bar was barely a gamble. Restored, the same games clear 71-82% at metallic and 57-84% at
+# diamond, back near the ~70% / ~55% this table is calibrated for (RB runs high at every
+# edition). FROZEN AT MINT: already-minted cards keep the bar they were minted with.
+CARD_GATE_FP_THRESHOLDS = {1: 9, 2: 7, 3: 8, 4: 4, 5: 6}
 # Higher editions only mint on higher-rated players (holo ≥75, prismatic ≥80, diamond ≥90), who
 # score ABOVE the position median — so a flat bar gets EASIER at higher rarity. To keep the gate
 # a real gamble (and offset the higher ceilings), the threshold RISES with edition. Calibrated
@@ -4165,10 +4228,10 @@ CARD_GATE_FP_THRESHOLDS = {1: 7, 2: 5, 3: 6, 4: 2, 5: 4}
 # clear rate that falls with rarity (~70% metallic → ~55% diamond). buildGateSpec picks the row
 # for the card's edition; frozen into gate.threshold at mint. The floor 'base' is gate-exempt.
 CARD_GATE_FP_THRESHOLDS_BY_EDITION = {
-    'metallic':    {1: 7,  2: 5,  3: 6,  4: 2, 5: 4},
-    'holographic': {1: 9,  2: 7,  3: 8,  4: 3, 5: 5},
-    'prismatic':   {1: 11, 2: 9,  3: 10, 4: 4, 5: 6},
-    'diamond':     {1: 13, 2: 11, 3: 12, 4: 5, 5: 7},
+    'metallic':    {1: 9,  2: 7,  3: 8,  4: 4, 5: 6},
+    'holographic': {1: 11, 2: 9,  3: 10, 4: 5, 5: 7},
+    'prismatic':   {1: 13, 2: 11, 3: 12, 4: 6, 5: 8},
+    'diamond':     {1: 15, 2: 13, 3: 14, 4: 7, 5: 9},
 }
 # All-Pro classification (prior-season All-Pro selections, holo+ only) lowers ITS OWN card's
 # gate threshold — an individual accolade, so it buys individual reliability ("the best
@@ -5314,6 +5377,13 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 #     land. Pushed back beyond the upcoming season. Do NOT enable without an
 #     explicit go from the owner.
 ANOMALY_CRITICALITY_ENABLED = False
+
+# How hard a Criticality week amplifies the term its controlling Core owns (Pyre FPx,
+# Cassian card flat FP, Halverson roster FP, Aris all three at the cube root). A build
+# specialized in that term gains up to this many times its normal week; Aris gives every
+# build between the cube root of it and its 2/3 power. Owner, 2026-10-07;
+# see managers/coreEquations.py for the equations and why they replaced the exponential ones.
+CRITICALITY_AMPLIFICATION = 4
 
 # Awakened (L4) signature powers — the mechanical L4 layer (docs/AWAKENED_POWERS_PLAN.md).
 # Separate gate from Criticality so the powers can be built + tested on a branch without going live.

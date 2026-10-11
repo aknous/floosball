@@ -97,9 +97,12 @@ class Stub:
     def _currentSeasonNumber(s): return 0
     releasePlayerToFreeAgency = PlayerManager.releasePlayerToFreeAgency
 
-def runPick(incumbentRating, faRating, filledThisDraft=()):
+def runPick(incumbentRating, faRating, filledThisDraft=(), signedThisOffseason=False):
     t = T()
     inc = P(10, 2, incumbentRating); inc.team = t
+    # A contract already counting down; `term == termRemaining` means signed or
+    # re-signed THIS offseason, which no cut path may touch (owner, 2026-10-03).
+    inc.termRemaining = inc.term if signedThisOffseason else inc.term - 1
     t.rosterDict = {'qb':P(20,1,80),'rb':inc,'wr1':P(21,3,80),'wr2':P(22,3,80),
                     'te':P(23,4,80),'k':P(24,5,80)}
     for p in t.rosterDict.values(): p.team = t
@@ -135,6 +138,8 @@ expect(f"a marginal upgrade does NOT cost a starter his job (rb is still "
        f"{got.playerRating:.0f})", got.id == 10)
 got, _, _, _ = runPick(60, 95, filledThisDraft=('rb',))
 expect("a slot filled EARLIER IN THIS DRAFT is off limits (no churn)", got.id == 10)
+got, _, _, _ = runPick(60, 95, signedThisOffseason=True)
+expect("a player re-signed this offseason is not cut in the draft", got.id == 10)
 expect("the margin is well above the ordinary offseason one",
        FO_DRAFT_CUT_UPGRADE_MARGIN > 6.0)
 

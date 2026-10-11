@@ -37,6 +37,12 @@ WR, K = 3, 5
 
 REAL_TDS = 2      # touchdowns the roster actually scored
 FGS_MADE = 3      # field goals the roster kicker actually made
+# The minted multipliers, read rather than assumed: the diamond rework (2026-10-07) set
+# Doubler below 2x and Sharpshooter to 3x. What this file pins is the ORDER they chain in.
+TD_MULT = buildEffectConfig('diamond', 92, WR, forceEffect='doubler')['primary']['tdMult']
+FG_MULT = buildEffectConfig('diamond', 92, WR, forceEffect='sharpshooter')['primary']['fgMult']
+dbl = lambda n: int(round(n * TD_MULT))
+fgx = lambda n: int(round(n * FG_MULT))
 
 
 def mkCard(eqId, pid, effect, *, edition='diamond', rating=92, pos=WR):
@@ -83,21 +89,21 @@ class TheCardsCompound(unittest.TestCase):
         self.assertEqual(rosterTdsWith('alchemy'), REAL_TDS + FGS_MADE)
 
     def test_doublerDoublesRealTouchdowns(self):
-        self.assertEqual(rosterTdsWith('doubler'), REAL_TDS * 2)
+        self.assertEqual(rosterTdsWith('doubler'), dbl(REAL_TDS))
 
     def test_doublerDoublesTheConvertedTouchdowns(self):
         """THE REGRESSION. Was 7 — (2 x 2) + 3 — because Doubler ran first."""
         self.assertEqual(rosterTdsWith('alchemy', 'doubler'),
-                         (REAL_TDS + FGS_MADE) * 2)
+                         dbl(REAL_TDS + FGS_MADE))
 
     def test_sharpshooterStillFeedsAlchemy(self):
         """⚠️ Pre-existing and deliberate: the doubled field goals convert."""
         self.assertEqual(rosterTdsWith('alchemy', 'sharpshooter'),
-                         REAL_TDS + FGS_MADE * 2)
+                         REAL_TDS + fgx(FGS_MADE))
 
     def test_allThreeChain(self):
         self.assertEqual(rosterTdsWith('alchemy', 'doubler', 'sharpshooter'),
-                         (REAL_TDS + FGS_MADE * 2) * 2)
+                         dbl(REAL_TDS + fgx(FGS_MADE)))
 
     def test_theOrderIsIndependentOfHowTheLineupIsArranged(self):
         """⚠️ The pre-pass is a fixed sequence of blocks, NOT a walk over the equipped
