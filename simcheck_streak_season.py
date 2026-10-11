@@ -34,6 +34,10 @@ PLAYERS = int(os.environ.get('PROBE_PLAYERS', '40'))
 # draw holding Lemons or Captain moves a whole season), so each player is averaged over
 # several held hands and the table reports a standard error.
 HANDS = int(os.environ.get('PROBE_HANDS', '4'))
+# Nose Picker's streak holds on a week the USER submitted every pick by hand. A replay
+# cannot decide that, so it is drawn per week at this rate (prod: holders hand-submitted
+# 85-100% of weeks in seasons 5-6).
+MANUAL_PICK_RATE = float(os.environ.get('PROBE_MANUAL_PICK_RATE', '0.95'))
 SEED = int(os.environ.get('PROBE_SEED', '3'))
 os.environ.setdefault('DATABASE_DIR', os.path.dirname(os.path.abspath(DB)) or '.')
 os.environ.setdefault('PROBE_ARM', 'contender')
@@ -89,6 +93,7 @@ def replay(effect, edition, pos, pid, weeks, others, byWeek, meta, ctxArgs, sm):
                      for c in hands[arm]]
             eqs, ctx = H.buildContext(cards, wk, *ctxArgs, equipped=equipped[arm])
             equipped[arm] = eqs
+            ctx.userManualPickSubmittedThisWeek = random.Random(seed ^ 0x5EED).random() < MANUAL_PICK_RATE
             random.seed(seed)
             sm._prepareStreakContext(eqs, ctx, '')
             res = calculateWeekCardBonuses(eqs, ctx)
