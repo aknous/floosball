@@ -975,16 +975,8 @@ class FantasyTracker:
                         if eName == "providence" and primary.get("chanceBonus"):
                             chanceAmplifiers.append({"name": "Providence",
                                                      "bonus": round(primary["chanceBonus"] * _tmult, 2)})
-                        elif eName == "catalyst":
-                            _sc = _tss("catalyst", primary, _tmult)
-                            fpPer1Pct = _sc.get("fpPer1Pct", primary.get("fpPer1Pct", 12))
-                            baseline = primary.get("baseline", 55)
-                            maxBoost = _sc.get("maxBoost", primary.get("maxBoost", 0.10))
-                            if weekRawFP > baseline:
-                                catBoost = min(maxBoost, (weekRawFP - baseline) / fpPer1Pct / 100)
-                            else:
-                                catBoost = 0.0
-                            chanceAmplifiers.append({"name": "Catalyst", "bonus": round(catBoost, 2)})
+                        # Catalyst no longer raises odds (2026-10-07); its jackpot boost is
+                        # reported separately below, as the calculator computed it.
                     # External chance bonuses (Fortune's Favor, fortunate modifier)
                     if calcCtx.activeModifier == "fortunate":
                         chanceAmplifiers.append({"name": "Fortunate", "bonus": 0.15})
@@ -995,6 +987,8 @@ class FantasyTracker:
                             "amplifiers": chanceAmplifiers,
                             "totalBonus": round(calcCtx.chanceBonus, 2),
                             "hasAdvantage": calcCtx.hasAdvantage,
+                            "advantageRolls": calcCtx.advantageRolls if calcCtx.hasAdvantage else 0,
+                            "catalystJackpotBoost": round(getattr(calcCtx, "catalystJackpotBoost", 0.0), 2),
                         },
                         "streak": {
                             "count": calcCtx.streakCardCount,

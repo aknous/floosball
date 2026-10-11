@@ -1044,7 +1044,7 @@ EFFECT_TOOLTIPS = {
     # ── Diamond stat amplifiers ──
     "doubler": "Doubles down on the scoreboard. Roster TDs count extra for every other card. Produces nothing on its own.",
     "surveyor": "Measures every yard twice. Roster yards count 1.5x for every other card. Produces nothing on its own.",
-    "sharpshooter": "Precision pays triple. Your roster's completions, well-placed throws, contested catches and field goals count 3x for every other card. Produces nothing on its own.",
+    "sharpshooter": "Precision pays. Your roster's completions, well-placed throws, contested catches and field goals count extra for every other card. Produces nothing on its own.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {

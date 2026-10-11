@@ -190,11 +190,14 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         boost = primary.get("boostPct", 20)
         return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"
     if effectName == "doubler":
-        return "TDs count 2x for other cards" if active else "Needs another card"
+        return (f"TDs count {primary.get('tdMult', 2.0):g}x for other cards"
+                if active else "Needs another card")
     if effectName == "surveyor":
-        return "Yards count 1.5x for other cards" if active else "Needs another card"
+        return (f"Yards count {primary.get('yardMult', 1.5):g}x for other cards"
+                if active else "Needs another card")
     if effectName == "sharpshooter":
-        return "Accuracy stats count 3x for other cards" if active else "Needs another card"
+        return (f"Accuracy stats count {primary.get('fgMult', 2.0):g}x for other cards"
+                if active else "Needs another card")
     return ""
 
 

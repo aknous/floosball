@@ -174,5 +174,23 @@ class DiamondSizing(unittest.TestCase):
             self.assertEqual(ce.EFFECT_EDITION_TIER[e], "diamond", e)
 
 
+class TheTextFollowsTheNumbers(unittest.TestCase):
+
+    def testTheStatAmplifierPillsQuoteTheMintedMultiplier(self):
+        """The pills hardcoded "2x" / "3x"; Doubler mints at 1.71 and older Sharpshooters
+        at 2.0, so the pill must read the card."""
+        from managers.cardProjection import _amplifierDescription
+        for effect, key in (("doubler", "tdMult"), ("surveyor", "yardMult"),
+                            ("sharpshooter", "fgMult")):
+            primary = ce.buildEffectConfig("diamond", 92, QB, forceEffect=effect)["primary"]
+            self.assertIn(f"{primary[key]:g}x", _amplifierDescription(effect, primary, True), effect)
+        old = {"fgMult": 2.0}
+        self.assertIn("2x", _amplifierDescription("sharpshooter", old, True))
+
+    def testNoTooltipQuotesARedesignedMultiplier(self):
+        for effect in ("sharpshooter", "doubler"):
+            self.assertNotRegex(ce.EFFECT_TOOLTIPS[effect], r"\d+x", effect)
+
+
 if __name__ == "__main__":
     unittest.main()
