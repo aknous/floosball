@@ -3053,23 +3053,77 @@ _DIAMOND_SIZE = {
 }
 
 
-def _applyDiamondSize(effectName, primary):
-    entry = _DIAMOND_SIZE.get(effectName)
+def _applySized(table, effectName, position, primary):
+    """Scale `effectName`'s payout keys by its entry in `table`: (factor or {position:
+    factor}, {key: kind}). Kinds: 'delta' scales the value, 'mult' a full multiplier's
+    delta, 'pct' an integer percent, 'tiers' each tier's multiplier delta."""
+    entry = table.get(effectName)
     if not entry:
         return
     factor, keys = entry
+    if isinstance(factor, dict):
+        factor = factor.get(position, 1.0)
+    if factor == 1.0:
+        return
     for key, kind in keys.items():
         v = primary.get(key)
         if kind == "tiers" and isinstance(v, list):
             primary[key] = [(t, round(1 + (m - 1) * factor, 2)) for t, m in v]
-        elif not isinstance(v, (int, float)):
+        elif not isinstance(v, (int, float)) or isinstance(v, bool):
             continue
         elif kind == "mult":
             primary[key] = round(1 + (v - 1) * factor, 2)
         elif kind == "pct":
             primary[key] = int(round(v * factor))
         else:
-            primary[key] = round(v * factor, 2)
+            scaled = v * factor
+            primary[key] = round(scaled, 3 if abs(scaled) < 0.1 else 2 if abs(scaled) < 10 else 1)
+    if "perFPxShown" in primary and "perFPx" in primary:
+        primary["perFPxShown"] = round(primary["perFPx"], 2)
+
+
+def _applyDiamondSize(effectName, primary):
+    _applySized(_DIAMOND_SIZE, effectName, None, primary)
+
+
+# ─── Band lift (2026-10-07, owner: lift the low end to the TOP of the band) ──────────
+# Cards measured well under their edition, raised to its top quartile. Non-streak cards:
+# simcheck_effect_marginal.py contender arm on a prod snapshot (season 7, so balances,
+# pick-em and veterans are real), band tops metallic 46, holographic 46, prismatic 38.
+# Streak cards: simcheck_streak_season.py, target 33 FP a season-week (the prismatic cards
+# at the band top replayed the same way). Per-position factors are CAPPED AT 4x: Franchise
+# on a TE (rarely the lineup's top scorer) wanted 21x, All In and Luminary on a K 5-6.5x,
+# and a factor that large makes the rare week a jackpot rather than lifting the card.
+# Left out, because the harness cannot see what they read: Homer (players from your
+# favorite team), Gone Streaking (the favorite team's longest streak), the same-team cards,
+# the favorite-team streak cards, Walk Off, Runback / House Call and Charmed. Also sizes two
+# trims the same way: Vanguard (1.6x the holo median once a league has veterans) and
+# Complacency (never breaks since the fusion stopped tracking lineup changes; 70 FP a
+# season-week, 99 late). One correction pass was taken for misses over 25% (Sniper and
+# Bombardier overshot, Momentum and Dead Eye undershot); the harness is noisy to about
+# +-20%, so smaller misses were left rather than chased. Frozen at mint.
+_BAND_LIFT = {
+    "paydirt":           ({3: 2.8, 4: 4.0}, {"perTdMult": "delta", "maxMult": "delta"}),
+    "bandwagon":         ({1: 2.3, 2: 2.2, 3: 3.1, 4: 3.1, 5: 3.4}, {"rewardValue": "mult"}),
+    "sniper":            (1.6, {"perFgFP": "delta"}),
+    "big_deal":          ({1: 1.7, 2: 2.2, 3: 2.5, 4: 2.5, 5: 2.5}, {"xMultValue": "mult"}),
+    "bombardier":        (1.75, {"perTdMult": "delta", "maxMult": "delta"}),
+    "closer":            ({1: 3.7, 2: 2.1, 3: 3.3, 4: 3.7}, {"q4MultFactor": "delta"}),
+    "luminary":          ({1: 1.9, 2: 1.5, 3: 1.9, 4: 4.0, 5: 4.0}, {"fpShareScale": "delta"}),
+    "all_in":            ({1: 4.0, 2: 1.9, 3: 4.0, 4: 4.0, 5: 4.0},
+                          {"perFPx": "delta", "maxXBonus": "delta"}),
+    "cornerstone":       ({1: 4.0, 2: 2.2, 3: 4.0, 4: 2.3, 5: 3.0},
+                          {"perPlayerMult": "delta", "maxMult": "mult"}),
+    "franchise":         ({1: 2.4, 2: 1.5, 3: 3.8, 4: 4.0, 5: 2.1}, {"topScorerDelta": "delta"}),
+    "momentum":          (3.9, {"baseReward": "mult", "growthPerTick": "delta"}),
+    "dead_eye":          (2.85, {"per5Mult": "delta", "growthPerTick": "delta"}),
+    "on_fire":           (1.4, {"baseReward": "mult", "growthPerTick": "delta"}),
+    "clockwork":         (1.4, {"per25Mult": "delta", "growthPerTick": "delta"}),
+    "bandwagon_express": (1.8, {"baseReward": "delta", "growthPerTick": "delta"}),
+    # trims sized with the same instruments
+    "vanguard":          (0.79, {"perVetMult": "delta", "maxMult": "mult"}),
+    "complacency":       (0.47, {"baseReward": "delta", "growthPerTick": "delta"}),
+}
 
 
 def _applyBandTrim(effectName, position, primary):
@@ -3158,6 +3212,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     primary["posLabel"] = POSITION_LABELS.get(position, "??")
     _applyBandTrim(effectName, position, primary)
     _applyDiamondSize(effectName, primary)
+    _applySized(_BAND_LIFT, effectName, position, primary)
 
     # Position-specific param overrides for effects with per-position tuning
     if effectName == "crescendo":

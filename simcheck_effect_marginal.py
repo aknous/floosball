@@ -182,6 +182,9 @@ def buildContext(cards, week, seasonInfo, seasonsPlayed, extras, user, equipped=
         + (s.get('rushing_stats', {}) or {}).get('runTds', 0)
         + (s.get('receiving_stats', {}) or {}).get('rcvTds', 0)
         for s in weekStats.values())
+    # Mirrors the week-end path: lineup changes are not tracked since the fusion, so the
+    # live code treats the lineup as unchanged every week (Complacency reads this).
+    ctx.rosterUnchangedWeeks = week
     ctx.isProjection = False
     return equipped, ctx
 
