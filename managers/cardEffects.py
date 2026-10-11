@@ -1312,7 +1312,13 @@ SHARED_EFFECT_POOL = [
     # streak effects
     "snowball_fight",
     "fairweather_fan", "bandwagon_express", "touchdown_jackpot",
-    "odometer", "complacency", "momentum",
+    "odometer", "momentum",
+    # NOTE: "complacency" retired (owner call 2026-10-07). It grew "each week you don't
+    # touch your roster", and since the fantasy/cards fusion nothing tracks lineup changes:
+    # the week-end path sets rosterUnchangedWeeks = week for everyone, so it grew every
+    # week for every user and was the strongest streak card in the game (70 FP a
+    # season-week, 99 late). Dropped from the minting pool; compute/templates stay dormant
+    # so owned copies still score.
     # position-keyed (generic concept, adapts to card position)
     # NOTE: "spotlight_moment" is no longer here — it is WR-EXCLUSIVE (owner call
     # 2026-08-16). See POSITION_EXCLUSIVE_POOLS[3].
@@ -3100,10 +3106,9 @@ def _applyDiamondSize(effectName, primary):
 # and a factor that large makes the rare week a jackpot rather than lifting the card.
 # Left out, because the harness cannot see what they read: Homer (players from your
 # favorite team), Gone Streaking (the favorite team's longest streak), the same-team cards,
-# the favorite-team streak cards, Walk Off, Runback / House Call and Charmed. Also sizes two
-# trims the same way: Vanguard (1.6x the holo median once a league has veterans) and
-# Complacency (never breaks since the fusion stopped tracking lineup changes; 70 FP a
-# season-week, 99 late). One correction pass was taken for misses over 25% (Sniper and
+# the favorite-team streak cards, Walk Off, Runback / House Call and Charmed. Also sizes a
+# trim the same way: Vanguard (1.6x the holo median once a league has veterans). One
+# correction pass was taken for misses over 25% (Sniper and
 # Bombardier overshot, Momentum and Dead Eye undershot); the harness is noisy to about
 # +-20%, so smaller misses were left rather than chased. Frozen at mint.
 _BAND_LIFT = {
@@ -3126,7 +3131,6 @@ _BAND_LIFT = {
     "bandwagon_express": (1.8, {"baseReward": "delta", "growthPerTick": "delta"}),
     # trims sized with the same instruments
     "vanguard":          (0.79, {"perVetMult": "delta", "maxMult": "mult"}),
-    "complacency":       (0.47, {"baseReward": "delta", "growthPerTick": "delta"}),
 }
 
 
