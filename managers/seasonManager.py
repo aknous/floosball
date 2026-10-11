@@ -10266,9 +10266,15 @@ class SeasonManager:
     # matched) are retired — the match multiplier is gone, so both are no-ops.
     # Dropped from the roll weights so they never surface; display/description
     # entries stay below (legacy) for any historical rows.
+    # ⚠️ GROUNDED IS RETIRED (owner, 2026-10-07). It zeroed every FPx effect for the week,
+    # so the only answer was buying Annulment in a brief window before lock, and it fell
+    # on three Criticality weeks. The shuffle bag ignores weights (every modifier appears
+    # once per cycle), so it ran ~3 weeks a season, not the ~6% its weight suggested. Kept
+    # in DISPLAY / DESCRIPTIONS below and in the calculator, like cascade, so a stored
+    # Grounded week still scores and renders as it did.
     MODIFIER_WEIGHTS = {
         "amplify": 10, "ironclad": 10,
-        "payday": 10, "grounded": 5,
+        "payday": 10,
         "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
         "fortunate": 8,
     }

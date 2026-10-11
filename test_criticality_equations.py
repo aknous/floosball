@@ -100,5 +100,15 @@ class ModifiersAreSuspendedOnACriticalityWeek(unittest.TestCase):
                 self.assertIn("modifierInForce(activeModifier", fh.read(), rel)
 
 
+class GroundedIsRetired(unittest.TestCase):
+
+    def testItCanNoLongerRoll(self):
+        """Owner, 2026-10-07: Grounded zeroed every FPx effect for a week and fell on three
+        Criticality weeks. It stays displayable for stored weeks but never rolls."""
+        from managers.seasonManager import SeasonManager
+        self.assertNotIn("grounded", SeasonManager.MODIFIER_WEIGHTS)
+        self.assertIn("grounded", SeasonManager.MODIFIER_DISPLAY)
+
+
 if __name__ == "__main__":
     unittest.main()
