@@ -2134,6 +2134,8 @@ def _refreshCardEffectText():
         # mechanic lives in the scoring pre-pass, so it reaches already-minted cards and
         # their text must say so. Advantage and Catalyst changed what they do the same way.
         "sharpshooter", "advantage", "catalyst",
+        # Nose Picker's streak holds at 75%+ hand-made picks (2026-10-07), scoring time.
+        "nose_picker",
         # Trust Fund growth capped at TRUST_FUND_GROWTH_WEEKS_CAP (2026-09-27).
         "trust_fund",
         # FPx delta-notation sweep — existing cards stored 1.x values in

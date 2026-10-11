@@ -109,7 +109,7 @@ EFFECT_CATEGORY = {
     "quiet_storm": "streak",    # streak grows when no roster player ≥15 FP
     "drought": "streak",        # streak grows when roster total <50 FP
     # Prognostication-driven
-    "nose_picker": "streak",     # streak grows when user manually submits picks (no auto-pick)
+    "nose_picker": "streak",     # streak grows when the user hand-picks 75%+ of the week
     "medium": "conditional",     # weekly accuracy bonus (counts auto-picks)
     "parlay": "multiplier",    # FPx — log-taper on weekly pick-em point total
     # Roster-construction-driven (next-season additions)
@@ -1031,7 +1031,7 @@ EFFECT_TOOLTIPS = {
     "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP. Requires a full 6-player roster.",
     "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 35 FP total. Requires a full 6-player roster.",
     # ── Prognostication cards ──
-    "nose_picker": "Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
+    "nose_picker": "Streak grows each week you make at least three quarters of your picks yourself instead of letting auto-pick fill them in.",
     "medium": "Bonus FP when your weekly Prognostication accuracy is high.",
     "parlay": "FPx that grows with your weekly Prognostication points.",
     # ── Roster-construction-driven ──
@@ -1225,7 +1225,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. Needs a full 6-player roster.",
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 35 FP. Needs a full 6-player roster.",
     # ── Prognostication cards ──
-    "nose_picker": "+{baseReward} FP base. Grows every week you submit manual picks. Growth starts at +{firstWeekGrowth} FP and tapers off as the streak continues.",
+    "nose_picker": "+{baseReward} FP base. Grows every week you make 75% or more of your picks yourself. Growth starts at +{firstWeekGrowth} FP and tapers off as the streak continues.",
     "medium": "+{lowFP} FP at 50%+ Prognostication accuracy, +{midFP} FP at 65%+, +{highFP} FP at 85%+. Counts auto-picks",
     "parlay": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
     # ── Roster-construction-driven ──
@@ -1789,6 +1789,10 @@ CATALYST_MAX_BOOST = 2.0
 # were written for.
 _POSITION_MEDIAN_FP = {1: 15.0, 2: 14.0, 3: 12.0, 4: 5.0, 5: 8.0}
 _SNAKE_EYES_REF_MEDIAN = 14.0
+
+# Share of a week's Prognostications the user must make by hand for Nose Picker's streak
+# to hold (picksWereSubmittedManually).
+NOSE_PICKER_MANUAL_SHARE = 0.75
 
 # Altitude's bar sits this far under the mean aDOT (it was 5.5 against a 6.79 mean).
 _ALTITUDE_BAR_BELOW_MEAN = 1.29
@@ -7163,12 +7167,21 @@ def picksWereSubmittedManually(picks) -> bool:
     a user with auto-pick switched on held the streak for free, which is most of why it
     was trivial to max out.
 
+    ⚠️ AND ONE AUTO-FILL NO LONGER BREAKS IT EITHER (owner, 2026-10-07). The fix above
+    went to the other extreme: a single game auto-filled out of the week's slate broke a
+    streak the user had held by hand for months. Measured: Nose Picker's holders
+    hand-submitted 85-100% of weeks in seasons 5-6, and once the strict rule landed
+    nobody held a fully manual week at all. The week now counts when at least
+    NOSE_PICKER_MANUAL_SHARE of its picks were made by hand, which still refuses one
+    manual pick beside fifteen auto-fills.
+
     An empty week is NOT a manual week: no picks were submitted at all.
     """
     picks = list(picks or [])
     if not picks:
         return False
-    return not any(getattr(p, 'is_auto', False) for p in picks)
+    manual = sum(1 for p in picks if not getattr(p, 'is_auto', False))
+    return manual >= NOSE_PICKER_MANUAL_SHARE * len(picks)
 
 
 def cardBarThreshold(effectConfig) -> Optional[float]:
