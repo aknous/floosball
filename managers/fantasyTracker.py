@@ -1811,10 +1811,14 @@ class FantasyTracker:
                     and favoriteTeamOpponentElo > favoriteTeamElo
                 )
             elif condition == "player_cleared_bar":
+                # The card's OWN power bar, as in cardEffects.checkStreakCondition.
                 from constants import CARD_GATE_FP_THRESHOLDS
+                from managers.cardEffects import cardBarThreshold
                 cardPlayerId = eq.user_card.card_template.player_id
                 pos = playerPositionMap.get(cardPlayerId, 0)
-                thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
+                thr = cardBarThreshold(eq.user_card.card_template.effect_config)
+                if thr is None:
+                    thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
                 fp = weekPlayerStats.get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
                 conditionMet = fp >= thr
 

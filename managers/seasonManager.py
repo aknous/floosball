@@ -2436,53 +2436,7 @@ class SeasonManager:
                     # The actual eq.streak_count DB bump still happens
                     # post-calc at line ~1914; this just keeps the calc-time
                     # view in sync with the live snapshot path.
-                    from managers.cardEffects import STREAK_CONFIGS as _streakConfigs
-                    streakConditions = {}
-                    for eq in userEquipped:
-                        ec = eq.user_card.card_template.effect_config or {}
-                        eName = ec.get("effectName", "")
-                        if eName not in _streakConfigs:
-                            continue
-                        cfg = _streakConfigs[eName]
-                        # Weekly accumulators (touchdown_jackpot) compute
-                        # their own ticks from this week's data; don't bump.
-                        if cfg.get("isWeekly"):
-                            streakConditions[eq.id] = True
-                            continue
-                        condMet = checkStreakCondition(
-                            eName, calcCtx, eq.user_card.card_template.player_id
-                        )
-                        streakConditions[eq.id] = condMet
-                        # Apply ironclad modifier — if active, treat as met
-                        # for the bump too (matches the eq.streak_count
-                        # bump path below at the streak-management block).
-                        effectiveMet = condMet or (userModifier == "ironclad")
-                        if effectiveMet:
-                            # Streak restart penalty (applied pre-calc so
-                            # THIS week's compute sees the halved peak): if
-                            # this is the first met week after a break and
-                            # a peak carries from a prior streak, halve the
-                            # peak in calcCtx so carriedBase = halved value.
-                            # Post-calc, the same halving is persisted to
-                            # eq.peak_output for future weeks.
-                            priorCount = eq.streak_count if eq.streak_count is not None else 1
-                            if priorCount == 0:
-                                priorPeak = calcCtx.streakPeakOutputs.get(eq.id)
-                                if priorPeak is not None:
-                                    primary = ec.get("primary", {}) or {}
-                                    baseReward = primary.get("baseReward", 0) or 0
-                                    halved = float(priorPeak) * 0.5
-                                    if halved <= baseReward:
-                                        calcCtx.streakPeakOutputs.pop(eq.id, None)
-                                    else:
-                                        calcCtx.streakPeakOutputs[eq.id] = halved
-                                # Skip the "1 = idle baseline" value on restart
-                                # so display (count - 1) shows 1 on first met
-                                # week instead of 0.
-                                calcCtx.streakCounts[eq.id] = 2
-                            else:
-                                calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
-                    calcCtx.liveStreakConditionsMet = streakConditions
+                    self._prepareStreakContext(userEquipped, calcCtx, userModifier)
 
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
@@ -2667,105 +2621,7 @@ class SeasonManager:
                             logger.warning(f"Windfall hook failed: {_e}")
 
                     # ─── Streak management ──────────────────────────────────
-                    for eq in userEquipped:
-                        effectConfig = eq.user_card.card_template.effect_config or {}
-                        effectName = effectConfig.get("effectName", "")
-                        category = effectConfig.get("category", "")
-
-                        if category == "streak":
-                            from managers.cardEffects import STREAK_CONFIGS
-                            # Bonsai: probabilistic growth instead of auto-increment
-                            if effectName == "bonsai":
-                                self._rollCultivationGrowth(eq, effectConfig, calcCtx, weekBonus)
-                                continue
-                            # Ironclad modifier: streaks can't reset this week
-                            if activeModifier == "ironclad":
-                                conditionMet = True
-                            else:
-                                conditionMet = checkStreakCondition(
-                                    effectName, calcCtx, eq.user_card.card_template.player_id
-                                )
-                            cfg = STREAK_CONFIGS.get(effectName, {})
-                            isNoReset = cfg.get("noReset", False)
-                            isWeekly = cfg.get("isWeekly", False)
-                            if conditionMet:
-                                priorCount = eq.streak_count if eq.streak_count is not None else 1
-                                # Streak restart penalty: when condition is
-                                # met again after a break (priorCount==0 but
-                                # peak_output carries from a prior streak),
-                                # halve the carried peak so the new streak
-                                # has to climb back up rather than instantly
-                                # paying the prior peak. Without this, a
-                                # quick on/off cycle on a deep streak (e.g.
-                                # Drought) sustained 500+ FP indefinitely.
-                                if (priorCount == 0
-                                        and getattr(eq, 'peak_output', None) is not None
-                                        and not isWeekly and not isNoReset):
-                                    halved = float(eq.peak_output) * 0.5
-                                    primary = effectConfig.get("primary", {})
-                                    baseReward = primary.get("baseReward", 0)
-                                    if halved <= baseReward:
-                                        eq.peak_output = None
-                                    else:
-                                        eq.peak_output = halved
-                                # On restart from 0, skip the "1 = idle"
-                                # baseline so display (count - 1) reads as 1
-                                # for the first active week.
-                                if priorCount == 0:
-                                    eq.streak_count = 2
-                                else:
-                                    eq.streak_count = priorCount + 1
-                                # peak_output stays LOCKED during an active
-                                # streak — it represents the carried base
-                                # the streak began at. Only break weeks and
-                                # cold continuing weeks mutate it.
-                                if not isWeekly and not isNoReset:
-                                    eq.weeks_since_break = 0
-                            elif not isNoReset:
-                                if not isWeekly:
-                                    primary = effectConfig.get("primary", {})
-                                    baseReward = primary.get("baseReward", 0)
-                                    growthPerTick = primary.get("growthPerTick", 0)
-                                    rewardType = primary.get("rewardType", "fp")
-                                    priorCount = eq.streak_count or 0
-                                    currentPeak = eq.peak_output
-                                    if currentPeak is not None and currentPeak > baseReward:
-                                        carriedBase = currentPeak
-                                    else:
-                                        carriedBase = baseReward
-                                    if priorCount > 0:
-                                        # Streak just broke. New peak = the peak the
-                                        # streak achieved. Compute this week already
-                                        # paid this value; store it so subsequent
-                                        # cold weeks decay from here.
-                                        newPeak = carriedBase + growthPerTick * (priorCount - 1)
-                                        if newPeak > baseReward:
-                                            eq.peak_output = newPeak
-                                        else:
-                                            eq.peak_output = None
-                                        eq.weeks_since_break = 0
-                                    elif eq.peak_output is not None:
-                                        # Continuing cold week — decay one step
-                                        # of the streak's own growth amount. For
-                                        # mult cards we step down the bonus
-                                        # portion (peak − 1) by growthPerTick;
-                                        # for FP cards just subtract directly.
-                                        # Symmetric to build: a 10-week streak
-                                        # decays over ~10 cold weeks, matching
-                                        # the same pace as the climb.
-                                        if rewardType == "mult":
-                                            currentBonus = max(0.0, eq.peak_output - 1)
-                                            steppedBonus = max(0.0, currentBonus - growthPerTick)
-                                            stepped = 1.0 + steppedBonus
-                                        else:
-                                            stepped = eq.peak_output - growthPerTick
-                                        if stepped <= baseReward:
-                                            eq.peak_output = None
-                                        else:
-                                            eq.peak_output = stepped
-                                        eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
-                                eq.streak_count = 0
-                            # If noReset=True and condition not met, streak stays unchanged
+                    self._advanceStreaks(userEquipped, calcCtx, activeModifier, weekBonus)
 
                 session.commit()
             except Exception as e:
@@ -10674,6 +10530,167 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    def _prepareStreakContext(self, userEquipped, calcCtx, userModifier):
+        """Pre-scoring streak pass: set each streak card's condition for the breakdown and
+        pre-bump calcCtx.streakCounts to the value this week pays at. Extracted unchanged
+        from _processWeekCardEffects so a season replay can drive the real logic
+        (simcheck_streak_season.py)."""
+        from managers.cardEffects import checkStreakCondition, cardBarThreshold
+        from managers.cardEffects import STREAK_CONFIGS as _streakConfigs
+        streakConditions = {}
+        for eq in userEquipped:
+            ec = eq.user_card.card_template.effect_config or {}
+            eName = ec.get("effectName", "")
+            if eName not in _streakConfigs:
+                continue
+            cfg = _streakConfigs[eName]
+            # Weekly accumulators (touchdown_jackpot) compute
+            # their own ticks from this week's data; don't bump.
+            if cfg.get("isWeekly"):
+                streakConditions[eq.id] = True
+                continue
+            condMet = checkStreakCondition(
+                eName, calcCtx, eq.user_card.card_template.player_id,
+                barThreshold=cardBarThreshold(ec),
+            )
+            streakConditions[eq.id] = condMet
+            # Apply ironclad modifier — if active, treat as met
+            # for the bump too (matches the eq.streak_count
+            # bump path below at the streak-management block).
+            effectiveMet = condMet or (userModifier == "ironclad")
+            if effectiveMet:
+                # Streak restart penalty (applied pre-calc so
+                # THIS week's compute sees the halved peak): if
+                # this is the first met week after a break and
+                # a peak carries from a prior streak, halve the
+                # peak in calcCtx so carriedBase = halved value.
+                # Post-calc, the same halving is persisted to
+                # eq.peak_output for future weeks.
+                priorCount = eq.streak_count if eq.streak_count is not None else 1
+                if priorCount == 0:
+                    priorPeak = calcCtx.streakPeakOutputs.get(eq.id)
+                    if priorPeak is not None:
+                        primary = ec.get("primary", {}) or {}
+                        baseReward = primary.get("baseReward", 0) or 0
+                        halved = float(priorPeak) * 0.5
+                        if halved <= baseReward:
+                            calcCtx.streakPeakOutputs.pop(eq.id, None)
+                        else:
+                            calcCtx.streakPeakOutputs[eq.id] = halved
+                    # Skip the "1 = idle baseline" value on restart
+                    # so display (count - 1) shows 1 on first met
+                    # week instead of 0.
+                    calcCtx.streakCounts[eq.id] = 2
+                else:
+                    calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
+        calcCtx.liveStreakConditionsMet = streakConditions
+
+    def _advanceStreaks(self, userEquipped, calcCtx, activeModifier, weekBonus=None):
+        """Post-scoring streak pass: persist each streak card's count and carried peak (and
+        roll Bonsai's growth). Extracted unchanged from _processWeekCardEffects; note it
+        reads the LEAGUE modifier for Ironclad, where the pre-scoring pass reads the user's."""
+        from managers.cardEffects import checkStreakCondition, cardBarThreshold
+        for eq in userEquipped:
+            effectConfig = eq.user_card.card_template.effect_config or {}
+            effectName = effectConfig.get("effectName", "")
+            category = effectConfig.get("category", "")
+
+            if category == "streak":
+                from managers.cardEffects import STREAK_CONFIGS
+                # Bonsai: probabilistic growth instead of auto-increment
+                if effectName == "bonsai":
+                    self._rollCultivationGrowth(eq, effectConfig, calcCtx, weekBonus)
+                    continue
+                # Ironclad modifier: streaks can't reset this week
+                if activeModifier == "ironclad":
+                    conditionMet = True
+                else:
+                    conditionMet = checkStreakCondition(
+                        effectName, calcCtx, eq.user_card.card_template.player_id,
+                        barThreshold=cardBarThreshold(effectConfig),
+                    )
+                cfg = STREAK_CONFIGS.get(effectName, {})
+                isNoReset = cfg.get("noReset", False)
+                isWeekly = cfg.get("isWeekly", False)
+                if conditionMet:
+                    priorCount = eq.streak_count if eq.streak_count is not None else 1
+                    # Streak restart penalty: when condition is
+                    # met again after a break (priorCount==0 but
+                    # peak_output carries from a prior streak),
+                    # halve the carried peak so the new streak
+                    # has to climb back up rather than instantly
+                    # paying the prior peak. Without this, a
+                    # quick on/off cycle on a deep streak (e.g.
+                    # Drought) sustained 500+ FP indefinitely.
+                    if (priorCount == 0
+                            and getattr(eq, 'peak_output', None) is not None
+                            and not isWeekly and not isNoReset):
+                        halved = float(eq.peak_output) * 0.5
+                        primary = effectConfig.get("primary", {})
+                        baseReward = primary.get("baseReward", 0)
+                        if halved <= baseReward:
+                            eq.peak_output = None
+                        else:
+                            eq.peak_output = halved
+                    # On restart from 0, skip the "1 = idle"
+                    # baseline so display (count - 1) reads as 1
+                    # for the first active week.
+                    if priorCount == 0:
+                        eq.streak_count = 2
+                    else:
+                        eq.streak_count = priorCount + 1
+                    # peak_output stays LOCKED during an active
+                    # streak — it represents the carried base
+                    # the streak began at. Only break weeks and
+                    # cold continuing weeks mutate it.
+                    if not isWeekly and not isNoReset:
+                        eq.weeks_since_break = 0
+                elif not isNoReset:
+                    if not isWeekly:
+                        primary = effectConfig.get("primary", {})
+                        baseReward = primary.get("baseReward", 0)
+                        growthPerTick = primary.get("growthPerTick", 0)
+                        rewardType = primary.get("rewardType", "fp")
+                        priorCount = eq.streak_count or 0
+                        currentPeak = eq.peak_output
+                        if currentPeak is not None and currentPeak > baseReward:
+                            carriedBase = currentPeak
+                        else:
+                            carriedBase = baseReward
+                        if priorCount > 0:
+                            # Streak just broke. New peak = the peak the
+                            # streak achieved. Compute this week already
+                            # paid this value; store it so subsequent
+                            # cold weeks decay from here.
+                            newPeak = carriedBase + growthPerTick * (priorCount - 1)
+                            if newPeak > baseReward:
+                                eq.peak_output = newPeak
+                            else:
+                                eq.peak_output = None
+                            eq.weeks_since_break = 0
+                        elif eq.peak_output is not None:
+                            # Continuing cold week — decay one step
+                            # of the streak's own growth amount. For
+                            # mult cards we step down the bonus
+                            # portion (peak − 1) by growthPerTick;
+                            # for FP cards just subtract directly.
+                            # Symmetric to build: a 10-week streak
+                            # decays over ~10 cold weeks, matching
+                            # the same pace as the climb.
+                            if rewardType == "mult":
+                                currentBonus = max(0.0, eq.peak_output - 1)
+                                steppedBonus = max(0.0, currentBonus - growthPerTick)
+                                stepped = 1.0 + steppedBonus
+                            else:
+                                stepped = eq.peak_output - growthPerTick
+                            if stepped <= baseReward:
+                                eq.peak_output = None
+                            else:
+                                eq.peak_output = stepped
+                            eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
+                    eq.streak_count = 0
+                # If noReset=True and condition not met, streak stays unchanged
 
     def _rollCultivationGrowth(self, eq, effectConfig, calcCtx, weekBonus=None):
         """Roll for Cultivation card growth. streak_count tracks growth level."""

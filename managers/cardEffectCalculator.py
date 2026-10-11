@@ -1153,7 +1153,7 @@ def calculateWeekCardBonuses(
     # Pre-scan for streak card synergy (season streaks only — weekly accumulators excluded)
     # A streak is "active" only if its condition is being met THIS week,
     # not merely because streak_count > 0 from a prior week.
-    from managers.cardEffects import STREAK_CONFIGS, checkStreakCondition
+    from managers.cardEffects import STREAK_CONFIGS, checkStreakCondition, cardBarThreshold
     streakCardCount = 0
     activeStreakCount = 0
     for eq in equippedCards:
@@ -1173,7 +1173,8 @@ def calculateWeekCardBonuses(
                 continue
             streakCardCount += 1
             cardPlayerId = eq.user_card.card_template.player_id
-            if checkStreakCondition(effectName, ctx, cardPlayerId):
+            if checkStreakCondition(effectName, ctx, cardPlayerId,
+                                    barThreshold=cardBarThreshold(ec)):
                 activeStreakCount += 1
     ctx.streakCardCount = streakCardCount
     ctx.activeStreakCount = activeStreakCount

@@ -120,14 +120,27 @@ def seasonContext(byWeek, meta):
 def score(cards, week, seasonInfo, seasonsPlayed, extras, user):
     """cards: [(pid, pos, stats, cfg, edition, rating, name, streak)] -> final total.
     `user` is this trial's (balance, pickem row, favorite team) so both arms see one user."""
+    equipped, ctx = buildContext(cards, week, seasonInfo, seasonsPlayed, extras, user)
+    res = calculateWeekCardBonuses(equipped, ctx)
+    mult = aggregateMultFactors(res.multFactors or [])
+    return (ctx.weekRawFP + res.totalBonusFP) * mult
+
+
+def buildContext(cards, week, seasonInfo, seasonsPlayed, extras, user, equipped=None):
+    """The equipped stubs and the card context `score` runs. Pass `equipped` to reuse
+    stubs across weeks (a season replay keeps their streak state on them)."""
     fpg, top10, top1, avg = seasonInfo
     teamOf, q4, _, _, results = extras
     balance, pick, favTeam = user
+    reuse = equipped
     equipped, weekStats, positions = [], {}, {}
     for i, (pid, pos, stats, cfg, ed, rating, name, streak) in enumerate(cards):
-        tpl = _Template(cfg, pid, pos, ed, rating, name)
-        eq = _Equipped(1000 + i, i + 1, _UserCard(2000 + i, tpl))
-        eq.streak_count = streak
+        if reuse is not None:
+            eq = reuse[i]
+        else:
+            tpl = _Template(cfg, pid, pos, ed, rating, name)
+            eq = _Equipped(1000 + i, i + 1, _UserCard(2000 + i, tpl))
+            eq.streak_count = streak
         equipped.append(eq)
         stats = dict(stats)
         stats['q4FantasyPoints'] = q4.get((pid, week), 0)
@@ -155,6 +168,10 @@ def score(cards, week, seasonInfo, seasonsPlayed, extras, user):
     ctx.rosterPlayerTeamIds = {p: teamOf.get((p, week), 0) for p in weekStats}
     ctx._rosterSeasonsPlayed = {p: seasonsPlayed.get(p, 0) for p in weekStats}
     ctx.streakCounts = {e.id: e.streak_count for e in equipped}
+    ctx.streakPeakOutputs = {e.id: float(e.peak_output) for e in equipped
+                             if getattr(e, 'peak_output', None) is not None}
+    ctx.streakWeeksSinceBreak = {e.id: int(getattr(e, 'weeks_since_break', 0) or 0)
+                                 for e in equipped}
     ctx.playerSeasonFPPerGame = fpg
     ctx.top10PerPosition = top10
     ctx.top1PerPosition = top1
@@ -166,9 +183,7 @@ def score(cards, week, seasonInfo, seasonsPlayed, extras, user):
         + (s.get('receiving_stats', {}) or {}).get('rcvTds', 0)
         for s in weekStats.values())
     ctx.isProjection = False
-    res = calculateWeekCardBonuses(equipped, ctx)
-    mult = aggregateMultFactors(res.multFactors or [])
-    return (ctx.weekRawFP + res.totalBonusFP) * mult
+    return equipped, ctx
 
 
 def starOk(pid, pos, meta):

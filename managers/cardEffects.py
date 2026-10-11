@@ -3006,8 +3006,8 @@ def effectPoolFor(edition: str, position: int) -> list:
 # (factor or {position: factor}, payout keys); an FPx key (`...Mult`) scales its DELTA.
 # A card whose cause was a stale input (Altitude's aDOT, Ace Up the Sleeve's yard bar,
 # Slippery's YAC) was fixed at the input instead and is not listed. Factors only CUT: a
-# position already under its band (Mismatch on a TE) is left alone. Streak cards with a
-# carried peak (Bonsai, Metronome) are NOT here: the per-week harness cannot measure them.
+# position already under its band (Mismatch on a TE) is left alone. Streak cards are sized
+# from a season replay instead (entries at the end).
 # Frozen at mint, like every builder value.
 _BAND_TRIM = {
     # Per TD at one rate for every position: a QB scores 2+ TDs in 49% of games, a TE 3%.
@@ -3022,6 +3022,14 @@ _BAND_TRIM = {
     "houdini":       ({2: 0.57}, ("perYardFP", "bonusFP")),
     "crescendo":     ({1: 0.65, 2: 0.79, 3: 0.82, 5: 0.43}, ("baseFP", "bonusFP")),
     "promised_land": ({3: 0.78, 4: 0.63}, ("perTdFP", "bonusFP")),
+    # ── Streak cards, measured over a SEASON (simcheck_streak_season.py, which drives the
+    # real week-end streak code) since a per-week harness cannot price a carried streak.
+    # Season-average FP against ~25 for the prismatic cards already at the band top
+    # replayed the same way (Odometer 24, Houdini 27, Promised Land 21). Before: Bonsai 49,
+    # Metronome 42 (it never resets, so it keeps growing), Snowball Fight 61.
+    "bonsai":        (0.51, ("baseFP", "growthFP")),
+    "metronome":     (0.60, ("baseReward", "growthPerTick")),
+    "snowball_fight": (0.41, ("baseReward", "growthPerTick")),
 }
 
 
@@ -7108,11 +7116,21 @@ def picksWereSubmittedManually(picks) -> bool:
     return not any(getattr(p, 'is_auto', False) for p in picks)
 
 
-def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
+def cardBarThreshold(effectConfig) -> Optional[float]:
+    """The power bar in force for a card: its frozen gate threshold with the live format
+    applied, or None for an ungated card."""
+    thr = ((effectConfig or {}).get("gate") or {}).get("threshold")
+    return effectiveGateThreshold(thr) if thr else None
+
+
+def checkStreakCondition(effectName: str, ctx, cardPlayerId: int,
+                         barThreshold: Optional[float] = None) -> bool:
     """Check if a streak card's condition was met this week.
 
     Called at week end to determine if streak_count should reset.
     Returns True if condition met (streak continues), False if broken.
+    `barThreshold` is the card's own power bar (cardBarThreshold), for conditions that
+    are "this player cleared the bar".
     """
     config = STREAK_CONFIGS.get(effectName)
     if not config:
@@ -7127,11 +7145,14 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return True  # Always met as long as card is equipped
 
     if condition == "player_cleared_bar":
-        # Metronome: the streak grows when the depicted player clears their position
-        # FP bar (the same threshold that gates the effect).
+        # Metronome: the streak grows when the depicted player clears the card's OWN
+        # power bar, the same one that gates its payout.
+        # ⚠️ It read the flat CARD_GATE_FP_THRESHOLDS (the metallic row) and the card's
+        # bar is the PRISMATIC one, two points higher at every position, so a week between
+        # the two grew the streak and paid nothing (fixed 2026-10-07).
         from constants import CARD_GATE_FP_THRESHOLDS
         pos = ctx.rosterPlayerPositions.get(cardPlayerId, 0)
-        thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
+        thr = barThreshold if barThreshold is not None else CARD_GATE_FP_THRESHOLDS.get(pos, 0)
         fp = (ctx.weekPlayerStats.get(cardPlayerId, {}) or {}).get("fantasyPoints", 0) or 0
         return fp >= thr
 
