@@ -1,26 +1,39 @@
 """Per-Core signature equations — used during a Criticality.
 
-Each active Core (Cassian, Pyre, Aris, Halverson) has its own math shape
-that replaces the baseline `(R + ΣF) × (1 + Σ(M−1))` aggregator while
-the Criticality is live. Vera is meta-only and never takes control, so it
-has no equation. The "broken simulation" framing is the point: these
-equations are intentionally uncapped and produce outputs many multiples
-above baseline.
+Each active Core (Cassian, Pyre, Aris, Halverson) has its own equation that
+replaces the baseline `(R + ΣF) × ΣM` aggregator while the Criticality is
+live. Vera is meta-only and never takes control, so it has no equation.
 
 Inputs (same three across all equations):
   R   = rosterFP (sum of fantasy points from the user's drafted players)
   F   = sum of flat-FP contributions from equipped cards
   M   = 1 + Σ(Mᵢ − 1) — the bonus-additive aggregate multiplier (≥ 1.0)
 
+⚠️ EACH CORE AMPLIFIES A DIFFERENT TERM, BY THE SAME K (owner, 2026-10-07):
+  Pyre       FPx            (R + ΣF) × (1 + K·(ΣM − 1))
+  Cassian    card flat FP   (R + K·ΣF) × ΣM
+  Halverson  roster FP      (K·R + ΣF) × ΣM
+  Aris       all three      (∛K·R + ∛K·ΣF) × (1 + ∛K·(ΣM − 1))
+K = CRITICALITY_AMPLIFICATION. A build specialized in a Core's term gains up to K
+times its normal week. Aris is the week for everyone: every build gains between ∛K
+(no FPx) and K^(2/3) (FPx-heavy), 1.6x-2.5x at K=4.
+
+They used to be (R+F)·e^M (Pyre), Γ(M+1) (Aris), M·(M+1) (Cassian) and M² (Halverson),
+which ALL amplified FPx, three of them super-linearly. Reported by a player and
+confirmed on the prod snapshot: Criticality weeks (1-5 a season) supplied 55-99% of a
+top-3 finisher's season total, one Pyre week ran 335x a normal week, and the
+leaderboard reduced to "stack the most FPx and wait for Pyre". Replayed through these
+equations at K=4, seasons 4-8: 13-43%.
+
 The caller is responsible for:
   * Detecting Criticality-active and resolving the controlling Core.
   * Subtracting raw rosterFP from the output when storing the
     card-bonus-only portion (mirrors how the baseline path does it).
+  * Neutralizing the weekly modifier on a Criticality week (`modifierInForce`).
 """
 
 from __future__ import annotations
 
-import math
 from typing import List, Optional, Tuple
 
 
@@ -49,49 +62,46 @@ def applyCoreEquation(
     on-ramp for callers that always invoke this helper regardless of
     Criticality state.
     """
+    from constants import CRITICALITY_AMPLIFICATION as K
     R = float(rosterFP or 0.0)
     F = float(flatFPSum or 0.0)
     M = _bonusAdditiveMultiplier(multFactors)
 
-    if coreKey == 'cassian':
-        out = (R + F) * M * (M + 1.0)
-        eqn = (
-            f"(R + ΣF) × ΣM × (ΣM + 1)  "
-            f"= ({R:.0f} + {F:.0f}) × {M:.2f} × {M + 1.0:.2f}  "
-            f"= {out:.0f}"
-        )
-        return out, eqn
-
     if coreKey == 'pyre':
-        # Cap exponent input so 32-bit math doesn't overflow on extreme stacks.
-        # e^25 ≈ 7.2e10 — already absurd, beyond that just clamp.
-        safeM = min(M, 25.0)
-        out = (R + F) * math.exp(safeM)
+        boosted = 1.0 + K * (M - 1.0)
+        out = (R + F) * boosted
         eqn = (
-            f"(R + ΣF) × e^ΣM  "
-            f"= ({R:.0f} + {F:.0f}) × e^{M:.2f}  "
+            f"(R + ΣF) × (1 + {K:g}·(ΣM − 1))  "
+            f"= ({R:.0f} + {F:.0f}) × {boosted:.2f}  "
             f"= {out:.0f}"
         )
         return out, eqn
 
-    if coreKey == 'aris':
-        # Γ(M+1) blows up past M≈170; cap at 50 so we still get insane numbers
-        # but the math doesn't OverflowError.
-        safeM = min(M, 50.0)
-        gamma = math.gamma(safeM + 1.0)
-        out = (R + F) * gamma + 4.0 * R
+    if coreKey == 'cassian':
+        out = (R + K * F) * M
         eqn = (
-            f"(R + ΣF) × Γ(ΣM + 1) + 4R  "
-            f"= ({R:.0f} + {F:.0f}) × {gamma:.2f} + 4×{R:.0f}  "
+            f"(R + {K:g}·ΣF) × ΣM  "
+            f"= ({R:.0f} + {K:g}×{F:.0f}) × {M:.2f}  "
             f"= {out:.0f}"
         )
         return out, eqn
 
     if coreKey == 'halverson':
-        out = (R + F) * (M ** 2) + 6.0 * R
+        out = (K * R + F) * M
         eqn = (
-            f"(R + ΣF) × ΣM² + 6R  "
-            f"= ({R:.0f} + {F:.0f}) × {M ** 2:.2f} + 6×{R:.0f}  "
+            f"({K:g}·R + ΣF) × ΣM  "
+            f"= ({K:g}×{R:.0f} + {F:.0f}) × {M:.2f}  "
+            f"= {out:.0f}"
+        )
+        return out, eqn
+
+    if coreKey == 'aris':
+        k = K ** (1.0 / 3.0)
+        boosted = 1.0 + k * (M - 1.0)
+        out = k * (R + F) * boosted
+        eqn = (
+            f"∛{K:g}·(R + ΣF) × (1 + ∛{K:g}·(ΣM − 1))  "
+            f"= {k:.2f}×({R:.0f} + {F:.0f}) × {boosted:.2f}  "
             f"= {out:.0f}"
         )
         return out, eqn
@@ -145,12 +155,33 @@ def equationTemplate(coreKey: Optional[str]) -> str:
     Used to render the "current Core's formula" pill in the card breakdown
     UI without needing live numbers.
     """
-    if coreKey == 'cassian':
-        return "(R + ΣF) × ΣM × (ΣM + 1)"
+    from constants import CRITICALITY_AMPLIFICATION as K
     if coreKey == 'pyre':
-        return "(R + ΣF) × e^ΣM"
-    if coreKey == 'aris':
-        return "(R + ΣF) × Γ(ΣM + 1) + 4R"
+        return f"(R + ΣF) × (1 + {K:g}·(ΣM − 1))"
+    if coreKey == 'cassian':
+        return f"(R + {K:g}·ΣF) × ΣM"
     if coreKey == 'halverson':
-        return "(R + ΣF) × ΣM² + 6R"
+        return f"({K:g}·R + ΣF) × ΣM"
+    if coreKey == 'aris':
+        return f"∛{K:g}·(R + ΣF) × (1 + ∛{K:g}·(ΣM − 1))"
     return "(R + ΣF) × ΣM"
+
+
+def modifierInForce(modifier: str, season: int, week: int) -> str:
+    """The weekly modifier that actually applies: 'steady' on a Criticality week.
+
+    ⚠️ A CRITICALITY WEEK RUNS ON THE CORE'S EQUATION ALONE (owner, 2026-10-07). The
+    modifiers used to stack on top of it, which is where the biggest swings came from:
+    Amplify doubles every FPx delta, so Amplify + Pyre produced the 1.47M-point season
+    in season 1, while Grounded zeroed FPx on three Criticality weeks. Every modifier is
+    neutralized, not just those two, so the week reads as one rule. Every place that
+    resolves a week's modifier for scoring must pass it through here."""
+    if not modifier or modifier == 'steady':
+        return modifier
+    try:
+        from managers.anomalyManager import getActiveCriticalityCore
+        if getActiveCriticalityCore(season, week):
+            return 'steady'
+    except Exception:
+        pass
+    return modifier

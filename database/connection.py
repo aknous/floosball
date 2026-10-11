@@ -2065,22 +2065,50 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
     Returns True if `primary` was changed. Add a case when an effect's keys change; a
     key RENAME with the same meaning belongs here too.
     """
-    if effectName == 'honor_roll' and 'baseMult' not in primary:
+    if effectName == 'honor_roll':
+        changed = False
         maxMult = primary.get('maxMult')
-        if isinstance(maxMult, (int, float)) and maxMult > 1.0:
+        if 'baseMult' not in primary and isinstance(maxMult, (int, float)) and maxMult > 1.0:
             from managers.cardEffects import HONOR_ROLL_BASE_SHARE
             primary['baseMult'] = round(1 + (maxMult - 1) * HONOR_ROLL_BASE_SHARE, 2)
-            return True
+            changed = True
+        # The ramp's ceiling became a stored, per-position `fpCeiling` (2026-10-07). A
+        # card minted before it ramps to DOUBLE its bar (the compute's fallback), so that
+        # is the value its text must state; the card keeps paying exactly what it did.
+        threshold = primary.get('fpThreshold')
+        if 'fpCeiling' not in primary and isinstance(threshold, (int, float)) and threshold > 0:
+            primary['fpCeiling'] = int(2 * threshold)
+            changed = True
+        return changed
     # Updraft's detail used to interpolate `gates` directly, which put a raw Python list
     # on the card face: "bonus at each of [299, 391, 483]". `gatesText` is the same
     # numbers written as prose. Derived from what IS stored, so an already-minted card
     # keeps the exact gates it was minted with.
     # Odometer's text names the card's own position's yard gates (2026-09-27). Every card
     # already stores its position as `posLabel`, which is all the gates depend on.
-    if effectName == 'odometer' and 'gatesText' not in primary:
-        from managers.cardEffects import odometerGatesText
-        primary['gatesText'] = odometerGatesText(primary.get('posLabel'))
+    if effectName == 'catalyst' and 'perFpPct' not in primary:
+        # Catalyst enlarges jackpots instead of raising odds (2026-10-07); its params are
+        # fixed by design, so an old card takes the current ones.
+        from managers.cardEffects import (CATALYST_BASELINE_FP, CATALYST_PER_FP_PCT,
+                                          CATALYST_MAX_BOOST)
+        from managers.cardEffects import _POSITION_MEDIAN_FP, _SNAKE_EYES_REF_MEDIAN, POSITION_LABELS
+        pos = {v: k for k, v in POSITION_LABELS.items()}.get(primary.get('posLabel'))
+        cs = _POSITION_MEDIAN_FP.get(pos, _SNAKE_EYES_REF_MEDIAN) / _SNAKE_EYES_REF_MEDIAN
+        perFp = round(CATALYST_PER_FP_PCT / cs, 4)
+        primary.update({"baselineSolo": round(CATALYST_BASELINE_FP * cs, 1), "perFpPct": perFp,
+                        "perFpPctDisplay": round(perFp * 100, 1),
+                        "maxBoost": CATALYST_MAX_BOOST,
+                        "maxBoostDisplay": int(round(CATALYST_MAX_BOOST * 100))})
         return True
+    if effectName == 'odometer':
+        # Payouts became per position (2026-10-07) and are read at scoring time, so every
+        # card states its position's current table, whenever it was minted.
+        from managers.cardEffects import odometerGatesText, odometerPayText
+        want = {'gatesText': odometerGatesText(primary.get('posLabel')),
+                **odometerPayText(primary.get('posLabel'))}
+        changed = any(primary.get(k) != v for k, v in want.items())
+        primary.update(want)
+        return changed
     if effectName == 'updraft' and 'gatesText' not in primary:
         gates = primary.get('gates')
         if isinstance(gates, (list, tuple)) and gates:
@@ -2117,6 +2145,12 @@ def _refreshCardEffectText():
 
     refreshEffects = {
         "odometer", "snake_eyes",
+        # Diamond rework (2026-10-07): Sharpshooter became a precision amplifier, and its
+        # mechanic lives in the scoring pre-pass, so it reaches already-minted cards and
+        # their text must say so. Advantage and Catalyst changed what they do the same way.
+        "sharpshooter", "advantage", "catalyst",
+        # Nose Picker's streak holds at 75%+ hand-made picks (2026-10-07), scoring time.
+        "nose_picker",
         # Trust Fund growth capped at TRUST_FUND_GROWTH_WEEKS_CAP (2026-09-27).
         "trust_fund",
         # FPx delta-notation sweep — existing cards stored 1.x values in

@@ -183,18 +183,21 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         bonus = int(round((primary.get("chanceBonus", 0) or 0) * 100))
         return f"+{bonus}% to chance cards" if active else "Needs chance card"
     if effectName == "catalyst":
-        return "Roster-FP chance boost" if active else "Needs chance card"
+        return "Bigger chance jackpots" if active else "Needs chance card"
     if effectName == "advantage":
-        return "Chance rolls twice" if active else "Needs chance card"
+        return "Rolls again, pays twice on two hits" if active else "Needs chance card"
     if effectName == "conductor":
         boost = primary.get("boostPct", 20)
         return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"
     if effectName == "doubler":
-        return "TDs count 2x for other cards" if active else "Needs another card"
+        return (f"TDs count {primary.get('tdMult', 2.0):g}x for other cards"
+                if active else "Needs another card")
     if effectName == "surveyor":
-        return "Yards count 1.5x for other cards" if active else "Needs another card"
+        return (f"Yards count {primary.get('yardMult', 1.5):g}x for other cards"
+                if active else "Needs another card")
     if effectName == "sharpshooter":
-        return "FGs count 2x for other cards" if active else "Needs another card"
+        return (f"Accuracy stats count {primary.get('fgMult', 2.0):g}x for other cards"
+                if active else "Needs another card")
     return ""
 
 
@@ -614,9 +617,24 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     try:
         modRow = session.query(WeeklyModifier).filter_by(season=season, week=week).first()
         if modRow:
-            activeModifier = modRow.modifier_type or ""
+            # ⚠️ The column is `modifier`. This read `modifier_type`, which does not exist,
+            # so the AttributeError was swallowed and every projection ran as if no
+            # modifier were active (no Frenzy, no Amplify, no Grounded).
+            activeModifier = modRow.modifier or ""
     except Exception:
         pass
+    try:
+        from database.models import UserModifierOverride
+        modOverride = session.query(UserModifierOverride).filter_by(
+            user_id=userId, season=season, week=week
+        ).first()
+        if modOverride:
+            activeModifier = modOverride.override_modifier
+    except Exception:
+        pass
+    # A Criticality week runs on the Core's equation alone: no modifier.
+    from managers.coreEquations import modifierInForce
+    activeModifier = modifierInForce(activeModifier, season, week)
 
     userFloobitsBalance = 0
     try:
