@@ -19,7 +19,7 @@ import re
 
 from constants import (PROSPECT_DEVELOPMENT_WINDOW, CUT_FEE_RATE,
                        REPLACEMENT_RATING, FO_CUT_UPGRADE_MARGIN)
-from managers.frontOfficeBrain import cutFeeFor
+from managers.frontOfficeBrain import cutFeeFor, FrontOfficeBrain
 from managers.seasonManager import SeasonManager
 
 
@@ -185,6 +185,20 @@ class StubBrain:
     def faPickDepth(self, team, faOrder=None):
         return 0
 
+    # The standing/bar layer at neutral: no standing, the bar is its base. The
+    # real weighing is covered in test_starter_standing.py.
+    def starterStanding(self, starter, team=None, coach=None):
+        return 0.0
+
+    roughlyMatchesToday = staticmethod(FrontOfficeBrain.roughlyMatchesToday)
+
+    def moveOnBar(self, coach, base, floor=None):
+        return max(base, floor) if floor is not None else base
+
+    def prospectEdgeOver(self, prospect, starter, team=None, coach=None):
+        return (self.decisionValue(prospect, coach, team=team)
+                - self.decisionValue(starter, coach, team=team))
+
 
 class StubTeam:
     def __init__(self, roster, prospects, name='Slippers'):
@@ -323,41 +337,90 @@ def test_a_club_that_cannot_pay_the_fee_cannot_cut():
 
 
 def test_it_will_not_cut_a_better_player_to_keep_a_prospect():
-    """Losing a prospect is bad; cutting a BETTER player to keep him is worse.
-    The upgrade must clear the same margin a cut-for-upgrade needs anywhere else."""
+    """Losing a prospect is bad; cutting a BETTER player to keep him is worse."""
     prospect = FakeBrainPlayer('Marginal', 74)
     prospect.prospect_seasons = LAST
-    incumbent = FakeBrainPlayer('Starter', 74 - FO_CUT_UPGRADE_MARGIN + 0.5,
-                                termRemaining=3)
+    incumbent = FakeBrainPlayer('Starter', 76, termRemaining=3)
     team = StubTeam({'qb': incumbent, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1},
                     [prospect])
     pm = StubPlayerManager()
     sm = StubSM(StubBrain(replacement=0.0), pm)
     assert sm._promoteProspectsAutonomously(team) == []
     assert pm.released == []
-    print("PASS a marginal prospect does not displace a comparable incumbent")
+    print("PASS a last-window prospect does not displace a better incumbent")
 
 
-def test_a_walk_year_incumbent_is_never_paid_for():
-    """He vacates on his own at season end, so paying to cut him is pure waste —
-    and the fee would be charged for nothing."""
-    prospect = FakeBrainPlayer('Headliner', 88)
+def test_a_last_window_prospect_only_has_to_roughly_match():
+    """owner, 2026-10-10: on his last window the alternative is losing him for
+    nothing, so matching the starter is enough (FO_PROSPECT_LAST_WINDOW_BAR)."""
+    prospect = FakeBrainPlayer('Match', 74)
     prospect.prospect_seasons = LAST
-    incumbent = FakeBrainPlayer('Leaving', 72, termRemaining=1)
+    incumbent = FakeBrainPlayer('Starter', 74, termRemaining=2)
+    incumbent.term = 3
     team = StubTeam({'qb': incumbent, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1},
                     [prospect])
     pm = StubPlayerManager()
     sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert [p['name'] for p in sm._promoteProspectsAutonomously(team)] == ['Match']
+    assert pm.released == [incumbent]
+    print("PASS a last-window prospect who matches the starter is promoted")
+
+
+def test_a_last_window_prospect_can_displace_a_starter_in_his_final_year():
+    """⚠️ "He leaves on his own" means AFTER the coming season, and a final-window
+    prospect is released moments after this pass, so he cannot wait for that slot.
+    Prod season 9: Midnights' Gibson Gnegy was never weighed against Dingers Culpepper
+    (one year left), washed out, and the club drafted a weaker RB for the hole."""
+    prospect = FakeBrainPlayer('Headliner', 88)
+    prospect.prospect_seasons = LAST
+    incumbent = FakeBrainPlayer('FinalYear', 72, termRemaining=1)
+    incumbent.term = 3
+    team = _filledQb(incumbent, prospect)
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    promotions = sm._promoteProspectsAutonomously(team)
+    assert [p['name'] for p in promotions] == ['Headliner']
+    assert team.rosterDict['qb'] is prospect
+    assert pm.released == [incumbent]
+    print("PASS a last-window prospect can displace a starter in his final year")
+
+
+def test_an_earlier_prospect_waits_for_a_starter_in_his_final_year():
+    """An earlier-window prospect is still a prospect next offseason, when the
+    final-year starter's slot opens, so nobody is paid to leave early."""
+    prospect = FakeBrainPlayer('Rising', 88)
+    prospect.prospect_seasons = 0
+    incumbent = FakeBrainPlayer('FinalYear', 72, termRemaining=1)
+    incumbent.term = 3
+    team = _filledQb(incumbent, prospect)
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
     assert sm._promoteProspectsAutonomously(team) == []
     assert sm.charged == []
-    print("PASS a walk-year incumbent is left alone")
+    print("PASS an earlier-window prospect waits for the final-year starter")
 
 
-# ── A prospect who is better TODAY (owner, 2026-10-03) ──────────────────────
+def test_a_one_year_deal_signed_this_offseason_is_still_protected():
+    """A final-window prospect does not lift the signed-this-offseason rule:
+    a one-year deal reads termRemaining == term == 1."""
+    prospect = FakeBrainPlayer('Headliner', 88)
+    prospect.prospect_seasons = LAST
+    incumbent = FakeBrainPlayer('JustSigned', 72, termRemaining=1)
+    incumbent.term = 1
+    team = _filledQb(incumbent, prospect)
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert sm._promoteProspectsAutonomously(team) == []
+    assert pm.released == []
+    print("PASS a one-year deal signed this offseason is not cut")
+
 
 def _filledQb(incumbent, prospect):
     return StubTeam({'qb': incumbent, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1},
                     [prospect])
+
+
+# ── A prospect who is better TODAY (owner, 2026-10-03) ──────────────────────
 
 
 def test_an_early_prospect_who_is_better_today_is_promoted_over_the_starter():

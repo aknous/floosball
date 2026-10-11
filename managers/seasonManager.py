@@ -8363,10 +8363,13 @@ class SeasonManager:
         teamManager = self.serviceContainer.getService('team_manager')
         teams = teamManager.teams if teamManager else []
         pool = list(getattr(self.playerManager, 'freeAgents', None) or [])
+        self.playerManager._faCutBars = {}
         if not teams or not pool:
             self.playerManager._faDraftBoards = boards
             return
         brain = self._foBrainForOffseason()
+        from constants import FO_DRAFT_CUT_UPGRADE_MARGIN
+        cutBars = {}
         for team in teams:
             try:
                 # ⚠️ THE INCUMBENTS ARE PRICED ONTO THE BOARD TOO, so the draft-time
@@ -8376,17 +8379,26 @@ class SeasonManager:
                 # not, so mixing them makes every comparison a unit mismatch. Prospects
                 # were already handled this way; the roster was not, because until now
                 # nothing ever compared a free agent to a filled slot.
+                # The incumbents also carry their `starterStanding` (owner, 2026-10-10):
+                # their board value is read only by the draft's cut-for-upgrade, a
+                # keep-or-replace decision like the re-sign and the promotion.
                 roster = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
                           if p is not None]
+                coach = getattr(team, 'coach', None)
                 boards[team.id] = brain.buildDraftBoard(
-                    team, pool, coach=getattr(team, 'coach', None),
-                    alsoValue=list(getattr(team, 'prospects', None) or []) + roster,
+                    team, pool, coach=coach,
+                    alsoValue=list(getattr(team, 'prospects', None) or []),
+                    incumbents=roster,
                 )
+                # This GM's bar for the draft's cut-for-upgrade, moved by its aggressiveness.
+                cutBars[team.id] = brain.moveOnBar(coach, FO_DRAFT_CUT_UPGRADE_MARGIN,
+                                                   floor=0.0)
             except Exception as e:
                 # A team with no board falls back to true-rating order, which is
                 # the pre-existing behavior — never a missing pick.
                 logger.warning(f"FA board build failed for {getattr(team, 'name', '?')}: {e}")
         self.playerManager._faDraftBoards = boards
+        self.playerManager._faCutBars = cutBars
         # ⚠️ AND WHY ANYONE IS MISSING FROM A BOARD, so a pick can explain itself. See
         # `buildDraftBoard`'s note: a fan watching a five-star go unpicked assumes the club
         # blundered, and the club may simply have been turned down.
@@ -8408,11 +8420,14 @@ class SeasonManager:
     def _isFinalProspectWindow(prospect) -> bool:
         """Is this the last offseason this club can promote him?
 
-        ⚠️ THE OFF-BY-ONE IS THE WHOLE POINT. `_advanceProspectWindow` INCREMENTS
-        first and then releases anyone at or past `PROSPECT_DEVELOPMENT_WINDOW`, and
-        it runs immediately after the promotions pass — so a prospect sitting on
-        WINDOW-1 right now is released the moment this pass ends. Testing `>= WINDOW`
-        here would fire only on a player who has already been let go.
+        ⚠️ THE PROMOTION PASS THAT MATTERS RUNS AT THE FA DRAFT KICKOFF
+        (`_applyFanVotedPromotions`), AFTER `_advanceProspectWindow` (step 3.78) has
+        already incremented every prospect and released anyone at
+        `PROSPECT_DEVELOPMENT_WINDOW`. The step-3.75 pass only promotes with
+        broadcasting off. So at the kickoff a prospect on WINDOW-1 has already been
+        advanced, and the NEXT offseason's step 3.78 releases him before the next
+        kickoff: this is his last chance. (An earlier docstring said this pass ran
+        immediately before the release; in production it runs a full year before it.)
         """
         from constants import PROSPECT_DEVELOPMENT_WINDOW, LAST_WINDOW_PROMOTE_ENABLED
         if not LAST_WINDOW_PROMOTE_ENABLED:
@@ -8420,8 +8435,8 @@ class SeasonManager:
         seasons = int(getattr(prospect, 'prospect_seasons', 0) or 0)
         return seasons >= max(1, PROSPECT_DEVELOPMENT_WINDOW) - 1
 
-    def _cutPlanForProspect(self, team, prospect, brain, coach, prospectValue: float,
-                            requireBetterToday: bool = False):
+    def _cutPlanForProspect(self, team, prospect, brain, coach,
+                            requireBetterToday: bool = False, finalWindow: bool = False):
         """(slot, incumbent to cut) that would make room for this prospect, (slot, None)
         if a slot is already open, or None. DECIDES ONLY; `_executeProspectCut` acts, so
         nobody is cut for a prospect who is not the one finally promoted.
@@ -8429,22 +8444,33 @@ class SeasonManager:
         Gates, each load-bearing:
           1. ⚠️ THE COMPARISON IS AGAINST THE INCUMBENT, NOT A FREE AGENT. The club is
              choosing between two players it can actually have.
-          2. The prospect must beat him by the same margin a cut-for-upgrade needs
-             anywhere else (`FO_CUT_UPGRADE_MARGIN`).
+          2. ⚠️ THE STARTER IS WEIGHED AS A PERSON, NOT A RATING (owner, 2026-10-10):
+             `brain.prospectEdgeOver` puts his standing on his side (a past-peak decline
+             over the commitment, how he and the team played last season), and the bar
+             (`brain.moveOnBar`) moves with the GM's aggressiveness. On a FINAL window
+             the prospect only has to roughly match him: on value
+             (FO_PROSPECT_LAST_WINDOW_BAR) and within half a tier of his rating today
+             (`brain.roughlyMatchesToday`); otherwise he must clear
+             `FO_CUT_UPGRADE_MARGIN`. The incumbent he beats by the most is planned for.
           3. ⚠️ NOBODY SIGNED OR RE-SIGNED THIS OFFSEASON (owner, 2026-10-03: "I generally
              dont want teams signing players and then cutting them in the offseason").
              His contract has not started counting down: `termRemaining == term`.
           4. `requireBetterToday` (owner, 2026-10-03, for a prospect NOT on his final
              season): the prospect must also be rated above him today, so a club only
              cuts for a player who is better now, not merely projected better.
-        A walk-year or retiring incumbent is skipped (he vacates on his own), as is one
+        A retiring incumbent is skipped (he vacates on his own), as is one
         `isCutProtected` (a fan favorite, or a protected prospect).
+          5. ⚠️ AN INCUMBENT IN THE LAST YEAR OF HIS DEAL IS SKIPPED ONLY WHEN THE PROSPECT
+             CAN WAIT (`finalWindow` False). He plays the coming season and his slot opens
+             next offseason, which an earlier-window prospect can wait for. A final-window
+             prospect is released at the next offseason's step 3.78, BEFORE that
+             offseason's promotion pass, so he cannot.
         """
-        from constants import FO_CUT_UPGRADE_MARGIN
-        from managers.playerManager import isCutProtected
+        from constants import FO_CUT_UPGRADE_MARGIN, FO_PROSPECT_LAST_WINDOW_BAR
+        from managers.playerManager import isCutProtected, signedThisOffseason
         posSlots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
         slots = posSlots.get(getattr(getattr(prospect, 'position', None), 'value', 0), [])
-        worstSlot, worstPlayer, worstValue = None, None, None
+        bestSlot, bestPlayer, bestEdge = None, None, None
         for slot in slots:
             incumbent = team.rosterDict.get(slot)
             if incumbent is None:
@@ -8452,22 +8478,26 @@ class SeasonManager:
             if getattr(incumbent, 'willRetire', False):
                 continue
             remaining = getattr(incumbent, 'termRemaining', 0) or 0
-            if remaining <= 1:
+            if remaining <= 1 and not finalWindow:
                 continue
-            term = getattr(incumbent, 'term', None)
-            if term and remaining >= term:
-                continue                    # signed or re-signed this offseason
+            if signedThisOffseason(incumbent):
+                continue
             if isCutProtected(incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
                 continue
             if requireBetterToday and float(getattr(prospect, 'playerRating', 0) or 0) <= \
                     float(getattr(incumbent, 'playerRating', 0) or 0):
                 continue
-            value = brain.decisionValue(incumbent, coach=coach, team=team)
-            if worstValue is None or value < worstValue:
-                worstSlot, worstPlayer, worstValue = slot, incumbent, value
-        if worstPlayer is None or prospectValue - worstValue < FO_CUT_UPGRADE_MARGIN:
+            if finalWindow and not brain.roughlyMatchesToday(prospect, incumbent):
+                continue
+            edge = brain.prospectEdgeOver(prospect, incumbent, team, coach)
+            if bestEdge is None or edge > bestEdge:
+                bestSlot, bestPlayer, bestEdge = slot, incumbent, edge
+        if bestPlayer is None:
             return None
-        return worstSlot, worstPlayer
+        base = FO_PROSPECT_LAST_WINDOW_BAR if finalWindow else FO_CUT_UPGRADE_MARGIN
+        if bestEdge < brain.moveOnBar(coach, base):
+            return None
+        return bestSlot, bestPlayer
 
     def _executeProspectCut(self, team, prospect, slot, incumbent, finalWindow: bool):
         """Cut `incumbent` to promote `prospect` into `slot`, paying the cut fee. Returns
@@ -8493,9 +8523,9 @@ class SeasonManager:
                     f"promote {prospect.name}")
         return slot
 
-    def _cutToMakeRoomForProspect(self, team, prospect, brain, coach, prospectValue: float):
+    def _cutToMakeRoomForProspect(self, team, prospect, brain, coach):
         """Find and execute in one step (the final-window path, kept for its callers)."""
-        plan = self._cutPlanForProspect(team, prospect, brain, coach, prospectValue)
+        plan = self._cutPlanForProspect(team, prospect, brain, coach, finalWindow=True)
         if not plan:
             return None
         slot, incumbent = plan
@@ -8572,14 +8602,18 @@ class SeasonManager:
                         team, prospect.position.value)
                 except Exception:
                     slot = None
-                value = brain.decisionValue(prospect, coach=coach)
+                # ⚠️ WITH `team`: the Scouting Department's vision, this club's own
+                # scouted read of his ceiling, and the room's attitude all depend on it,
+                # and the starter he is weighed against is valued with it. Without it the
+                # two sides of the comparison were read by different GMs.
+                value = brain.decisionValue(prospect, coach=coach, team=team)
                 cutFor = None
                 if not slot and not lastChance:
                     # ⚠️ A PROSPECT WHO IS CLEARLY BETTER TODAY DOES NOT WAIT (owner,
                     # 2026-10-03: "make sure prospects are kept in mind"). The club may cut
                     # a weaker starter for him, decided here and executed only if he is
                     # the one promoted (`_cutPlanForProspect`).
-                    plan = self._cutPlanForProspect(team, prospect, brain, coach, value,
+                    plan = self._cutPlanForProspect(team, prospect, brain, coach,
                                                     requireBetterToday=True)
                     if plan:
                         slot, cutFor = plan
@@ -8592,13 +8626,14 @@ class SeasonManager:
                     # keeps the old behaviour: there is a next year, so leave him down.
                     if not lastChance:
                         continue
-                    plan = self._cutPlanForProspect(team, prospect, brain, coach, value)
+                    plan = self._cutPlanForProspect(team, prospect, brain, coach,
+                                                    finalWindow=True)
                     if not plan:
                         continue
                     slot, cutFor = plan
                 elif not lastChance and cutFor is None:
                     replacement = brain.bestReplacementValue(
-                        prospect, coach=coach, pickDepth=pickDepth)
+                        prospect, coach=coach, pickDepth=pickDepth, team=team)
                     if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
                         continue    # free agency offers better — leave him down
                 # ⚠️ On the LAST window the bar above is skipped entirely. It prices him
@@ -8968,15 +9003,31 @@ class SeasonManager:
             # nobody is ever worth keeping over the market.
             # The club's own replacements: its prospects, and the rookies it will take
             # with a top pick in this draft (`slotOwners`, read once above the loop).
-            internal = [pr for pr in (getattr(team, 'prospects', None) or [])
-                        if getattr(pr, 'is_prospect', False)]
+            # ⚠️ READ AGAINST THE PROSPECT WINDOW, which advances at step 3.78, after
+            # this. A prospect already on WINDOW-1 is released there and can replace
+            # nobody, so he is left out (he used to count, letting a starter walk for a
+            # man about to leave). One on WINDOW-2 is advanced to his LAST chance, at
+            # this offseason's FA draft kickoff, so he is weighed the way that
+            # promotion will weigh him (`lastChance`).
+            from constants import PROSPECT_DEVELOPMENT_WINDOW
+            internal, lastChance = [], set()
+            for pr in (getattr(team, 'prospects', None) or []):
+                if not getattr(pr, 'is_prospect', False):
+                    continue
+                served = int(getattr(pr, 'prospect_seasons', 0) or 0)
+                if served >= PROSPECT_DEVELOPMENT_WINDOW - 1:
+                    continue
+                internal.append(pr)
+                if served == PROSPECT_DEVELOPMENT_WINDOW - 2:
+                    lastChance.add(id(pr))
             try:
                 internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
             except Exception as e:
                 logger.debug(f"expected draftees unavailable for {team.name}: {e}")
             kept = brain.chooseResigns(expiring, limit, coach=coach,
                                        pickDepth=pickDepth, team=team,
-                                       teamsAhead=teamsAhead, internal=internal)
+                                       teamsAhead=teamsAhead, internal=internal,
+                                       lastChance=lastChance)
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds

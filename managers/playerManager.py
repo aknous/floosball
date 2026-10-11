@@ -115,6 +115,22 @@ def fanVerdict(player, sentimentMap=None):
     return None
 
 
+def signedThisOffseason(player) -> bool:
+    """Was this player signed or re-signed in the CURRENT offseason? His contract has not
+    started counting down (`termRemaining == term`; the decrement runs at the top of the
+    offseason, before any signing). OFFSEASON ONLY: in-season every contract signed last
+    offseason reads the same way.
+
+    ⚠️ No signing then cutting in the same offseason (owner, 2026-10-03: "I generally dont
+    want teams signing players and then cutting them in the offseason"). It was enforced
+    only on the prospect cut, so the FA draft's upgrade cut re-signed a player at step 3
+    and released him in the draft: measured on a prod copy, Boston re-signed Rusty Mateo
+    and cut him a few picks later to sign Winslow Jormp."""
+    term = getattr(player, 'term', None) or 0
+    remaining = getattr(player, 'termRemaining', None) or 0
+    return bool(term) and remaining >= term
+
+
 def isCutProtected(player, season) -> bool:
     """May this rostered player NOT be cut? The one predicate every cut path reads.
 
@@ -5758,13 +5774,18 @@ class PlayerManager:
                 # cut, and it is the same rule as the comment above, not a new one.
                 held = [(sl, team.rosterDict.get(sl)) for sl in slots
                         if sl not in filledThisDraft and team.rosterDict.get(sl) is not None
-                        and not isCutProtected(team.rosterDict.get(sl), seasonNumber)]
+                        and not isCutProtected(team.rosterDict.get(sl), seasonNumber)
+                        and not signedThisOffseason(team.rosterDict.get(sl))]
                 held = [(sl, p, board.get(getattr(p, 'id', None))) for sl, p in held]
                 held = [h for h in held if h[2] is not None]
                 if not held:
                     continue
                 sl, incumbent, incVal = min(held, key=lambda h: h[2])
-                if bestVal - incVal >= FO_DRAFT_CUT_UPGRADE_MARGIN:
+                # The incumbent's board value carries his standing (`buildDraftBoard`
+                # incumbents); the bar is this GM's, moved by its aggressiveness.
+                cutBar = (getattr(self, '_faCutBars', None) or {}).get(
+                    getattr(team, 'id', None), FO_DRAFT_CUT_UPGRADE_MARGIN)
+                if bestVal - incVal >= cutBar:
                     out.append((sl, best, 'upgrade'))
             return out
 

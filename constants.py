@@ -3051,6 +3051,46 @@ FO_ATTITUDE_ROOM_SENSITIVITY = 0.02     # per point the room sits away from neut
 FO_ATTITUDE_ROOM_MIN = 0.60             # the best room in the league absorbs this much
 FO_ATTITUDE_ROOM_MAX = 1.40             # the worst compounds it this much
 
+# ---- Starter standing: who the man in the slot is, beyond his rating ----
+# (owner, 2026-10-10). Keeping a starter or replacing him (with a prospect, or by letting
+# him walk at re-sign) is weighed on more than the two values: where the starter is in
+# his career, whether he has been playing to or past his rating, whether the team won
+# with him, and how ready this GM is to move on. Each GM weighs it differently off
+# attributes it already has. `frontOfficeBrain.starterStanding` / `moveOnBar`.
+FO_STANDING_ENABLED = True
+# ⚠️ THE DECISION COMMITS SEVERAL SEASONS, AND THE VALUE ONLY LOOKS AT ONE. A past-peak
+# starter's value is next season's projection (`trueForwardRating`), but keeping him
+# over a prospect (or re-signing him) is a multi-season choice: a promotion contract
+# runs at least the prospect's seasons left, and re-sign terms run 2-5. So his projected
+# decline is extended over the rest of this horizon. A developing starter needs no such
+# term, because his value already credits growth toward his ceiling.
+FO_STANDING_HORIZON_SEASONS = 3
+# Rating points a starter's standing moves for playing a full FO_RESULTS_PERF_SCALE
+# over (or under) his rating last season, at a neutral GM. Sized to about one cut
+# margin: a season of clearly better football than the sheet says is worth roughly
+# what the league already demands of any upgrade.
+FO_RESULTS_WEIGHT = 3.0
+FO_RESULTS_PERF_SCALE = 10.0   # performance-minus-rating points for the full term
+# Team results scale it by up to half again: winning with a starter who played well
+# makes him harder to move, losing with one who played badly makes it time to move on.
+# A good player on a bad team (or a poor one carried by a good team) gets the smaller
+# share of the credit or blame. Win% over .500, full at +-FO_RESULTS_TEAM_SCALE.
+FO_RESULTS_TEAM_SCALE = 0.25
+FO_RESULTS_TEAM_SHARE = 0.5
+# How far a GM's aggressiveness moves the bar for replacing a starter, in value points
+# each way: an aggressive GM bets on the prospect (or the market) on a close call, a
+# conservative one keeps the man he knows. Neutral (80) moves nothing.
+FO_MOVE_ON_SHIFT = 2.0
+# A prospect on his LAST window only has to roughly match the starter (owner,
+# 2026-10-10): the alternative is losing him for nothing. Earlier windows still need
+# FO_CUT_UPGRADE_MARGIN and to be rated higher today.
+FO_PROSPECT_LAST_WINDOW_BAR = 0.0
+# ⚠️ AND HE HAS TO ROUGHLY MATCH HIM TODAY, not only in projection: within half a star
+# tier (tiers are 8 rating points wide). Without it, aging and the prospect's projected
+# growth let a last-window prospect take the job from a clearly better player. Measured
+# on a prod copy: Anaheim cut Mandy Hernder (TE, 90, three years left) for an 82.
+FO_PROSPECT_LAST_WINDOW_TODAY_GAP = 4.0
+
 # ---- Fan sentiment on a DEPARTURE clears a bar; on a CHOICE it tips the order ----
 # ⚠️ THESE ARE DIFFERENT QUESTIONS AND ONE TERM CANNOT SERVE BOTH.
 #
