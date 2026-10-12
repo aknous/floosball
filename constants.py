@@ -1798,6 +1798,51 @@ PLAY_CALL_BASE_ROWS = {
 # (creativity + xFactor) decides whether he tries something, the move's own
 # physical attribute decides whether it works. See Game._resolveRunGates.
 RUN_GATE_MODEL_V2 = _os.environ.get('FLOOS_RUN_GATES') != 'off'
+# ── The goal line squeezes the field (Play._fieldCompression, 2026-10-12) ─────
+# ⚠️ NEAR THE END ZONE THE DEFENSE HAS NO DEPTH TO DEFEND, and the engine had no
+# field-position term, so a run from the 2 resolved like a 2-to-go run at midfield.
+# Measured over 600 games on the live rosters against 2024 NFL play-by-play, TD rate by
+# distance (run / pass): 1 yd 82/70 vs 58/47, 2 yd 62/64 vs 39/49, 3 yd 55/58 vs 37/34,
+# 5 yd 38/46 vs 24/40 — and the two-point try converted 64% against the NFL's 41%,
+# which is what made the Q4 conversion model go for two on most close-game touchdowns.
+# Both tables below are MEASURED from NFL tracking, not fitted to a TD rate.
+GOAL_LINE_COMPRESSION_ENABLED = _os.environ.get('FLOOS_GOAL_LINE') != 'off'
+# Runs: how deep each defensive level stands at this many yards from the end zone,
+# as a fraction of its midfield depth (BDB 2020: 31k handoffs 2017-19, defenders
+# ranked by depth off the line at the handoff; midfield = yards 21-80). The yards a
+# carrier gains before the next level meets him scale by that level's ratio; a run
+# stopped at the line is stopped by the FIRST level, so its gain scales by that one.
+#   second : mean of the 8th/9th-deepest defenders (midfield 3.4 / 4.9 yds)
+#   third  : 10th-deepest (midfield 7.8)
+#   deep   : the deepest man (midfield 15.3)
+# Index = yards to the end zone (index 0 unused); past the end of a tuple the level
+# stands at its full midfield depth.
+GOAL_LINE_DEPTH_RATIO = {
+    # first : the 5th-7th deepest (the front's second row, midfield 0.9 / 1.9 / 2.6)
+    'first':  (1.0, 0.34, 0.44, 0.63, 0.71, 0.89, 0.90),
+    'second': (1.0, 0.40, 0.47, 0.59, 0.66, 0.79, 0.87, 0.90, 0.91, 0.92, 0.96),
+    'third':  (1.0, 0.32, 0.35, 0.41, 0.49, 0.59, 0.68, 0.71, 0.79, 0.85, 0.87,
+               0.90, 0.90, 0.90, 0.90, 0.90, 0.93, 0.93, 0.93, 0.93),
+    'deep':   (1.0, 0.22, 0.28, 0.30, 0.37, 0.44, 0.48, 0.49, 0.56, 0.62, 0.64,
+               0.69, 0.73, 0.76, 0.81, 0.80, 0.85, 0.85, 0.86, 0.87, 0.89,
+               0.94, 0.94, 0.94, 0.94, 0.94, 0.94, 0.94, 0.94, 0.94),
+}
+# Passes: the target's separation from the nearest defender when the ball arrives, as
+# a fraction of midfield (BDB 2021: 16.6k targeted 2018 throws of 1-10 air yards,
+# normalized within air-depth band; medians, buckets pooled for sample size: yte 1-8
+# 0.64, 9-10 0.75, 11-13 0.86, 14-17 0.92, 18+ 1.0). Index = yards to the end zone.
+GOAL_LINE_SEPARATION_RATIO = (1.0, 0.64, 0.64, 0.64, 0.64, 0.64, 0.64, 0.64, 0.64,
+                              0.75, 0.75, 0.86, 0.86, 0.86, 0.92, 0.92, 0.92, 0.92)
+# The bridge between the sim's openness scale and separation in yards: the same 21
+# quantiles (0th..100th by 5) of the TARGETED receiver on a short throw at midfield,
+# sim openness (600-game harness, 2026-10-12) against NFL separation at arrival
+# (BDB 2021, air 1-5, yards 21-80). A goal-line receiver's openness is mapped to yards,
+# shrunk by the ratio above, and mapped back. ⚠️ Re-measure the sim side if the
+# openness model moves.
+OPENNESS_QUANTILES_SIM = (0.0, 31.0, 38.0, 43.0, 47.0, 50.0, 53.0, 56.0, 59.0, 62.0, 64.0,
+                          67.0, 69.0, 72.0, 75.0, 78.0, 82.0, 86.0, 91.0, 98.0, 100.0)
+SEPARATION_QUANTILES_NFL = (0.10, 0.72, 1.01, 1.29, 1.61, 1.88, 2.14, 2.44, 2.73, 3.01, 3.31,
+                            3.63, 4.02, 4.39, 4.85, 5.39, 6.02, 6.78, 7.77, 9.47, 23.21)
 RUN_GAP_OPEN = 74          # gap quality at/above this: clean release, no tackle attempt
 RUN_GAP_PLUGGED = 38       # below this the gap is closed and the defender has the edge
 # Winning the contact AT THE LINE is common -- it is "did I get past the front",

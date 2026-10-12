@@ -18080,11 +18080,18 @@ class Play():
         attempts = 0
         firstContactYards = None
         moves = []
+        # The yards before each level arrives shrink near the end zone, where the
+        # defense has no depth to stand in (`_fieldCompression`). 1.0 elsewhere.
+        squeeze1 = self._fieldCompression('first')
+        squeeze2 = self._fieldCompression('second')
+        squeeze3 = self._fieldCompression('third')
+        squeezeDeep = self._fieldCompression('deep')
 
         # ── GATE 1: the line ────────────────────────────────────────────────
         if gapQuality >= RUN_GAP_OPEN:
             # Wide open — nobody to beat. Straight through at full speed.
-            self.yardage = max(2, min(7, _rnd(np.random.normal(3.25, 1.0))))
+            # ...as far as the second level, which the goal line pulls up toward the line.
+            self.yardage = _rnd(max(2, min(7, np.random.normal(3.25, 1.0))) * squeeze2)
         else:
             plugged = gapQuality < RUN_GAP_PLUGGED
             base = RUN_CONTACT_PLUGGED if plugged else RUN_CONTACT_BASE
@@ -18097,14 +18104,17 @@ class Play():
                 moves.append(mv)
             if not broke:
                 self.tackledBy = tackler
-                self.yardage = (max(-3, min(2, _rnd(np.random.normal(0.2, 1.2)))) if plugged
-                                else max(-2, min(3, _rnd(np.random.normal(1.1, 1.3)))))
+                # Stopped by the front. A loss is a loss anywhere; a gain is how far the
+                # front's back row stands off the ball, which the goal line pulls in.
+                _stop = (max(-3, min(2, np.random.normal(0.2, 1.2))) if plugged
+                         else max(-2, min(3, np.random.normal(1.1, 1.3))))
+                self.yardage = _rnd(_stop * squeeze1 if _stop > 0 else _stop)
                 return {'level': 1, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
                         'state': state, 'moves': moves,
                         'firstContactYards': firstContactYards}
             lineWins += 1   # got through the front — NOT a broken tackle
             state = 'fought' if plugged else 'contacted'
-            self.yardage = max(1, min(7, _rnd(np.random.normal(3.05, 1.1))))
+            self.yardage = _rnd(max(1, min(7, np.random.normal(3.05, 1.1))) * squeeze2)
 
         # ── GATE 2: second level ────────────────────────────────────────────
         # A blitzing linebacker is out of the run fit, which makes a clean second
@@ -18129,7 +18139,7 @@ class Play():
                     broke = False
                 if not broke:
                     self.tackledBy = tackler
-                    self.yardage += max(1, min(5, _rnd(np.random.normal(2.4, 1.2))))
+                    self.yardage += _rnd(max(1, min(5, np.random.normal(2.4, 1.2))) * squeeze3)
                     return {'level': 2, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
                             'state': state, 'moves': moves,
                             'firstContactYards': firstContactYards}
@@ -18137,9 +18147,9 @@ class Play():
                 state = 'contacted'
                 # Broke it, but he is not running clean — a smaller gain than the
                 # back who came through the second level untouched.
-                self.yardage += max(2, min(9, _rnd(np.random.normal(3.9, 1.6))))
+                self.yardage += _rnd(max(2, min(9, np.random.normal(3.9, 1.6))) * squeeze3)
             else:
-                self.yardage += max(4, min(12, _rnd(np.random.normal(6.7, 2.0))))
+                self.yardage += _rnd(max(4, min(12, np.random.normal(6.7, 2.0))) * squeeze3)
 
         # ── GATE 3: open field ──────────────────────────────────────────────
         tackler = self._levelDefender(3, gapType)
@@ -18158,7 +18168,7 @@ class Play():
                     moves.append(mv)
             if not broke:
                 self.tackledBy = tackler
-                self.yardage += max(4, min(16, _rnd(np.random.normal(7.6, 3.0))))
+                self.yardage += _rnd(max(4, min(16, np.random.normal(7.6, 3.0))) * squeezeDeep)
                 return {'level': 3, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
                         'state': state, 'moves': moves,
                         'firstContactYards': firstContactYards}
@@ -18167,6 +18177,50 @@ class Play():
         self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
         return {'level': 4, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins, 'state': state,
                 'moves': moves, 'firstContactYards': firstContactYards}
+
+    def _fieldCompression(self, level: str) -> float:
+        """How deep a defensive level stands at this snap's distance from the end zone,
+        as a fraction of where it stands at midfield (`GOAL_LINE_DEPTH_RATIO`, measured
+        from NFL tracking). 1.0 away from the goal line or with the flag off.
+
+        ⚠️ THE END ZONE IS TEN YARDS DEEP AND THE DEFENSE CANNOT STAND BEHIND IT. On the
+        2, the deepest defender is 4 yards off the line instead of 15, and the second
+        level is on the goal line rather than 3-5 yards downfield, so a back who gets
+        through the front meets the next man almost at once. Without this a run from
+        the 2 resolved like a 2-to-go run at midfield and scored 62% against 39%."""
+        from constants import GOAL_LINE_COMPRESSION_ENABLED, GOAL_LINE_DEPTH_RATIO
+        if not GOAL_LINE_COMPRESSION_ENABLED:
+            return 1.0
+        table = GOAL_LINE_DEPTH_RATIO[level]
+        yte = int(round(self.yardsToEndzone))
+        return table[yte] if 1 <= yte < len(table) else 1.0
+
+    def _compressOpenness(self, openness: float) -> float:
+        """A receiver's openness after the goal line takes its share of his space.
+
+        Openness is the sim's own 0-100 scale, so the measured change (separation at
+        the catch shrinks to 0.64 of midfield inside the 8, `GOAL_LINE_SEPARATION_RATIO`)
+        is applied in YARDS: map openness to separation through the matched quantile
+        tables, shrink it, map it back. A wide-open man stays more open than a covered
+        one; everyone loses the space the end line takes away.
+
+        ⚠️ IT REACHES THE QUARTERBACK'S READ, UNLIKE `_depthClosing`. That closing
+        happens while the ball is in the air, after the read; these defenders are
+        standing in the end zone at the snap, so the QB sees them."""
+        from constants import (GOAL_LINE_COMPRESSION_ENABLED, GOAL_LINE_SEPARATION_RATIO,
+                               OPENNESS_QUANTILES_SIM, SEPARATION_QUANTILES_NFL)
+        if not GOAL_LINE_COMPRESSION_ENABLED:
+            return openness
+        yte = int(round(self.yardsToEndzone))
+        if not 1 <= yte < len(GOAL_LINE_SEPARATION_RATIO):
+            return openness
+        ratio = GOAL_LINE_SEPARATION_RATIO[yte]
+        if ratio >= 1.0:
+            return openness
+        qs = np.linspace(0.0, 1.0, len(OPENNESS_QUANTILES_SIM))
+        sep = np.interp(np.interp(openness, OPENNESS_QUANTILES_SIM, qs), qs, SEPARATION_QUANTILES_NFL)
+        q = np.interp(sep * ratio, SEPARATION_QUANTILES_NFL, qs)
+        return float(np.interp(q, qs, OPENNESS_QUANTILES_SIM))
 
     def _runnerMove(self, carrier, tackler):
         """A carrier about to be brought down tries to beat the tackler.
@@ -18464,8 +18518,8 @@ class Play():
         stdDev = max(10, 25 - (effectiveRouteRunning / 10))
 
         # Sample from Gaussian and clamp to 0-100
-        openness = np.random.normal(meanOpenness, stdDev)
-        return max(0, min(100, openness)), round(effectiveRouteRunning)
+        openness = max(0, min(100, np.random.normal(meanOpenness, stdDev)))
+        return self._compressOpenness(openness), round(effectiveRouteRunning)
     
     def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False, aggression: float = 0.0):
         """
