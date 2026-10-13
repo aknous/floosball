@@ -49,7 +49,8 @@ from constants import (PASS_CONTACT_CEILING, PASS_CONTACT_CENTER,        # noqa:
                        PASS_SECURE_HANDS_SLOPE, GOAL_LINE_CONTEST_MID_YARDS,
                        GOAL_LINE_CATCH_CEILING_RATIO, OPENNESS_QUANTILES_SIM_BY_DEPTH,
                        ARRIVAL_SEPARATION_NFL_BY_DEPTH,
-                       YAC_THROW_MULT, PASS_DEPTH_MEANS)
+                       YAC_THROW_MULT, PASS_DEPTH_MEANS, INT_COVER_MAX, INT_HELP_MAX,
+                       INT_HELP_AIR_SCALE, INT_HELP_CLEAR_YARDS, INT_HELP_CLEAR_WIDTH)
 
 
 def _contact(tq):
@@ -174,6 +175,38 @@ def test_theDepthTiersStayOrdered():
     0.682 / 0.454), and real football drops fastest in the first rung."""
     vals = [PASS_TYPE_DIFFICULTY[t] for t in ('short', 'medium', 'long', 'deep')]
     assert vals == sorted(vals, reverse=True), f'difficulty is not falling with depth: {vals}'
+
+
+def _pick(sep, air):
+    cover = INT_COVER_MAX * _contest(sep)
+    help_ = INT_HELP_MAX * (1 - math.exp(-air / INT_HELP_AIR_SCALE)) \
+        / (1 + math.exp((sep - INT_HELP_CLEAR_YARDS) / INT_HELP_CLEAR_WIDTH))
+    return 1 - (1 - cover) * (1 - help_)
+
+
+def test_aShortPickNeedsTheCoveringDefender():
+    """NFL short throws: 4.8% picked under half a yard, 0.3% past five."""
+    assert _pick(0.25, 3) > 5 * _pick(5.5, 3)
+
+
+def test_aDownfieldPickBarelyCaresHowOpenTheReceiverIs():
+    """Long throws pick ~4-6% anywhere from 0.5 to 5 yards of separation: a help defender
+    gets under a ball that hangs. The old model took an open downfield receiver to ~0."""
+    assert _pick(4.0, 17) > 0.4 * _pick(0.75, 17), (_pick(4.0, 17), _pick(0.75, 17))
+    assert _pick(4.0, 27) > _pick(4.0, 17) > _pick(4.0, 3)
+
+
+def test_aReceiverClearOfEveryoneIsRarelyPicked():
+    assert _pick(9.0, 27) < 0.3 * _pick(2.0, 27)
+
+
+def test_theOutcomeRollIsContinuous():
+    """An integer 1-100 roll fires `roll <= 2.7` 2% of the time: every pick chance lost
+    its fractional point and the league rate read ~60% of the model's."""
+    import re, os
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'floosball_game.py')).read()
+    m = re.search(r'outcomeRoll = (.*)', src)
+    assert m and 'randint' not in m.group(1), m.group(1) if m else 'no outcomeRoll'
 
 
 if __name__ == '__main__':

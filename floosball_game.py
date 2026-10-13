@@ -49,8 +49,7 @@ from constants import (
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
-    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
-    INT_OPEN_DECAY, INT_THROW_DECAY, DEAD_BALL_ADMIN_SECONDS,
+    INT_DESPERATION_DAMPEN, INT_THROW_DECAY, DEAD_BALL_ADMIN_SECONDS,
     LEAGUE_COVERAGE_BASELINE, PASS_CONTEST_MID_YARDS, PASS_CONTEST_WIDTH_YARDS, PASS_COVERAGE_BASELINE_SLOPE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
@@ -924,22 +923,6 @@ def _opennessToSeparation(openness: float, depth: str = 'short') -> float:
     nflQ = ARRIVAL_SEPARATION_NFL_BY_DEPTH.get(depth, ARRIVAL_SEPARATION_NFL_BY_DEPTH['short'])
     qs = np.linspace(0.0, 1.0, len(simQ))
     return float(np.interp(np.interp(openness, simQ, qs), qs, nflQ))
-
-
-def _depthClosing(passType) -> float:
-    """Separation a defender takes back while the ball is in the air, in openness points.
-
-    ONE definition, because it is subtracted in `calculateReceiverOpenness` (the catch is
-    contested at the arrival gap) and added back in `selectPassTarget` (the QB reads the
-    break, before any of it happens). Two copies would drift and the QB would silently
-    become clairvoyant, or blind, about the closing. Zero at the short tier and for any
-    route with no depth (a screen, a checkdown with no PassType).
-    """
-    from constants import PASS_DEPTH_MEANS as _PDM, PASS_DEPTH_SEPARATION_K as _K
-    name = getattr(passType, 'name', None)
-    if name not in _PDM:
-        return 0.0
-    return _K * max(0.0, _PDM[name] - _PDM['short'])
 
 
 def _rnd(value) -> int:
@@ -18234,9 +18217,8 @@ class Play():
         tables, shrink it, map it back. A wide-open man stays more open than a covered
         one; everyone loses the space the end line takes away.
 
-        ⚠️ IT REACHES THE QUARTERBACK'S READ, UNLIKE `_depthClosing`. That closing
-        happens while the ball is in the air, after the read; these defenders are
-        standing in the end zone at the snap, so the QB sees them."""
+        ⚠️ IT REACHES THE QUARTERBACK'S READ: these defenders are standing in the end
+        zone at the snap, so the QB sees them."""
         from constants import (GOAL_LINE_COMPRESSION_ENABLED, GOAL_LINE_SEPARATION_RATIO,
                                OPENNESS_QUANTILES_SIM, SEPARATION_QUANTILES_NFL)
         if not GOAL_LINE_COMPRESSION_ENABLED:
@@ -18507,13 +18489,12 @@ class Play():
         defensive coverage intensity, receiver mental state, and natural variance.
         Disciplined receivers are more consistent; frustrated or pressured ones slip.
 
-        ⚠️ THIS IS SEPARATION AT THE BREAK, NOT AT THE CATCH, and it carries no depth term
-        on purpose. The defender closes while the ball is in the air, which happens AFTER
-        the QB has read the field — so that decay belongs to the contest, and is applied
-        once in `calculateCatchProbability` via `_depthClosing`. Subtracting it here
-        instead makes the quarterback clairvoyant about a defender who has not closed yet:
-        measured, deep retention fell 72% -> 53%, undoing what PASS_CALLED_DEPTH_READ_BONUS
-        exists to fix. Reading this value is reading what the QB sees.
+        ⚠️ IT CARRIES NO DEPTH TERM on purpose: it reads "how open for his route", and the
+        contest maps it to yards through per-depth tables (`_opennessToSeparation`), so a
+        deeper route reads the same openness as fewer yards. A depth penalty here instead
+        reaches the quarterback's read: measured, deep retention fell 72% -> 53%, undoing
+        what PASS_CALLED_DEPTH_READ_BONUS exists to fix. Reading this value is reading what
+        the QB sees.
         """
         baseRouteRunning = receiver.gameAttributes.routeRunning
 
@@ -18758,19 +18739,6 @@ class Play():
         actually slow mature offenses, instead of being zeroed out whenever the
         receiver is open.
         """
-        # ⚠️ THE CATCH IS CONTESTED AT THE ARRIVAL GAP, NOT THE GAP AT THE BREAK. A
-        # defender closes for as long as the ball is in the air and flight time scales
-        # with air yards, so the separation a receiver had when the QB decided is not the
-        # separation he has when it gets there. `calculateReceiverOpenness` deliberately
-        # carries no depth term (that is the read's view, taken before any of this), so
-        # the decay is applied HERE, once, to both openness inputs — the completion side
-        # (the catch-point contest) and the pick side (`openGap`,
-        # `proximity`) must contest the same gap or they describe different plays.
-        # ⚠️ Applying it in `calculateReceiverOpenness` instead was tried and reverted: it
-        # reaches the QB's read through `selectPassTarget` and took deep retention 72% ->
-        # 53%. Adding it back for the read was worse — it couples every caller to having
-        # come through that one function, and a hand-built target list then reads as
-        # wildly open. One subtraction, at the contest.
         # ⚠️ THE CATCH IS CONTESTED AT THE REAL GAP, NOT THE ONE THE QB SAW. `openness`
         # is the PERCEIVED value: vision error plus the called-depth, awakened and
         # no-huddle-TE read bonuses, each of which is documented as perception only ("the
@@ -18778,11 +18746,11 @@ class Play():
         # read it anyway, and the QB throws to the HIGHEST perceived openness, so a
         # blanketed receiver who gets the ball was usually chosen because the noise made
         # him look open, and was then scored as if he were. The defender is where he is.
+        # Both the catch and the pick are contested at the ACTUAL separation in yards, read
+        # through the per-depth tables (`_opennessToSeparation`): the tables are NFL
+        # separation AT ARRIVAL, so the little a defender closes in the air (0.3-0.8 yd at
+        # every depth) is already in them and nothing is subtracted here.
         _rawActual = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
-        _closing = _depthClosing(passType)
-        receiverOpenness = max(0.0, receiverOpenness - _closing)
-        if receiverActualOpenness is not None:
-            receiverActualOpenness = max(0.0, receiverActualOpenness - _closing)
 
         adjustedHands = receiverHands + receiverPressureMod
 
@@ -18841,12 +18809,10 @@ class Play():
         # cannot reach the ball (BDB 2021, every depth). So the contest is a logistic in
         # YARDS of separation at arrival (openness mapped through the matched quantile
         # tables), one shape fitted across all four depths. The depth ladder is gone: the
-        # arrival gap already carries the closing on a longer throw (`_depthClosing`), so a
-        # ladder on top charged depth twice — the error its own comments warned about.
+        # per-depth tables already read the same openness as fewer yards on a deeper route,
+        # so a ladder on top charged depth twice — the error its own comments warned about.
         # What depth DOES change is how well a defender in reach plays the ball: a ball
         # that hangs gives him time to find it (`PASS_BREAKUP_PER_AIR_YARD`).
-        # The per-depth table already carries the closing in the air, so it reads the raw
-        # (pre-`_depthClosing`) openness; the pick side keeps the openness-point closing.
         _depthName = 'deep' if passType is PassType.hailMary else getattr(passType, 'name', 'short')
         sepYards = _opennessToSeparation(_rawActual, _depthName)
         from constants import GOAL_LINE_CONTEST_MID_YARDS, GOAL_LINE_CONTEST_MAX_YTE, GOAL_LINE_COMPRESSION_ENABLED
@@ -18874,70 +18840,38 @@ class Play():
         if passType is PassType.hailMary:
             catchProb *= HAIL_MARY_COMPLETION_SCALE
 
-        # INT probability — three independent paths, any of which can pick a
-        # pass (they don't have to co-occur the way the old single-gate model
-        # required):
-        #   1. Bad read — QB throws into coverage. Scales with how covered the
-        #      receiver ACTUALLY is (not how open the QB thought they were), so
-        #      low-vision QBs who target covered receivers get punished here.
-        #   2. Bad throw — an errant ball sails into traffic. The trigger is
-        #      throw quality (independent of the read), but a defender still has
-        #      to be near the target to capitalize: a bad throw to a wide-open
-        #      receiver falls incomplete (and reach may still bail it out), it
-        #      doesn't get picked out of empty space.
-        #   3. Defender's play — an above-average DB jumps a contested throw on
-        #      his own, even when the read and throw were fine.
-        # Combined as independent risks (probabilistic OR) so they stack but
-        # stay bounded. No per-tier multiplier: deep throws already pick more
-        # because their throw quality runs lower.
-        intOpenness = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
-        cov = defensePassCoverage
-        # Soft-cap the coverage factor around an 80 baseline (half-slope) instead of reading absolute
-        # coverage (the old cov/100). An evolved league's elevated coverage (mean ~83 vs a young league's
-        # ~75) otherwise compounds the pick rate every season; centering on 80 keeps the INT contribution
-        # league-relative so the rate holds as attributes climb. Feeds pBadRead + pBadThrow below.
-        covFactor = 0.80 + (cov - 80) / 100 * 0.5
-        # ⚠️ THESE WERE HARD KNEES SITTING IN THE MIDDLE OF THEIR OWN DISTRIBUTIONS. They
-        # read `max(0, 50 - openness)/50` and `max(0, 55 - throwQuality)/55`, so risk
-        # switched off COMPLETELY above those points — and the thrown population lives
-        # above them. Measured: the ball goes to the most open man 88% of the time at a
-        # mean openness of 65.4, so the openness gate opened on 23% of short and 25% of
-        # medium throws and the throw gate on 2% and 8%. Interceptions came out
-        # 0.7 / 0.8 / 2.1 / 6.1 by tier against the NFL's 1.2 / 2.5 / 4.2 / 5.5 — nearly
-        # flat below the deep tier, because for three throws in four the model had already
-        # decided a pick was impossible.
-        # Continuous decay instead: risk falls smoothly with separation and with placement
-        # and never reaches zero, because no receiver is so open and no ball so perfectly
-        # placed that a defender cannot make a play on it. The decay constants are set so
-        # a BLANKETED receiver keeps roughly the risk he had before — this lengthens the
-        # tail, it does not re-level the floor.
-        openGap = math.exp(-max(0.0, intOpenness) / INT_OPEN_DECAY)      # ~0 open … 1 blanketed
-        throwGap = math.exp(-max(0.0, throwQuality) / INT_THROW_DECAY)   # ~0 sharp … 1 errant
-        # Proximity: how reachable the ball is for a defender. Full effect when
-        # the receiver is blanketed, fades toward zero once he's wide open
-        # (≥75). The floor is tier-dependent: a short throw can be genuinely
-        # uncontested, but a deep ball always has a safety in the area, so even
-        # an "open" deep receiver leaves a pickable window. This restores the
-        # deep > short INT gradient without a blanket per-tier multiplier.
-        proximityFloor = {
-            PassType.short:    0.00,
-            PassType.medium:   0.05,
-            PassType.long:     0.20,
-            PassType.deep:     0.35,
-            PassType.hailMary: 0.50,
-        }.get(passType, 0.10) if passType is not None else 0.0
-        proximity = max(proximityFloor, min(1.0, (75 - intOpenness) / 55))
-
-        pBadRead = openGap * covFactor * INT_BAD_READ_K
-        pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
-        # DB-jumps-the-throw path — the worst attribute over-scaler. Anchored on
-        # LEAGUE_COVERAGE_BASELINE (80, was a fixed 72) so a league-average defender
-        # contributes ~0 here every season and only above-baseline coverage jumps
-        # the throw — keeps an aging league's rising coverage from compounding this
-        # term in the 80-92 band where evolved DBs live.
-        pDefPlay = max(0.0, (cov - LEAGUE_COVERAGE_BASELINE) / 50) * openGap * INT_DEF_PLAY_K
-
-        intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
+        # INT probability — a defender in reach of the ball catches it. Two ways to be in
+        # reach, measured on NFL tracking (BDB 2021, see INT_COVER_MAX): the COVERING
+        # defender, by the same reach logistic as a breakup (a pick and a breakup are two
+        # endings of one event), and a HELP defender getting under a ball that hangs, which
+        # grows with flight time and is independent of the covering defender until the
+        # receiver is clear of everyone.
+        # ⚠️ THE OLD MODEL HAD THE WRONG SHAPE, not the wrong level. It read openness less a
+        # per-air-yard closing through three tuned paths, so a blanketed short receiver
+        # picked 10.6% (NFL 4.8%) and an open medium one never (NFL 1.8% at 3+ yards).
+        # Downfield the NFL pick rate is nearly flat in separation — the covering defender
+        # is rarely the one who catches it.
+        # Read at the ACTUAL separation: a QB who misreads coverage throws to a receiver
+        # who is really blanketed, and pays here.
+        from constants import (INT_COVER_MAX, INT_HELP_MAX, INT_HELP_AIR_SCALE, INT_HELP_CLEAR_YARDS,
+                               INT_HELP_CLEAR_WIDTH, INT_PLACEMENT_REF, INT_PLACEMENT_REF_DEFAULT,
+                               INT_COVERAGE_SPAN, PASS_TYPE_DIFFICULTY)
+        pCover = INT_COVER_MAX * contest
+        pHelp = INT_HELP_MAX * (1.0 - math.exp(-_air / INT_HELP_AIR_SCALE)) \
+            / (1.0 + math.exp((sepYards - INT_HELP_CLEAR_YARDS) / INT_HELP_CLEAR_WIDTH))
+        # Modifiers redistribute the measured rate between players; at league average both
+        # are 1. Placement is read FOR A THROW OF THIS KIND (as the YAC multiplier reads it),
+        # centred at INT_PLACEMENT_REF so the league's average throw leaves the rate alone.
+        # The same difficulty `calculateThrowQuality` applied (0.85 for a throw with no tier).
+        _difficulty = PASS_TYPE_DIFFICULTY.get(getattr(passType, 'name', None), 0.85) or 1.0
+        _ref = INT_PLACEMENT_REF.get(_depthName, INT_PLACEMENT_REF_DEFAULT) if passType is not None \
+            else INT_PLACEMENT_REF_DEFAULT
+        throwMult = math.exp((_ref - throwQuality / _difficulty) / INT_THROW_DECAY)
+        # Coverage at half-slope around the baseline, so an evolved league's rising
+        # coverage does not compound the pick rate every season.
+        covFactor = 1.0 + (defensePassCoverage - LEAGUE_COVERAGE_BASELINE) / INT_COVERAGE_SPAN
+        intFrac = 1 - (1 - min(0.9, pCover * throwMult * covFactor)) \
+            * (1 - min(0.9, pHelp * throwMult * covFactor))
         intProb = intFrac * 100
 
         # Drop probability — receiver gets hands on it but doesn't secure
@@ -19693,8 +19627,12 @@ class Play():
                 # and because the next outcome added would otherwise have to remember.
                 self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
 
-                # Roll for outcome
-                outcomeRoll = batched_randint(1, 100)
+                # Roll for outcome. ⚠️ CONTINUOUS, NOT `randint(1, 100)`: the probabilities are
+                # percents with decimals, and an integer roll fires `roll <= 2.7` only 2% of
+                # the time, so every interception chance lost its fractional point (the league
+                # pick rate read ~60% of what the model said) and the lost share fell through
+                # to incompletions. The same truncation `_rnd` exists to stop on yardage.
+                outcomeRoll = batched_random() * 100.0
 
                 # ── Record catch probability insights ──
                 self.insights['pass']['contactProbability'] = round(catchProbs['contactProb'])
@@ -19702,7 +19640,7 @@ class Play():
                 self.insights['pass']['catchProbability'] = round(catchProbs['catchProb'])
                 self.insights['pass']['intProbability'] = round(catchProbs['intProb'])
                 self.insights['pass']['dropProbability'] = round(catchProbs['dropProb'])
-                self.insights['pass']['outcomeRoll'] = outcomeRoll
+                self.insights['pass']['outcomeRoll'] = round(outcomeRoll, 1)
 
                 # Check for interception first (bad throw to covered receiver)
                 if outcomeRoll <= catchProbs['intProb']:
