@@ -181,7 +181,7 @@ FG_MIN_ATTEMPT_PROB = 0.20      # Coaches attempt FG if estimated make probabili
 YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 
-# Interception model — three independent pick paths in calculateCatchProbability.
+# Interception model (calculateCatchProbability).
 # ⚠️ AN INTERCEPTION IS A DEFENDER IN REACH OF THE BALL, AND THERE ARE TWO WAYS TO GET THERE
 # (Play.calculateCatchProbability, 2026-10-12, NFL Big Data Bowl 2021, 16,608 targeted
 # throws outside the 10). The old model read openness less a per-air-yard closing through
