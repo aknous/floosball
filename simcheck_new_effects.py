@@ -149,8 +149,8 @@ def out(b):
 
 def report(title, res, ctx):
     print(f"\n{'='*74}\n{title}\n{'='*74}")
-    print(f" first-pass gated cards: {getattr(ctx,'_firstPassGatedCount',0)} present, "
-          f"{getattr(ctx,'_firstPassGatedOn',0)} cleared their bar")
+    print(f" gated cards: {getattr(ctx,'_fullHouseGatedCount',0)} present, "
+          f"{getattr(ctx,'_fullHouseGatedOn',0)} cleared their bar")
     print(f" {'slot':5} {'effect':12} {'player':22} {'wkFP':>5}  {'result':>16}")
     for b in res.cardBreakdowns:
         fp = round((ctx.weekPlayerStats.get(b.playerId, {}) or {}).get('fantasyPoints', 0) or 0, 1)

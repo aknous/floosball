@@ -458,10 +458,10 @@ _SECOND_PASS_EFFECTS = frozenset({
     "high_roller",
     "fortitude",
     "charmed",  # FP per chance card trigger this week
-    # Full House (Diamond): fires only if EVERY first-pass card cleared its power
-    # bar this week, so it must run after every first-pass gate is resolved. It
-    # reads the snapshot taken right after the first pass (ctx._firstPassGatedCount
-    # / _firstPassGatedOn), not per-card breakdowns.
+    # Full House (Diamond): fires only if EVERY gated card in the lineup cleared its
+    # power bar this week. It reads the snapshot taken right after the first pass
+    # (ctx._fullHouseGatedCount / _fullHouseGatedOn / _fullHouseGateProduct), which
+    # covers first- and second-pass cards alike.
     "full_roster",
 })
 
@@ -496,8 +496,8 @@ def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
     ec = template.effect_config or {}
     effectName = ec.get("effectName", "")
     primary = ec.get("primary", {}) or {}
-    fpTriggered = sum(1 for b in firstPassBreakdowns
-                      if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    from managers.cardEffects import cardProducedOutput
+    fpTriggered = sum(1 for b in firstPassBreakdowns if cardProducedOutput(b))
     if effectName == "chain_reaction":
         return fpTriggered > 0
     if effectName == "bonus_round":
@@ -1344,23 +1344,38 @@ def calculateWeekCardBonuses(
         breakdown = _computeCardPass(eq, ctx)
         firstPassBreakdowns.append(breakdown)
 
-    # Snapshot first-pass gate outcomes for Full House (full_roster). Its gate is
-    # applied per-card inside computeEffect, which stashes each first-pass card's
-    # ratio (1.0 on / 0.0 off) into ctx._gateRatios. Freeze the tally here, before
-    # any second-pass card computes and adds its own ratio, so Full House reads a
-    # clean, order-independent count of the first-pass value cards only. Cards with
-    # no gate (the no-effect floor cards) aren't in _gateRatios and so don't count.
-    _fpGate = getattr(ctx, "_gateRatios", None) or {}
-    ctx._firstPassGatedCount = len(_fpGate)
-    ctx._firstPassGatedOn = sum(1 for r in _fpGate.values() if r >= 1.0)
-    # Product of the first-pass gate ratios — Full House scales its reward by it. Live
-    # ratios are 1.0/0.0 so this is 1.0 iff every first-pass card cleared (else 0.0), an
-    # exact fire/no-fire. In the expected projection the ratios are fractional clear
-    # probabilities, so the product is the JOINT chance all of them clear (its true EV).
+    # Snapshot the power-bar outcome of EVERY gated card in the lineup for Full House
+    # (full_roster), first pass and second pass alike (owner, 2026-10-12: "full house needs
+    # to just check the power bar for all cards, it shouldnt matter if they are first or
+    # second pass"). It used to read ctx._gateRatios here, which holds FIRST-PASS cards
+    # only, so a lineup with Lemons and Group Project beside Full House counted 3 cards
+    # against a floor of 4 and could never fire however everyone played.
+    #
+    # A card's bar is a pure function of its depicted player's week (gateRatio), so the
+    # second-pass cards' bars can be read now, before any of them computes. Full House
+    # cards themselves are left out: each one's own bar is applied centrally afterward,
+    # and counting it here would square its clear probability in a projection. Cards with
+    # no bar (floor prints, chance cards, floobit cards, the ungated set) don't count.
+    from managers.cardEffects import gateRatio as _gateRatioFn
+    _fhRatios = []
+    for _eq in equippedCards:
+        _ec = _eq.user_card.card_template.effect_config or {}
+        if _ec.get("effectName") == "full_roster" or not _ec.get("gate"):
+            continue
+        _r = (getattr(ctx, "_gateRatios", None) or {}).get(_eq.id)
+        if _r is None:
+            _r = _gateRatioFn(_ec["gate"], ctx, _eq.user_card.card_template.player_id)
+        _fhRatios.append(_r)
+    ctx._fullHouseGatedCount = len(_fhRatios)
+    ctx._fullHouseGatedOn = sum(1 for r in _fhRatios if r >= 1.0)
+    # Product of the gate ratios — Full House scales its reward by it. Live ratios are
+    # 1.0/0.0 so this is 1.0 iff every card cleared (else 0.0), an exact fire/no-fire. In
+    # the expected projection the ratios are fractional clear probabilities, so the
+    # product is the JOINT chance all of them clear (its true EV).
     _prod = 1.0
-    for _r in _fpGate.values():
+    for _r in _fhRatios:
         _prod *= _r
-    ctx._firstPassGateProduct = _prod
+    ctx._fullHouseGateProduct = _prod
 
     # Pre-trigger pass: for each second-pass card, determine whether it would
     # produce non-zero output given only first-pass results. Stash on ctx so
@@ -1385,7 +1400,7 @@ def calculateWeekCardBonuses(
     # Lemons / fortitude don't depend on cross-second-pass info.
     if secondPassCards:
         actualTriggers = {
-            eq.id: (b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+            eq.id: _producedOutput(b)
             for eq, b in zip(secondPassCards, secondPassBreakdowns)
         }
         # ⚠️ Lemons' own output is only a MARKER (its multiplier, zeroed after the fact by
@@ -1681,7 +1696,8 @@ def _amplifierDidWork(ampBreakdown, others, ctx) -> bool:
 
 
 def _producedOutput(b) -> bool:
-    return b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0
+    from managers.cardEffects import cardProducedOutput
+    return cardProducedOutput(b)
 
 
 def _firstPassTriggerCount(firstPassBreakdowns, others, ctx) -> int:
