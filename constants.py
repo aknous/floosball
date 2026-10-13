@@ -245,7 +245,40 @@ LEAGUE_COVERAGE_BASELINE = 80
 # coverage term is what keeps the offense-vs-defense balance league-relative here.
 # Tuned on paired young-league (fresh) + mature (prod S12 resume) sims to hold
 # completion ~66-67% at BOTH ends.
-PASS_COVERAGE_DISRUPTION_K = float(_os.environ.get('FLOOS_COV_K', '55'))   # x tier x (1-openness) x (coverage/100) -> contact loss
+# ---- The catch-point contest (Play.calculateCatchProbability) ----
+# A defender within reach of the catch point breaks it up. Logistic in YARDS of separation
+# at arrival, one shape for every depth, fitted to BDB 2021 targets (yards 21-80, air
+# 0-5 / 5-10 / 15-19 / 24-30, 7.3k throws): completion = plateau(depth) x (1 - breakup),
+# breakup = strength x 1 / (1 + exp((sep - MID) / WIDTH)) at league-average coverage.
+# STRENGTH RISES WITH FLIGHT TIME: a defender in reach has longer to find and play a ball
+# that hangs, which is a different thing from the closing (`_depthClosing`), which only
+# shrinks the gap. Fitted linear in air yards; it fits as well as a free per-depth value
+# and does not need four numbers where the mechanism gives one.
+PASS_CONTEST_MID_YARDS = 0.96
+PASS_CONTEST_WIDTH_YARDS = 0.60
+# ⚠️ INSIDE THE 5 A DEFENDER IN REACH REACHES FURTHER. At the same separation, goal-line
+# completion runs 13-22 points under midfield with exactly one defender within 3 yards,
+# while an uncontested receiver loses only 4: in the end zone the catch IS the score, so
+# the defender plays the ball rather than the tackle, and the receiver has no room past
+# the end line to work back to it. Crowding does not explain it (BDB 2021, yte 1-5, 383
+# throws: midpoint 1.55 yards, 95% CI 1.20-1.95; yte 6-10 fits midfield's 0.93).
+GOAL_LINE_CONTEST_MID_YARDS = 1.55
+GOAL_LINE_CONTEST_MAX_YTE = 5
+# ⚠️ AND INSIDE THE 10 EVEN AN OPEN RECEIVER COMPLETES LESS. Most throws there go into
+# the end zone, where the ball has to be put where only he can reach it and he has to get
+# his feet down inside a confined space. Fitted under the same contest model, the
+# uncontested completion ceiling is 0.762 inside the 10 against 0.836 at midfield, a
+# ratio of 0.911 (95% CI 0.864-0.959; BDB 2021, 704 vs 8.9k throws of air <= 10). The
+# 11-20 band (0.844) is back at midfield, so the step sits at 10.
+GOAL_LINE_CATCH_CEILING_RATIO = 0.911
+GOAL_LINE_CATCH_CEILING_MAX_YTE = 10
+PASS_BREAKUP_BASE = 0.70          # strength at the line of scrimmage
+PASS_BREAKUP_PER_AIR_YARD = 0.0112
+PASS_BREAKUP_CAP = 0.95     # an elite defender on top of the receiver still misses some
+# An uncontested secure is the drop rate: a few percent at league-average hands, spanning
+# receivers by single digits (PFF/SIS drop rates run ~2% to ~10% among regulars).
+PASS_SECURE_AT_MEAN = 96.0  # % secured at LEAGUE_COMPRESSION_MEAN hands
+PASS_SECURE_HANDS_SLOPE = 0.25
 PASS_COVERAGE_BASELINE_SLOPE = 1.9   # symmetric contact loss/gain per coverage point off the mean
 
 # Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
@@ -1477,9 +1510,18 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # a deliberate trade for per-tier fidelity (owner, 2026-09-20). The per-tier completion
 # error falls 1.75 -> 1.28. Medium still runs ~2.5 points high and is the one residual that
 # has resisted every lever tried.
+# ⚠️ RE-DERIVED 2026-10-12 AGAINST THE UNCONTESTED CEILING, NOT YARDS PER ATTEMPT. The
+# values above (medium 0.82, long 0.65, deep 0.43) were fitted under a coverage model
+# that charged every throw ~10 points whatever the separation, so they absorbed that
+# model's errors. With the catch-point contest the ceiling is separable: fitted under it,
+# an uncontested receiver completes 0.874 / 0.768 / 0.682 / 0.454 short to deep (BDB 2021,
+# yards 21-80), and these are the values at which the sim's contact x secure lands there
+# (medium 0.74, long 0.61, deep 0.32; short stays the 1.00 anchor). Deep yards per attempt
+# then lands on its own (11.6 against 11.9), which the fit never targeted.
 PASS_TYPE_DIFFICULTY = {'short': 1.00,
-                        'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.82')),
-                        'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
+                        'medium': float(_os.environ.get('FLOOS_MED_DIFF', '0.74')),
+                        'long': float(_os.environ.get('FLOOS_LONG_DIFF', '0.61')),
+                        'deep': float(_os.environ.get('FLOOS_DEEP_DIFF', '0.32')), 'hailMary': 0.42}
 # ⚠️ LEFT ALONE ON PURPOSE, AND THE ATTEMPT IS WORTH RECORDING. When
 # PASS_DEPTH_SEPARATION_K dropped 0.90 -> 0.70 (to keep deep's pick rate right under the
 # new continuous gates) long came out completing 55.0% against 52.6. Raising long here
@@ -1491,19 +1533,9 @@ PASS_TYPE_DIFFICULTY = {'short': 1.00,
 # depth twice — the identical error that had deep balls scored as badly thrown in the YAC
 # multiplier. The long tier's residual (completion +2.4, interceptions 3.50 against 4.2)
 # belongs to its arrival gap or its throw quality, not here.
-# ⚠️ `short` 0.40 IS A FLOOR THE TESTS ENFORCE, and lowering it was tried and refused.
-# Short completes 71.5% against real football's 73.9 at matched depth, and dropping
-# this to 0.18 lands that exactly AND takes overall completion to 64.1 and scoring to
-# 44.0 — but it leaves coverage worth 7.1 contact points across the entire range from
-# blanketed to wide open, which `test_catch_model.py` refuses at a floor of 14. That
-# test exists because this model's recurring defect is exactly a dial going flat where
-# it is used most. The short residual stays until something other than a coverage dial
-# explains it — most likely the missing screen game, since real football's short bucket
-# includes throws at and behind the line that this sim cannot make.
-PASS_TIER_DISRUPTION = {'short': float(_os.environ.get('FLOOS_TD_SHORT', '0.40')), 'medium': 0.75,
-                        'long': float(_os.environ.get('FLOOS_TD_LONG', '1.00')),
-                        'deep': float(_os.environ.get('FLOOS_TD_DEEP', '1.15')),
-                        'hailMary': 1.30}
+# PASS_TIER_DISRUPTION (short 0.40 / medium 0.75 / long 1.00 / deep 1.15) is RETIRED: the
+# catch-point contest is one shape for every depth, because the arrival gap already
+# carries the closing on a longer throw. See PASS_CONTEST_MID_YARDS.
 
 # ---- Separation decays with route depth (Play.calculateReceiverOpenness) ----
 # ⚠️ A 3-YARD HITCH AND A 27-YARD POST DREW FROM THE SAME SEPARATION DISTRIBUTION.
@@ -1843,6 +1875,34 @@ OPENNESS_QUANTILES_SIM = (0.0, 31.0, 38.0, 43.0, 47.0, 50.0, 53.0, 56.0, 59.0, 6
                           67.0, 69.0, 72.0, 75.0, 78.0, 82.0, 86.0, 91.0, 98.0, 100.0)
 SEPARATION_QUANTILES_NFL = (0.10, 0.72, 1.01, 1.29, 1.61, 1.88, 2.14, 2.44, 2.73, 3.01, 3.31,
                             3.63, 4.02, 4.39, 4.85, 5.39, 6.02, 6.78, 7.77, 9.47, 23.21)
+# ⚠️ PER DEPTH, BECAUSE AN NFL ROUTE IS TIGHTER THE DEEPER IT RUNS, AT RELEASE. Tracking
+# (BDB 2021, targeted receiver, yards 21-80) puts the median separation when the ball is
+# THROWN at 4.4 / 3.1 / 2.6 / 1.7 yards short to deep, while the defender closes only
+# ~0.3-0.8 yards in the air at every depth. The sim generates openness with no depth term
+# (it is what the QB reads, and the depth mix was solved through that read), so openness
+# is read as "how open for his route" and mapped to arrival separation through each
+# depth's own matched quantiles: sim openness of the targeted receiver (800-game harness,
+# 2026-10-12) against NFL separation at arrival (air 0-5 / 5-10 / 14-19 / 23-30).
+# The catch contest uses these; the pick side still reads openness less `_depthClosing`.
+# ⚠️ Re-measure the sim side if the openness model or the read moves.
+OPENNESS_QUANTILES_SIM_BY_DEPTH = {
+    'short':  OPENNESS_QUANTILES_SIM,
+    'medium': (0.0, 33.0, 40.0, 46.0, 50.0, 53.0, 57.0, 60.0, 62.0, 65.0, 67.0,
+               70.0, 72.0, 75.0, 78.0, 81.0, 84.0, 88.0, 93.0, 99.5, 100.0),
+    'long':   (0.0, 32.0, 39.0, 44.0, 47.0, 51.0, 54.0, 56.0, 59.0, 61.0, 64.0,
+               66.0, 69.0, 71.0, 74.0, 77.0, 80.0, 84.0, 89.0, 96.0, 100.0),
+    'deep':   (0.0, 34.0, 41.0, 45.0, 48.0, 51.0, 54.0, 57.0, 59.0, 62.0, 64.0,
+               66.0, 69.0, 71.0, 74.0, 77.0, 81.0, 84.0, 89.0, 95.0, 100.0),
+}
+ARRIVAL_SEPARATION_NFL_BY_DEPTH = {
+    'short':  SEPARATION_QUANTILES_NFL,
+    'medium': (0.23, 0.56, 0.71, 0.85, 1.01, 1.19, 1.35, 1.54, 1.72, 1.91, 2.09,
+               2.30, 2.56, 2.83, 3.16, 3.50, 3.91, 4.40, 5.03, 6.40, 18.95),
+    'long':   (0.06, 0.59, 0.72, 0.86, 1.00, 1.12, 1.26, 1.42, 1.63, 1.86, 2.08,
+               2.31, 2.58, 2.88, 3.31, 3.80, 4.37, 4.91, 5.55, 7.07, 15.03),
+    'deep':   (0.14, 0.54, 0.64, 0.69, 0.75, 0.79, 0.89, 0.97, 1.05, 1.12, 1.27,
+               1.36, 1.54, 1.68, 1.96, 2.31, 2.71, 3.16, 3.90, 5.52, 17.21),
+}
 RUN_GAP_OPEN = 74          # gap quality at/above this: clean release, no tackle attempt
 RUN_GAP_PLUGGED = 38       # below this the gap is closed and the defender has the edge
 # Winning the contact AT THE LINE is common -- it is "did I get past the front",
