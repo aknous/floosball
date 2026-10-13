@@ -53,13 +53,19 @@ class StubPlay:
     not the roll, is what each case is testing."""
 
     _stretchForFirst = fg.Play._stretchForFirst
+    _fieldCompression = fg.Play._fieldCompression
+    _shortOfPlane = fg.Play._shortOfPlane
+    sneakConverted = None
 
-    def __init__(self, *, yardage, yardsToEndzone, yardsToFirstDown, confidence=1.0):
+    def __init__(self, *, yardage, yardsToEndzone, yardsToFirstDown, confidence=1.0,
+                 sneakConverted=None):
         self.yardage = yardage
         self.yardsToEndzone = yardsToEndzone
         self.game = StubGame(yardsToFirstDown)
         self.isTd = False
         self._c = confidence
+        if sneakConverted is not None:
+            self.sneakConverted = sneakConverted
 
     def _confidenceState(self, p):
         return self._c
@@ -122,6 +128,37 @@ class StretchNoteTests(unittest.TestCase):
         for note in ('stretch_first', 'stretch_goal', 'stretch_short', 'stretch_short_goal'):
             self.assertIn(f"'{note}':", block)
         self.assertIn('goal line but comes up just short', block)
+
+
+class GoalLineRunTests(unittest.TestCase):
+    """Runs from the 1 scored 78% against the NFL's 58%, from the 2 61% against 39%.
+    Three faults, each a carrier being credited with ground he never covered."""
+
+    def testAStopShortOfThePlaneIsNotRoundedAcrossIt(self):
+        """At the 1 the front's back row stands 0.3-0.9 yards off the ball; a stop
+        there used to round to a whole yard and score."""
+        play = StubPlay(yardage=0, yardsToEndzone=1, yardsToFirstDown=1)
+        self.assertEqual(play._shortOfPlane(0.6), 0)
+        self.assertEqual(play._shortOfPlane(-1.4), -1)
+        play = StubPlay(yardage=0, yardsToEndzone=5, yardsToFirstDown=5)
+        self.assertEqual(play._shortOfPlane(2.6), 3)      # away from the plane, unchanged
+        self.assertEqual(play._shortOfPlane(4.7), 4)      # 4.7 of 5 is short of it
+
+    def testTheGoalLineReachIsOneYard(self):
+        """The front stands where a two-yard lunge would land; at the marker the
+        two-yard reach stays, since short yardage there matches the NFL with it."""
+        self.assertIsNone(noteFor(yardage=0, yardsToEndzone=2, yardsToFirstDown=2))
+        self.assertEqual(noteFor(yardage=1, yardsToEndzone=2, yardsToFirstDown=2), 'stretch_goal')
+        self.assertEqual(noteFor(yardage=3, yardsToEndzone=40, yardsToFirstDown=5), 'stretch_first')
+
+    def testAStuffedSneakDoesNotReachAgain(self):
+        self.assertIsNone(noteFor(yardage=0, yardsToEndzone=1, yardsToFirstDown=1,
+                                  sneakConverted=False))
+
+    def testAStuffedSneakNeverCrossesThePlane(self):
+        src = open(os.path.join(HERE, 'floosball_game.py')).read()
+        body = src[src.index("QB_SNEAK_STUFF_MEAN, 0.7"):][:400]
+        self.assertIn('self.yardsToEndzone', body)
 
 
 class ScrambleTests(unittest.TestCase):

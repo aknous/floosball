@@ -62,7 +62,6 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
-    _returnGnegyToMidnights()
     _backfillTradeMoves()
     _reconcileTeamTitles()
     _normalizeNamePool()
@@ -3961,91 +3960,6 @@ def _backfillProspectContracts():
     except Exception as e:
         session.rollback()
         logger.warning(f"Prospect-contract backfill failed: {e}")
-    finally:
-        session.close()
-
-
-_GNEGY_SWAP_MARKER = 'gnegy_returned_s10'
-GNEGY_ID, DINGERS_ID = 234, 188
-MIDNIGHTS_ID, TUESDAYS_ID = 20, 13
-
-
-def _returnGnegyToMidnights():
-    """ONE-SHOT (owner, 2026-10-10): put RB Gibson Gnegy back on the Midnights and send
-    Dingers Culpepper to the Tuesdays on a new contract.
-
-    Gnegy was the Midnights' prospect. His last promotion chance (the season-8 FA draft
-    kickoff) priced him against Dingers on rating alone and lost on the cut margin; he
-    washed out at season 9's step 3.78 and the Tuesdays signed him. Under the starter-
-    standing rules he would have been promoted, so the two are swapped:
-      - Gnegy keeps the 2-season deal he signed and becomes a promoted prospect
-        (`on_prospect_contract`, so he cannot be cut until it expires);
-      - Dingers signs with the Tuesdays for the sim's normal term (`_getPlayerTerm`,
-        rolled here), a new deal, so his re-sign count with a team starts over.
-    Silent: no recap event (owner).
-
-    ⚠️ AT BOOT, NOT AGAINST THE LIVE DATABASE. The running sim holds rosters in memory and
-    writes them back at every week boundary, so a direct edit is reverted; `init_db` runs
-    before players load. ⚠️ GUARDED ON THE STATE IT WAS WRITTEN AGAINST (season 10 not yet
-    played, each player on the team named above); anything else records a skip instead of
-    moving players. Remove once it has run on prod.
-    """
-    import types
-    from sqlalchemy import text
-    from database.models import AppSetting
-    session = SessionLocal()
-    try:
-        if session.query(AppSetting).filter(AppSetting.key == _GNEGY_SWAP_MARKER).first():
-            return
-        state = session.execute(text("SELECT current_season FROM simulation_state WHERE id = 1")).fetchone()
-        rows = {r[0]: r for r in session.execute(text(
-            "SELECT p.id, p.team_id, p.tier, p.seasons_played, a.longevity FROM players p "
-            "LEFT JOIN player_attributes a ON a.player_id = p.id WHERE p.id IN (:g, :d)"),
-            {'g': GNEGY_ID, 'd': DINGERS_ID})}
-        played = session.execute(text(
-            "SELECT COUNT(*) FROM games WHERE season = 10 AND status = 'final'")).scalar() or 0
-        reason = None
-        if not state or state[0] != 10:
-            reason = f'season is {state[0] if state else None}, not 10'
-        elif played:
-            reason = f'{played} season-10 games already played'
-        elif GNEGY_ID not in rows or rows[GNEGY_ID][1] != TUESDAYS_ID:
-            reason = 'Gnegy is not on the Tuesdays'
-        elif DINGERS_ID not in rows or rows[DINGERS_ID][1] != MIDNIGHTS_ID:
-            reason = 'Dingers is not on the Midnights'
-        if reason:
-            session.add(AppSetting(key=_GNEGY_SWAP_MARKER, value=f'skipped: {reason}'))
-            session.commit()
-            logger.warning(f"Gnegy swap skipped: {reason}")
-            return
-
-        import floosball_player as FloosPlayer
-        from managers.playerManager import PlayerManager
-        _pid, _team, tier, seasons, longevity = rows[DINGERS_ID]
-        shim = types.SimpleNamespace(
-            playerTier=FloosPlayer.PlayerTier[tier], seasonsPlayed=seasons or 0,
-            attributes=types.SimpleNamespace(longevity=longevity or 6))
-        dingersTerm = int(PlayerManager._getPlayerTerm(None, shim))
-
-        session.execute(text(
-            "UPDATE players SET team_id = :t, on_prospect_contract = 1 WHERE id = :p"),
-            {'t': MIDNIGHTS_ID, 'p': GNEGY_ID})
-        session.execute(text(
-            "UPDATE players SET team_id = :t, term = :n, term_remaining = :n, "
-            "team_resign_count = 0, free_agent_years = 0 WHERE id = :p"),
-            {'t': TUESDAYS_ID, 'n': dingersTerm, 'p': DINGERS_ID})
-        # Any season-10 card already minted names the club it was minted under.
-        for pid, tid in ((GNEGY_ID, MIDNIGHTS_ID), (DINGERS_ID, TUESDAYS_ID)):
-            session.execute(text(
-                "UPDATE card_templates SET team_id = :t WHERE player_id = :p AND season_created = 10"),
-                {'t': tid, 'p': pid})
-        session.add(AppSetting(key=_GNEGY_SWAP_MARKER, value=f'done: Dingers term {dingersTerm}'))
-        session.commit()
-        logger.info(f"Gnegy swap: Gibson Gnegy -> Midnights (prospect contract), "
-                    f"Dingers Culpepper -> Tuesdays ({dingersTerm} season(s))")
-    except Exception as e:
-        session.rollback()
-        logger.warning(f"Gnegy swap failed: {e}")
     finally:
         session.close()
 
