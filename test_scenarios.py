@@ -228,7 +228,7 @@ expect("high confidence completes more than low confidence", min(surgC, gunC) > 
 expect("gunslinger (high C, low D) throws more INTs than the surgeon", gunI > surgI + 1.0)
 # ⚠️ RELATIVE, NOT AN ABSOLUTE RATE. This read `surgI < 1.5`, a bar set when the league
 # picked at 0.76% of throws against real football's 2.27%. When the interception model was
-# fixed (INT_OPEN_DECAY replacing a hard gate that switched risk off entirely above
+# fixed (a continuous decay replacing a hard gate that switched risk off entirely above
 # openness 50, which most throws sit above) the league rate roughly tripled and this
 # failed — while the thing it exists to check never moved: the surgeon still picks at a
 # THIRD of the gunslinger's rate, 2.00% against 5.71%. An absolute number here silently

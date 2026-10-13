@@ -59,8 +59,8 @@ PT, PassType = FG.PlayType, FG.PassType
 FIELDS = ['game', 'team', 'down', 'ytg', 'yte', 'qtr', 'qsecs', 'scoreDiff', 'offTo', 'defTo',
           'kind', 'called', 'thrown', 'scramble', 'sack', 'complete', 'intercepted', 'yards',
           # the pass model's own inputs, so a completion or a pick can be explained rather
-          # than only counted. `open` is the ACTUAL gap the QB threw into (not perceived)
-          # BEFORE `_depthClosing` is applied inside calculateCatchProbability; `bestOpen`
+          # than only counted. `open` is the ACTUAL gap the QB threw into (not perceived),
+          # in openness points (`_opennessToSeparation` maps it to yards); `bestOpen`
           # is the most open man on the field, so the two together measure how much the
           # read's take-the-open-man rule is doing.
           'openN', 'throwQ', 'nTgt', 'bestOpen',
@@ -215,7 +215,11 @@ def _play(games, teams, rng):
                    scramble=int(scramble), sack=int(sack),
                    complete=int(bool(getattr(p, 'isPassCompletion', False))),
                    intercepted=int(bool(getattr(p, 'isInterception', False))),
-                   yards=getattr(p, 'yardage', 0))
+                   # ⚠️ ZERO ON A PICK, as the NFL's `yards_gained` is. The engine sets
+                   # `yardage` to the interception SPOT (where the defender caught it), so
+                   # reading it as gained yards credited the offense with the pick's depth:
+                   # long yards per attempt read 12.5 for a true 11.8, deep 11.2 for 9.9.
+                   yards=(0 if getattr(p, 'isInterception', False) else getattr(p, 'yardage', 0)))
         ins = ((getattr(p, 'insights', {}) or {}).get('pass') or {})
         tgts = ins.get('targets') or []
         pre.update(openN=ins.get('rcvActualOpenness', ''), throwQ=ins.get('throwQuality', ''),

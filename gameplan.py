@@ -380,6 +380,16 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
         runDefMult += 0.02
 
     # --- Situational multiplier adjustments ---
+    # ⚠️ INSIDE THE 20 THE FIELD ITSELF DOES THIS (Play._fieldCompression /
+    # _compressOpenness, measured from NFL tracking). The flat red-zone bump below
+    # (+0.15 pass D, +0.10 run D) was a stand-in for it and would charge it twice. And
+    # the short-yardage stack's -0.15 pass D is a MIDFIELD fact (a loaded box is soft
+    # behind it) that reached every goal-to-go from the 3 and every two-point try,
+    # making a pass at the goal line EASIER — the opposite of football, where a short
+    # throw there arrives with half the separation it has at midfield.
+    from constants import GOAL_LINE_COMPRESSION_ENABLED
+    redZone = fieldPos >= 80
+    fieldDoesIt = GOAL_LINE_COMPRESSION_ENABLED and redZone
     if down == 3 and yardsToGo > 7:
         passDefMult += 0.15
         runDefMult -= 0.10
@@ -392,11 +402,13 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
         # the stack, and get MORE of it, because a stop there ends the drive.
         _lateDownStack = 1.0 if down <= 2 else 1.35
         runDefMult += 0.25 * _lateDownStack
-        passDefMult -= 0.15
+        if not fieldDoesIt:
+            passDefMult -= 0.15
         passRushMult += 0.10
-    elif fieldPos >= 80:
-        passDefMult += 0.15
-        runDefMult += 0.10
+    elif redZone:
+        if not fieldDoesIt:
+            passDefMult += 0.15
+            runDefMult += 0.10
     elif quarter == 4 and scoreDiff > 7 and clockSeconds < 480:
         passDefMult += 0.20
         passRushMult -= 0.10

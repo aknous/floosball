@@ -7,10 +7,12 @@ responding in the region it is used most.
    quality 70. Short throws average 79 and medium 70.6, so 76% of all passes sat on that
    plateau and the two tiers came out 3.8 contact points apart against a real 14.6-point
    completion gap.
-2. Coverage barely decided a catch. `PASS_COVERAGE_DISRUPTION_K` spanned ~14 points of
-   contact across the WHOLE range from blanketed to wide open, so a receiver with a
-   defender draped on him still caught 45%, and completion moved 8 points across the band
-   holding 88% of throws.
+2. Coverage barely decided a catch, and then had the wrong SHAPE. A linear charge in
+   openness (scaled by a depth ladder, short 0.40) left short completion at 63% blanketed
+   and 75% wide open against the NFL's 41% and 88%. Real completion climbs over the first
+   2-3 yards of separation and is flat beyond, because past arm's length the defender
+   cannot reach the ball. Now a logistic in YARDS at arrival (BDB 2021), stronger the
+   longer the ball hangs, with the secure step at the drop rate.
 3. `YAC_THROW_MULT` judged placement ABSOLUTELY. `PASS_TYPE_DIFFICULTY` has already cut a
    deep throw's quality for being deep, so reading the result as "badly thrown" charges
    for depth twice: a deep ball averages tq 32.6 and landed in the `bad` bucket on
@@ -42,8 +44,13 @@ if 'floosball_game' not in sys.modules:
 import floosball_game as FG                                              # noqa: E402
 from constants import (PASS_CONTACT_CEILING, PASS_CONTACT_CENTER,        # noqa: E402
                        PASS_CONTACT_STEEPNESS, PASS_TYPE_DIFFICULTY,
-                       PASS_COVERAGE_DISRUPTION_K, PASS_TIER_DISRUPTION,
-                       YAC_THROW_MULT, PASS_DEPTH_MEANS)
+                       PASS_CONTEST_MID_YARDS, PASS_CONTEST_WIDTH_YARDS,
+                       PASS_BREAKUP_BASE, PASS_BREAKUP_PER_AIR_YARD, PASS_SECURE_AT_MEAN,
+                       PASS_SECURE_HANDS_SLOPE, GOAL_LINE_CONTEST_MID_YARDS,
+                       GOAL_LINE_CATCH_CEILING_RATIO, OPENNESS_QUANTILES_SIM_BY_DEPTH,
+                       ARRIVAL_SEPARATION_NFL_BY_DEPTH,
+                       YAC_THROW_MULT, PASS_DEPTH_MEANS, INT_COVER_MAX, INT_HELP_MAX,
+                       INT_HELP_AIR_SCALE, INT_HELP_CLEAR_YARDS, INT_HELP_CLEAR_WIDTH)
 
 
 def _contact(tq):
@@ -81,27 +88,54 @@ def test_contactSaturatesWithoutReachingCertainty():
         f'{_contact(70):.0f} — not nearly unreachable enough')
 
 
+def _contest(sep, mid=PASS_CONTEST_MID_YARDS):
+    return 1.0 / (1.0 + math.exp((sep - mid) / PASS_CONTEST_WIDTH_YARDS))
+
+
+def _strength(tier):
+    return min(1.0, PASS_BREAKUP_BASE + PASS_BREAKUP_PER_AIR_YARD * PASS_DEPTH_MEANS[tier])
+
+
 def test_coverageActuallyDecidesTheCatch():
-    """Blanketed vs wide open has to be worth a real share of the catch. Under the old
-    K=15 the whole range bought 4.3 contact points at short and 12.4 at deep, so a
-    receiver with a defender draped on him still caught 45%.
-    ⚠️ The bar is per tier and deliberately LOW for short: `PASS_TIER_DISRUPTION` prices a
-    quick release at 0.40 on purpose, so that a trailing offense can still move the ball
-    underneath against tight coverage. It is the DEEP end that has to be decisive."""
-    spans = {}
+    """A defender on top of the receiver must break up a large share; the old linear
+    charge on a short throw bought ~13 points across the whole range."""
     for tier in ('short', 'medium', 'long', 'deep'):
-        mult = PASS_TIER_DISRUPTION[tier]
-        blanketed = (100 - 0) / 100 * 0.80 * PASS_COVERAGE_DISRUPTION_K * mult
-        wideOpen = (100 - 90) / 100 * 0.80 * PASS_COVERAGE_DISRUPTION_K * mult
-        spans[tier] = blanketed - wideOpen
-        assert spans[tier] > 14, f'{tier}: coverage spans only {spans[tier]:.1f} contact points'
-    assert spans['deep'] > 35, f"deep coverage spans only {spans['deep']:.1f} contact points"
+        span = (_contest(0.3) - _contest(6.0)) * _strength(tier)
+        assert span > 0.45, f'{tier}: blanketed vs wide open is worth only {span:.2f}'
 
 
-def test_coverageBitesHarderTheDeeperTheThrow():
-    tiers = ['short', 'medium', 'long', 'deep']
-    mults = [PASS_TIER_DISRUPTION[t] for t in tiers]
-    assert mults == sorted(mults), f'tier disruption is not increasing with depth: {mults}'
+def test_theContestEndsPastArmsLength():
+    """Past ~3 yards the NFL curve is flat: an open receiver pays for no defender."""
+    assert _contest(4.0) < 0.05, f'a receiver 4 yards clear still loses {_contest(4.0):.2f}'
+    assert _contest(0.5) > 0.6
+
+
+def test_breakupStrengthGrowsWithFlightTime():
+    vals = [_strength(t) for t in ('short', 'medium', 'long', 'deep')]
+    assert vals == sorted(vals) and vals[-1] <= 1.0, vals
+
+
+def test_anOpenReceiverCatchesAtTheDropRate():
+    """Uncontested, the only miss is a drop: a few percent, single digits across hands."""
+    assert PASS_SECURE_AT_MEAN >= 94
+    assert 20 * PASS_SECURE_HANDS_SLOPE < 10, 'hands 64 to 84 should span single digits'
+
+
+def test_theSameOpennessIsFewerYardsOnADeeperRoute():
+    """NFL routes are tighter at release the deeper they run; openness is 'open for his
+    route', so its median maps to fewer yards with depth. Tables must be monotonic."""
+    meds = []
+    for t in ('short', 'medium', 'long', 'deep'):
+        sq, nq = OPENNESS_QUANTILES_SIM_BY_DEPTH[t], ARRIVAL_SEPARATION_NFL_BY_DEPTH[t]
+        assert list(sq) == sorted(sq) and list(nq) == sorted(nq), f'{t} table not monotonic'
+        assert len(sq) == len(nq)
+        meds.append(nq[len(nq) // 2])
+    assert meds == sorted(meds, reverse=True), f'median arrival separation by depth: {meds}'
+
+
+def test_theGoalLineIsHarderToCatchIn():
+    assert GOAL_LINE_CONTEST_MID_YARDS > PASS_CONTEST_MID_YARDS
+    assert 0.8 < GOAL_LINE_CATCH_CEILING_RATIO < 1.0
 
 
 def _yacBucket(tq, tier):
@@ -113,8 +147,8 @@ def _yacBucket(tq, tier):
 def test_aNormalDeepBallIsNotJudgedABadThrow():
     """The double-charge. A deep throw's quality is ALREADY multiplied down by
     PASS_TYPE_DIFFICULTY, so the raw number must not be read as poor placement — a
-    typical deep ball measures tq ~33 and would bucket as `bad` without normalising."""
-    typical = {'short': 79.0, 'medium': 62.0, 'long': 49.0, 'deep': 33.0}
+    typical deep ball measures tq ~23 and would bucket as `bad` without normalising."""
+    typical = {'short': 79.0, 'medium': 53.0, 'long': 43.0, 'deep': 22.5}
     for tier, tq in typical.items():
         assert _yacBucket(tq, tier) in ('good', 'elite'), (
             f'a typical {tier} throw (tq {tq}) buckets as {_yacBucket(tq, tier)!r}')
@@ -135,18 +169,44 @@ def test_aCompetentThrowKeepsMostOfItsYardsAfterCatch():
     assert ladder == sorted(ladder), f'YAC multiplier ladder is not monotonic: {ladder}'
 
 
-def test_theDepthTiersStayOrderedAndSpaced():
-    """PASS_TYPE_DIFFICULTY must fall with depth, and the short->medium rung was the one
-    that had drifted — 0.016 per air yard against 0.031 and 0.022 for the rungs above it,
-    which is why medium completed nearly as often as short."""
-    order = ['short', 'medium', 'long', 'deep']
-    vals = [PASS_TYPE_DIFFICULTY[t] for t in order]
+def test_theDepthTiersStayOrdered():
+    """PASS_TYPE_DIFFICULTY must fall with depth. It is NOT even per air yard: it is set
+    so each depth's UNCONTESTED completion matches the NFL's (BDB 2021: 0.874 / 0.768 /
+    0.682 / 0.454), and real football drops fastest in the first rung."""
+    vals = [PASS_TYPE_DIFFICULTY[t] for t in ('short', 'medium', 'long', 'deep')]
     assert vals == sorted(vals, reverse=True), f'difficulty is not falling with depth: {vals}'
-    slopes = [(vals[i] - vals[i + 1]) / (PASS_DEPTH_MEANS[order[i + 1]] - PASS_DEPTH_MEANS[order[i]])
-              for i in range(3)]
-    assert max(slopes) / min(slopes) < 2.0, (
-        f'difficulty per air yard is uneven across the ladder: '
-        f'{[round(s, 4) for s in slopes]}')
+
+
+def _pick(sep, air):
+    cover = INT_COVER_MAX * _contest(sep)
+    help_ = INT_HELP_MAX * (1 - math.exp(-air / INT_HELP_AIR_SCALE)) \
+        / (1 + math.exp((sep - INT_HELP_CLEAR_YARDS) / INT_HELP_CLEAR_WIDTH))
+    return 1 - (1 - cover) * (1 - help_)
+
+
+def test_aShortPickNeedsTheCoveringDefender():
+    """NFL short throws: 4.8% picked under half a yard, 0.3% past five."""
+    assert _pick(0.25, 3) > 5 * _pick(5.5, 3)
+
+
+def test_aDownfieldPickBarelyCaresHowOpenTheReceiverIs():
+    """Long throws pick ~4-6% anywhere from 0.5 to 5 yards of separation: a help defender
+    gets under a ball that hangs. The old model took an open downfield receiver to ~0."""
+    assert _pick(4.0, 17) > 0.4 * _pick(0.75, 17), (_pick(4.0, 17), _pick(0.75, 17))
+    assert _pick(4.0, 27) > _pick(4.0, 17) > _pick(4.0, 3)
+
+
+def test_aReceiverClearOfEveryoneIsRarelyPicked():
+    assert _pick(9.0, 27) < 0.3 * _pick(2.0, 27)
+
+
+def test_theOutcomeRollIsContinuous():
+    """An integer 1-100 roll fires `roll <= 2.7` 2% of the time: every pick chance lost
+    its fractional point and the league rate read ~60% of the model's."""
+    import re, os
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'floosball_game.py')).read()
+    m = re.search(r'outcomeRoll = (.*)', src)
+    assert m and 'randint' not in m.group(1), m.group(1) if m else 'no outcomeRoll'
 
 
 if __name__ == '__main__':
