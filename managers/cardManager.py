@@ -996,8 +996,12 @@ class CardManager:
                 tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
                 bigR = rebuildPrimaryParams(effectName, template.player_rating, edScale * 2.0) or {}
                 MULT_VAL = {"xMultValue", "baseXMult", "baseMult", "enhancedMult", "maxMult", "q4MultFactor"}
-                from managers.cardEffects import REWARDVALUE_IS_MULT_EFFECTS
+                from managers.cardEffects import REWARDVALUE_IS_MULT_EFFECTS, EFFECT_OUTPUT_TYPE
                 rewardIsMult = effectName in REWARDVALUE_IS_MULT_EFFECTS
+                # An FPx card's outputs are FPx amounts, which the calculator pays to 2 dp;
+                # one decimal is for FP. Backfield Buddies stores a bare delta that the
+                # synergy lift took past 1.0, and its tier II text read +1.7 for +1.66.
+                fpxOut = EFFECT_OUTPUT_TYPE.get(effectName) == "fpx"
 
                 def _fmt(v):
                     if float(v).is_integer():
@@ -1007,7 +1011,7 @@ class CardManager:
                     # adjacent tiers don't round to the same 2-dp value
                     if a < 0.1:
                         return round(v, 3)
-                    return round(v, 2) if a < 1 else round(v, 1)
+                    return round(v, 2) if a < 1 or (fpxOut and a < 10) else round(v, 1)
 
                 scaled = dict(primary)
                 for k, bv in baseR.items():

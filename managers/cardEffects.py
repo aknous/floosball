@@ -3090,6 +3090,10 @@ def _applySized(table, effectName, position, primary):
             primary[key] = round(scaled, 3 if abs(scaled) < 0.1 else 2 if abs(scaled) < 10 else 1)
     if "perFPxShown" in primary and "perFPx" in primary:
         primary["perFPxShown"] = round(primary["perFPx"], 2)
+    if "perFpPctDisplay" in primary and "perFpPct" in primary:
+        primary["perFpPctDisplay"] = round(primary["perFpPct"] * 100, 1)
+    if "maxBoostDisplay" in primary and "maxBoost" in primary:
+        primary["maxBoostDisplay"] = int(round(primary["maxBoost"] * 100))
 
 
 def _applyDiamondSize(effectName, primary):
@@ -3131,6 +3135,42 @@ _BAND_LIFT = {
     "bandwagon_express": (1.8, {"baseReward": "delta", "growthPerTick": "delta"}),
     # trims sized with the same instruments
     "vanguard":          (0.79, {"perVetMult": "delta", "maxMult": "mult"}),
+}
+
+
+# ─── Synergy lift (next season, owner: give players other metas to chase) ────────────
+# Measured with simcheck_meta.py: every archetype's payoff cards are fixed in a contender
+# lineup and the other slots hill-climbed over every mintable effect. On season 9 every
+# optimized hand converged on the same universal cards (Snake Eyes, Group Project,
+# Conductor, Copycat), and locking in an archetype's payoffs cost points: the open meta
+# built to 646 a week while same-team built to 277, stat amplifiers 342, FPx stack 392.
+# Owner chose to raise the existing payoffs (not new cards, not nerfs) until a hand built
+# around each lands near the open meta. Applied after the other sizing tables, so a factor
+# here is relative to what those already produce. Frozen at mint.
+#
+# The bar is Bizarro (`snake_eyes`), the one card in every optimized hand: it measured 97
+# FP a week in a hand built for it and 62 in any contender hand, against a diamond median
+# of 5. A payoff is lifted until a hand built for it (simcheck_effect_marginal.py
+# PROBE_ARM=built; the same-team cards in a same-team lineup) gets more from it than that,
+# while it stays small in a hand NOT built for it (PROBE_ARM=contender), so the lift cannot
+# turn it into the next card every hand runs. Season 9, prod snapshot. Built before ->
+# contender before: Fortitude 49/5, High Roller 45/4, Catalyst 47/4, Doubler 61/7,
+# Sharpshooter 65/3, Surveyor 37/4, Charmed 14/1; same-team lineup: Stack 36/1, Synergy
+# 31/6, Homer 32/4, Backfield Buddies 33/8. NOT lifted, because the lift needed would
+# make them universal: Providence (28 in any hand), Stacked Deck (19, counts any FPx
+# card), Chain Reaction and Captain (17 and 11, would need 4.5-5.5x), Last Resort (37).
+_SYNERGY_LIFT = {
+    "fortitude":         (2.15, {"perCardMult": "delta"}),
+    "high_roller":       (2.35, {"perCardMult": "delta"}),
+    "catalyst":          (2.2,  {"perFpPct": "delta", "maxBoost": "delta"}),
+    "charmed":           (4.0,  {"perTriggerFP": "delta"}),
+    "doubler":           (1.75, {"tdMult": "mult"}),
+    "sharpshooter":      (1.6,  {"fgMult": "mult"}),
+    "surveyor":          (2.85, {"yardMult": "mult"}),
+    "stack":             (3.0,  {"rewardValue": "mult"}),
+    "synergy":           (3.4,  {"perPairMult": "delta", "maxMult": "mult"}),
+    "homer":             (3.2,  {"perPlayerMult": "delta", "maxMult": "mult"}),
+    "backfield_buddies": (3.2,  {"rewardValue": "delta"}),
 }
 
 
@@ -3221,6 +3261,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     _applyBandTrim(effectName, position, primary)
     _applyDiamondSize(effectName, primary)
     _applySized(_BAND_LIFT, effectName, position, primary)
+    _applySized(_SYNERGY_LIFT, effectName, position, primary)
 
     # Position-specific param overrides for effects with per-position tuning
     if effectName == "crescendo":
