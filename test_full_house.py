@@ -3,8 +3,8 @@
 Under fusion the old "hand has all 5 positions" premise fired free (the position-locked
 base slots always span all 5). Full House now re-bases onto the FP power bar: it's a big
 Diamond FPx that fires ONLY in a week where EVERY performing (gated) card in the lineup
-cleared its bar. One cold player and it pays nothing. It runs second-pass so all first-pass
-gates are resolved first (calculator snapshots ctx._firstPassGatedCount / _firstPassGatedOn).
+cleared its bar. One cold player and it pays nothing. Every gated card counts, first- and second-pass alike (calculator snapshots
+ctx._fullHouseGatedCount / _fullHouseGatedOn before the second pass).
 
 Run: .venv/bin/python test_full_house.py
 """
@@ -77,16 +77,16 @@ cards = [valueCard(i, i) for i in range(1, 6)] + [fullHouseCard(6, 6)]
 fp = {i: WR_THR + 5 for i in range(1, 6)}
 fp[6] = FH_THR + 5   # Full House's own player must clear the DIAMOND bar
 res, fh, ctx = runLineup(cards, fp)
-expect(f"snapshot counted 5 first-pass gated cards (got {ctx._firstPassGatedCount})",
-       ctx._firstPassGatedCount == 5)
-expect(f"all 5 on (got {ctx._firstPassGatedOn})", ctx._firstPassGatedOn == 5)
+expect(f"snapshot counted 5 first-pass gated cards (got {ctx._fullHouseGatedCount})",
+       ctx._fullHouseGatedCount == 5)
+expect(f"all 5 on (got {ctx._fullHouseGatedOn})", ctx._fullHouseGatedOn == 5)
 expect(f"Full House multiplier fired  (x{fh.primaryMult})", fh and fh.primaryMult > 1.0)
 
 print("\n2. One cold player -> Full House pays NOTHING (one dud kills it)")
 fp2 = dict(fp); fp2[3] = WR_THR - 6   # player 3 below the bar
 res, fh, ctx = runLineup(cards, fp2)
-expect(f"snapshot: 4/5 on (got {ctx._firstPassGatedOn}/{ctx._firstPassGatedCount})",
-       ctx._firstPassGatedCount == 5 and ctx._firstPassGatedOn == 4)
+expect(f"snapshot: 4/5 on (got {ctx._fullHouseGatedOn}/{ctx._fullHouseGatedCount})",
+       ctx._fullHouseGatedCount == 5 and ctx._fullHouseGatedOn == 4)
 expect(f"Full House did NOT fire  (x{fh.primaryMult})", fh and fh.primaryMult <= 1.0)
 
 print("\n3. Below the min-card floor -> can't fire even if all on")
@@ -95,8 +95,8 @@ cards3 = [valueCard(i, i) for i in range(1, 4)] + [fullHouseCard(6, 6)]
 fp3 = {i: WR_THR + 5 for i in (1, 2, 3)}
 fp3[6] = FH_THR + 5
 res, fh, ctx = runLineup(cards3, fp3)
-expect(f"only {ctx._firstPassGatedCount} first-pass gated cards (< {_FULL_HOUSE_MIN_CARDS})",
-       ctx._firstPassGatedCount == 3)
+expect(f"only {ctx._fullHouseGatedCount} first-pass gated cards (< {_FULL_HOUSE_MIN_CARDS})",
+       ctx._fullHouseGatedCount == 3)
 expect(f"Full House did NOT fire  (x{fh.primaryMult})", fh and fh.primaryMult <= 1.0)
 
 print("\n3b. THE REPORTED LINEUP: 4 gated cards + a cross card -> it FIRES")
@@ -108,18 +108,59 @@ cards4 = [valueCard(i, i) for i in range(1, 5)] + [fullHouseCard(6, 6)]
 fp4 = {i: WR_THR + 5 for i in (1, 2, 3, 4)}
 fp4[6] = FH_THR + 5
 res, fh, ctx = runLineup(cards4, fp4)
-expect(f"exactly {ctx._firstPassGatedCount} first-pass gated cards (== floor)",
-       ctx._firstPassGatedCount == 4)
-expect(f"all 4 cleared (got {ctx._firstPassGatedOn})", ctx._firstPassGatedOn == 4)
+expect(f"exactly {ctx._fullHouseGatedCount} first-pass gated cards (== floor)",
+       ctx._fullHouseGatedCount == 4)
+expect(f"all 4 cleared (got {ctx._fullHouseGatedOn})", ctx._fullHouseGatedOn == 4)
 expect(f"Full House FIRES on the realistic lineup  (x{fh.primaryMult})",
        fh and fh.primaryMult > 1.0)
 
 print("\n4. Full House's OWN player must also show up (central gate)")
 # All 5 value cards on, but Full House's own depicted player is cold -> its own gate zeros it.
 res, fh, ctx = runLineup(cards, {**{i: WR_THR + 5 for i in range(1, 6)}, 6: 0})
-expect(f"all 5 first-pass on (got {ctx._firstPassGatedOn})", ctx._firstPassGatedOn == 5)
+expect(f"all 5 first-pass on (got {ctx._fullHouseGatedOn})", ctx._fullHouseGatedOn == 5)
 expect(f"but Full House's own cold player zeros it  (x{fh.primaryMult})",
        fh and fh.primaryMult <= 1.0)
+
+print("\n5. SECOND-PASS CARDS COUNT (owner, 2026-10-12)")
+# The reported lineup shape: 3 first-pass cards + Lemons + Group Project + Full House. Only
+# first-pass cards used to count, so this read 3 against a floor of 4 and could never fire.
+def crossCard(eqId, pid, effect, edition):
+    return mkCard(eqId, pid, buildEffectConfig(edition, 92, WR, forceEffect=effect),
+                  edition=edition, rating=92)
+from constants import CARD_GATE_FP_THRESHOLDS_BY_EDITION as _BY_ED2
+HOLO_THR = _BY_ED2.get('holographic', {}).get(WR, WR_THR)
+cards5 = ([valueCard(i, i) for i in range(1, 4)]
+          + [crossCard(4, 4, 'double_down', 'diamond'),
+             crossCard(5, 5, 'bonus_round', 'holographic'),
+             fullHouseCard(6, 6)])
+fp5 = {i: WR_THR + 5 for i in (1, 2, 3)}
+fp5[4] = FH_THR + 5; fp5[5] = HOLO_THR + 5; fp5[6] = FH_THR + 5
+res, fh, ctx = runLineup(cards5, fp5)
+expect(f"all 5 gated cards counted, second pass included (got {ctx._fullHouseGatedCount})",
+       ctx._fullHouseGatedCount == 5)
+expect(f"all 5 on (got {ctx._fullHouseGatedOn})", ctx._fullHouseGatedOn == 5)
+expect(f"Full House FIRES  (x{fh.primaryMult})", fh and fh.primaryMult > 1.0)
+
+print("\n6. A cold SECOND-PASS card kills it too")
+fp6 = dict(fp5); fp6[4] = 0   # Lemons' player misses his bar
+res, fh, ctx = runLineup(cards5, fp6)
+expect(f"4/5 on (got {ctx._fullHouseGatedOn}/{ctx._fullHouseGatedCount})",
+       ctx._fullHouseGatedCount == 5 and ctx._fullHouseGatedOn == 4)
+expect(f"Full House did NOT fire  (x{fh.primaryMult})", fh and fh.primaryMult <= 1.0)
+
+print("\n7. A gated-off Full House is NOT a trigger for Group Project")
+# Asca, season 10 week 5: every other card cleared, Full House's own player did not, so it
+# paid nothing -- but the bar resets an FPx to exactly 1.0 and the trigger test read
+# primaryMult > 0, so it counted as Group Project's 4th card and Group Project paid out.
+cards7 = ([valueCard(i, i) for i in range(1, 4)]
+          + [crossCard(5, 5, 'bonus_round', 'holographic'), fullHouseCard(6, 6)])
+fp7 = {i: WR_THR + 5 for i in (1, 2, 3)}
+fp7[5] = HOLO_THR + 5; fp7[6] = 0      # Full House's own player is cold
+res, fh, ctx = runLineup(cards7, fp7)
+gp = next(b for b in res.cardBreakdowns if b.effectName == 'bonus_round')
+expect(f"Full House paid nothing  (x{fh.primaryMult})", fh.primaryMult <= 1.0)
+expect(f"Group Project counted 3 others, not 4  ({gp.equation})",
+       gp.totalFP == 0 and '3/4' in gp.equation)
 
 print("\n" + ("ALL PASS" if not failures else f"{len(failures)} FAILED: {failures}"))
 sys.exit(1 if failures else 0)

@@ -5241,27 +5241,26 @@ def _computeFullRoster(primary, ctx, cardPlayerId, eqId):
 
     Under fusion the old "hand has all 5 positions" premise fired free (the position-locked
     base slots always span all 5). This re-bases it onto the power-bar gate: it fires only
-    when all of the lineup's gated (effect-bearing) cards are ON this week. Runs second-pass
-    (see _SECOND_PASS_EFFECTS) so every first-pass card's gate is already resolved; the
-    calculator snapshots that outcome into ctx._firstPassGatedCount / _firstPassGatedOn
-    before any second-pass card computes, so this reads a clean, order-independent tally of
-    the first-pass value cards only (no-effect floor cards carry no gate and second-pass
-    cross cards aren't counted). Full House's own gate (on its depicted player) is applied
-    centrally afterward, so its own player must show up too.
+    when every gated (effect-bearing) card in the lineup is ON this week, first-pass and
+    second-pass cards alike (owner, 2026-10-12). The calculator snapshots that outcome into
+    ctx._fullHouseGatedCount / _fullHouseGatedOn / _fullHouseGateProduct before any
+    second-pass card computes; a card's bar depends only on its own player's week, so the
+    second-pass cards' bars are known then. Cards with no bar (floor prints, chance cards,
+    floobit cards) aren't counted. Full House's own gate (on its depicted player) is
+    applied centrally afterward, so its own player must show up too.
 
-    Scales its reward by the PRODUCT of the first-pass gate ratios. Live those ratios are
-    1.0/0.0, so the product is exactly 1.0 (all cleared → full reward) or 0.0 (any cold →
-    nothing). In the expected projection the ratios are fractional clear probabilities, so
-    the product is the joint chance all of them clear and the reward becomes the true EV
-    (instead of the old all-or-nothing on the season averages)."""
+    Scales its reward by the PRODUCT of the gate ratios. Live those ratios are 1.0/0.0, so
+    the product is exactly 1.0 (all cleared → full reward) or 0.0 (any cold → nothing). In
+    the expected projection the ratios are fractional clear probabilities, so the product
+    is the joint chance all of them clear and the reward becomes the true EV."""
     rewardValue = primary.get("rewardValue", 2.5)
-    gatedCount = int(getattr(ctx, "_firstPassGatedCount", 0) or 0)
+    gatedCount = int(getattr(ctx, "_fullHouseGatedCount", 0) or 0)
     if gatedCount < _FULL_HOUSE_MIN_CARDS:
-        eq = f"Need {_FULL_HOUSE_MIN_CARDS}+ performing cards in the lineup ({gatedCount})"
+        eq = f"Need {_FULL_HOUSE_MIN_CARDS}+ cards with a power bar in the lineup ({gatedCount})"
         return EffectResult(equation=eq)
-    product = float(getattr(ctx, "_firstPassGateProduct", 0.0) or 0.0)
+    product = float(getattr(ctx, "_fullHouseGateProduct", 0.0) or 0.0)
     if product <= 0.0:
-        onCount = int(getattr(ctx, "_firstPassGatedOn", 0) or 0)
+        onCount = int(getattr(ctx, "_fullHouseGatedOn", 0) or 0)
         cold = gatedCount - onCount
         eq = f"{onCount}/{gatedCount} cards cleared their bar ({cold} cold) — no bonus"
         return EffectResult(equation=eq)
@@ -5379,12 +5378,23 @@ def _computeCopycat(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
+def cardProducedOutput(b) -> bool:
+    """Whether a card's breakdown paid anything this week: FP, Floobits, or an FPx ABOVE 1.0.
+
+    ⚠️ THE FPx TEST IS > 1.0, NOT > 0. A card whose power bar misses has its FPx reset to
+    exactly 1.0 by `_applyGateRatio`, so `primaryMult > 0` read every gated-off FPx card as
+    having triggered. Group Project and Chain Reaction counted it, and Last Resort did not
+    count it as failed. Found replaying a real lineup (Asca, season 10 week 5): Full House's
+    own player missed his bar and it paid nothing, yet it was Group Project's 4th trigger.
+    The ONE definition for every trigger/failed count, so the two sides cannot drift."""
+    return (b.totalFP > 0 or b.floobitsEarned > 0 or (b.primaryMult or 0) > 1.0)
+
+
 def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     """FPx scaling with how many other cards produced a non-zero bonus."""
     perCard = primary.get("perCardXMult", 0.15)
     breakdowns = ctx._firstPassBreakdowns or []
-    triggeredCount = sum(1 for b in breakdowns
-                         if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    triggeredCount = sum(1 for b in breakdowns if cardProducedOutput(b))
     preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
     triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     if triggeredCount > 0:
@@ -5415,22 +5425,17 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
 # the seat count. `test_effect_copy.py` asserts it stays reachable.
 _BONUS_ROUND_THRESHOLD = 4
 
-# ⚠️ 5 MADE THIS CARD UNPLAYABLE IN PRACTICE, not merely demanding. The lineup is 6 slots;
-# Full House takes one and is second-pass so it does not count itself, leaving exactly 5 —
-# meaning it fired ONLY on a perfect hand with no base prints AND no cross cards at all.
-# One Copycat, Lemons, Chain Reaction, Bonus Round, Last Resort, High Roller, Fortitude or
-# Charmed anywhere in the hand and it became mathematically impossible, silently. Reported
-# by a user whose lineup was touchdown_pinata / Full House / allowance / diversified /
-# copycat / alchemy: four gated cards, needed five, could not fire in any week.
+# ⚠️ 5 MADE THIS CARD UNPLAYABLE IN PRACTICE, not merely demanding, back when only FIRST-PASS
+# cards counted: a 6-slot lineup holding Full House and any cross card (Copycat, Lemons, Chain
+# Reaction, Group Project, ...) could not reach it. Reported by a user whose lineup was
+# touchdown_pinata / Full House / allowance / diversified / copycat / alchemy.
 #
-# 4 leaves room for exactly one cross card or one floor print while still demanding a
-# broadly performing lineup.
-#
-# ⚠️ DEFERRED (owner, agreed): second-pass cards should COUNT toward this, which is what the
-# card's own text already claims ("every card in your lineup"). That needs the calculator to
-# resolve their gates before Full House computes, so it is a bigger change than this
-# threshold; until then a cross card is a free pass rather than a disqualifier.
-_FULL_HOUSE_MIN_CARDS = 4   # first-pass gated (effect) cards that must be present AND all ON.
+# ⚠️ SECOND-PASS CARDS NOW COUNT (owner, 2026-10-12), which is what the card's text always
+# claimed ("every card in your lineup"). Before that, a cross card was a free pass rather than
+# a card that had to show up, and a lineup of Synergy / No Passengers / Big Deal / Lemons /
+# Group Project / Full House counted 3 and could never fire (reported by Asca, season 10).
+# The floor of 4 stays: it keeps a lineup of mostly floor prints from firing for free.
+_FULL_HOUSE_MIN_CARDS = 4   # gated (effect) cards, Full House excluded, that must be present AND all ON.
                             # See _computeFullRoster.
 
 
@@ -5562,18 +5567,18 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
     if "baseFP" not in primary and "rewardValue" in primary:
         rewardValue = primary["rewardValue"]
         breakdowns = ctx._firstPassBreakdowns or []
-        anyTriggered = any(b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0 for b in breakdowns)
+        anyTriggered = any(cardProducedOutput(b) for b in breakdowns)
         if not anyTriggered:
             eq = f"+{rewardValue - 1.0:.2f} FPx (no other cards produced a bonus)"
             return EffectResult(multBonus=rewardValue, equation=eq)
-        triggeredCount = sum(1 for b in breakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+        triggeredCount = sum(1 for b in breakdowns if cardProducedOutput(b))
         eq = f"{triggeredCount} other card(s) produced a bonus"
         return EffectResult(equation=eq)
     if "baseFP" not in primary and "baseMult" in primary:
         baseMult = primary["baseMult"]
         return EffectResult(multBonus=baseMult, equation=f"+{baseMult - 1.0:.2f} FPx (legacy)")
     breakdowns = ctx._firstPassBreakdowns or []
-    failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0 and b.primaryMult <= 0)
+    failedCount = sum(1 for b in breakdowns if not cardProducedOutput(b))
     preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
     failedCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and not t)
     from constants import CARD_CHANCE_CONDITION_FULL_COUNT
