@@ -4207,9 +4207,15 @@ class SeasonManager:
         for i in range(0, len(crossBlocks), 4):
             cross.extend(merge(crossBlocks[i:i + 4]))
 
-        # --- interleague: pair division i of one league with division i of the other,
-        # so each club draws exactly one opposing division.
-        interBlocks = [self._crossDivisionWeeks(divsByLeague[0][i], divsByLeague[1][i])
+        # --- interleague: each division draws exactly one division of the other league,
+        # ROTATING by season, so a club meets all 16 of the other league over four
+        # seasons. ⚠️ It used to pair division i with division i every year, and with
+        # the divisions curated that meant the same four interleague opponents every
+        # season (measured on prod: identical in all 10 seasons, reported by a user).
+        seasonNumber = getattr(getattr(self, 'currentSeason', None), 'seasonNumber', 1) or 1
+        rotation = (seasonNumber - 1) % per
+        interBlocks = [self._crossDivisionWeeks(divsByLeague[0][i],
+                                                divsByLeague[1][(i + rotation) % per])
                        for i in range(per)]
         inter = merge(interBlocks)              # 4 weeks
 
