@@ -62,7 +62,8 @@ class TheTwoIsTheDefault(unittest.TestCase):
 class OvertimeReadsTheScore(unittest.TestCase):
 
     def test_theSecondTeamTakesTheRungThatWins(self):
-        """Its try is the last word: down 2/3/4 after the touchdown, only the 3/4/5 wins."""
+        """Its try is the last word: down 2/3/4 after the touchdown, only the 3/4/5 wins
+        (a neutral coach, no evidence on the defense yet)."""
         for margin, rung in ((-2, 3), (-3, 4), (-4, 5)):
             with self.subTest(margin=margin):
                 self.assertEqual(picks(quarter=5, clock=400, margin=margin, ot='second'),
@@ -85,18 +86,25 @@ class TemperamentAndTheDefense(unittest.TestCase):
     from the defense's showing this game and scaled by the coach's temperament."""
 
     def test_aConservativeCoachTakesTheTieInOvertime(self):
-        self.assertEqual(picks(quarter=5, clock=400, margin=-3, aggr=60, ot='second'), {3: 60})
+        """Down 4 after the touchdown: the 4 ties (36%), the 5 wins (21%). A conservative
+        coach ties, a neutral one goes for the win."""
+        self.assertEqual(picks(quarter=5, clock=400, margin=-4, aggr=60, ot='second'), {4: 60})
+        self.assertEqual(picks(quarter=5, clock=400, margin=-4, aggr=80, ot='second'), {5: 60})
 
-    def test_butNotWhenTheirDefenseIsBeingShredded(self):
-        self.assertEqual(picks(quarter=5, clock=400, margin=-3, aggr=60, ot='second',
-                               defense=SHREDDED), {4: 60})
+    def test_theDefenseDecidesForACautiousCoach(self):
+        """Same spot, aggressiveness 70: a defense that has been holding earns the tie, one
+        that has been shredded does not."""
+        self.assertEqual(picks(quarter=5, clock=400, margin=-4, aggr=70, ot='second',
+                               defense=STINGY), {4: 60})
+        self.assertEqual(picks(quarter=5, clock=400, margin=-4, aggr=70, ot='second',
+                               defense=SHREDDED), {5: 60})
 
-    def test_withoutTheLadderAConservativeCoachKicksToTie(self):
-        out = picks(quarter=5, clock=400, margin=-1, ladder=False, aggr=60, ot='second')
-        self.assertGreaterEqual(out['kick'], 54, out)
-        out = picks(quarter=5, clock=400, margin=-1, ladder=False, aggr=60, ot='second',
-                    defense=SHREDDED)
-        self.assertEqual(out, {2: 60})
+    def test_withoutTheLadderACautiousCoachKicksToTie(self):
+        """Overtime, down 1: kick to tie unless the defense has been run over."""
+        out = picks(quarter=5, clock=400, margin=-1, ladder=False, aggr=70, ot='second')
+        self.assertGreaterEqual(out['kick'], 55, out)   # a weak generated kicker can flip one
+        self.assertEqual(picks(quarter=5, clock=400, margin=-1, ladder=False, aggr=70,
+                               ot='second', defense=SHREDDED), {2: 60})
 
     def test_aStingyDefenseMeansMoreKicksInTheFourth(self):
         """Down 1 with 3:00 left, a neutral coach: trusting the defense to get the ball

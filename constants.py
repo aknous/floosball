@@ -4000,11 +4000,31 @@ RULE_BALLOT_META = {
 # adds higher-value tries snapped from further out (harder to convert). Each rung
 # is one run/pass from its distance — "harder from further" emerges from the play
 # resolution, not a dial. Off by default; switched on by a Cores vote.
+# ⚠️ THE 3 IS SNAPPED FROM THE 3, NOT THE 5 (owner, 2026-10-15). From the 5 it converted
+# no better than the 4 from the 10 (36.4% against 36.2%), so the 3 was a rung nobody should
+# pick: the same odds for a point less. The engine's rate is nearly FLAT from 3 to 13 yards
+# (36-43%, see `CONVERSION_MAKE_BY_DISTANCE`) and falls off at 14, where the try becomes a
+# deep throw, so the only place the 3 sits between its neighbors is the 3-yard line: 41.7%,
+# midway between the 2 (46.9%) and the 4 (36.2%). The ladder then gets harder at every rung.
 CONVERSION_LADDER_RUNGS = [
-    {"points": 3, "distance": 5},
+    {"points": 3, "distance": 3},
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+# How often a post-touchdown try converts from each distance (yards), the coaches' read used
+# by every conversion decision (`Game._estimateConversionProb`). It is the ENGINE'S OWN rate,
+# measured with `conversion_rate_check.py` (200 matchups x 20 tries a yard, +/- 0.008),
+# 2026-10-15. ⚠️ It replaced a fixed `0.70 - 0.028 x (yards - 2)` guess from before the
+# goal-line and catch-model work, which read the two-pointer as 70% against a measured 47%,
+# so every team went for two in the fourth quarter about twice as often as the odds justify
+# (45% of Q4 touchdowns). ⚠️ The shape is not smooth and should not be smoothed: the try's
+# play call changes tier at 3 / 8 / 13 yards (`_simulateConversionPlay`), which is where the
+# steps are. Re-measure when that play call or the passing / goal-line models move.
+CONVERSION_MAKE_BY_DISTANCE = {
+    1: 0.514, 2: 0.469, 3: 0.417, 4: 0.375, 5: 0.364, 6: 0.431, 7: 0.383,
+    8: 0.363, 9: 0.389, 10: 0.362, 11: 0.431, 12: 0.398, 13: 0.404, 14: 0.229,
+    15: 0.209, 16: 0.193, 17: 0.196, 18: 0.192, 19: 0.189, 20: 0.178,
+}
 # "No kick" mode (gameRules.conversionKickEnabled=False): every post-TD try is a forced
 # go-for-it. When NOT in a Q4 comeback, a coach reaches for the highest-value rung whose
 # make estimate clears a personal floor — aggressive coaches accept lower odds (reach
@@ -4028,9 +4048,14 @@ CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (
 #
 # Same shape as the CONVERSION_FORCEGO_* floor above: the landing rung is taken when its
 # make estimate clears a floor that aggressiveness lowers.
-DARTS_LAND_MAKE_FLOOR = 0.45   # a neutral coach's minimum make% to try to win it outright
-DARTS_LAND_AGGR_SWING = 0.26   # +/- the floor across the coach-aggressiveness range
-DARTS_LAND_JITTER     = 0.06   # per-attempt randomness on the floor (variety)
+# ⚠️ RESCALED 2026-10-15 with `CONVERSION_MAKE_BY_DISTANCE`, which replaced an estimate that
+# read every rung far too high (the 5 at 34% against a measured 21%). The floors keep each
+# coach where they were on the ladder: a neutral coach lands the 4 most of the time and banks
+# instead of trying the 5, an aggressive one tries every rung, a conservative one banks.
+# They were 0.45 / 0.26 / 0.06 on the old scale.
+DARTS_LAND_MAKE_FLOOR = 0.33   # a neutral coach's minimum make% to try to win it outright
+DARTS_LAND_AGGR_SWING = 0.21   # +/- the floor across the coach-aggressiveness range
+DARTS_LAND_JITTER     = 0.05   # per-attempt randomness on the floor (variety)
 # Only defer to the coach when banking is MATERIALLY safer. Below this the landing rung
 # is close enough in odds that declining a win is just leaving the game on the field.
 DARTS_LAND_MIN_EDGE   = 0.06

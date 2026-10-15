@@ -3507,11 +3507,18 @@ class Game:
         return secs
 
     def _estimateConversionProb(self, scoringTeam, distance) -> float:
-        """Rough likelihood a run/pass converts from `distance` yards out — used
-        ONLY by the ladder decision to weigh rungs (the actual try is a real play,
-        so 'harder from further' truly emerges there). Falls with distance."""
-        p = 0.70 - max(0, distance - 2) * 0.028   # ~0.70 at 2 yd, ~0.34 at 15 yd
-        return max(0.05, min(0.92, p))            # tuned to the end-zone-targeting play calls
+        """How likely a try from `distance` yards converts, as the coaches read it: the
+        engine's own measured rate (`CONVERSION_MAKE_BY_DISTANCE`), interpolated between
+        whole yards and held at the ends. Used by every conversion decision; the try itself
+        is a real play."""
+        from constants import CONVERSION_MAKE_BY_DISTANCE as table
+        lo, hi = min(table), max(table)
+        d = max(float(lo), min(float(hi), float(distance)))
+        below = int(math.floor(d))
+        if below >= hi:
+            return table[hi]
+        frac = d - below
+        return table[below] + (table[below + 1] - table[below]) * frac
 
     def _conversionDesire(self, deficit: float, points: float, xp: float, one: float) -> float:
         """How much the trailing team wants a go-try worth `points` over the safe kick, as a
