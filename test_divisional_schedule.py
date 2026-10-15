@@ -112,6 +112,25 @@ total = sum(len(wk) for wk in lastDay)
 expect(f"the final game day is mostly division games ({divGames}/{total})",
        divGames / total > 0.8)
 
+# ── the interleague division rotates by season ──────────────────────────────
+class S:
+    def __init__(self, n): self.seasonNumber = n
+
+def interOpponents(seasonNumber):
+    sm = build()
+    sm.currentSeason = S(seasonNumber)
+    sched = sm._generateDivisionalSchedule()
+    t = sm.leagueManager.leagues[0].teamList[0]
+    return frozenset(aw.name if h is t else h.name for wk in sched for h, aw in wk
+                     if t in (h, aw) and (h.name.startswith('B') or aw.name.startswith('B')))
+
+draws = [interOpponents(n) for n in range(1, 5)]
+expect("a different interleague division in each of four seasons",
+       len(set(draws)) == 4)
+expect("...covering all 16 clubs of the other league",
+       len(frozenset().union(*draws)) == 16)
+expect("...and the cycle repeats after four seasons", interOpponents(5) == draws[0])
+
 # ── a non-division-shaped league falls back rather than building nonsense ───
 expect("an odd league size falls back to the round-robin",
        build(perLeague=15)._generateDivisionalSchedule() is None)

@@ -4000,11 +4000,31 @@ RULE_BALLOT_META = {
 # adds higher-value tries snapped from further out (harder to convert). Each rung
 # is one run/pass from its distance — "harder from further" emerges from the play
 # resolution, not a dial. Off by default; switched on by a Cores vote.
+# ⚠️ THE 3 IS SNAPPED FROM THE 3, NOT THE 5 (owner, 2026-10-15). From the 5 it converted
+# no better than the 4 from the 10 (36.4% against 36.2%), so the 3 was a rung nobody should
+# pick: the same odds for a point less. The engine's rate is nearly FLAT from 3 to 13 yards
+# (36-43%, see `CONVERSION_MAKE_BY_DISTANCE`) and falls off at 14, where the try becomes a
+# deep throw, so the only place the 3 sits between its neighbors is the 3-yard line: 41.7%,
+# midway between the 2 (46.9%) and the 4 (36.2%). The ladder then gets harder at every rung.
 CONVERSION_LADDER_RUNGS = [
-    {"points": 3, "distance": 5},
+    {"points": 3, "distance": 3},
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+# How often a post-touchdown try converts from each distance (yards), the coaches' read used
+# by every conversion decision (`Game._estimateConversionProb`). It is the ENGINE'S OWN rate,
+# measured with `conversion_rate_check.py` (200 matchups x 20 tries a yard, +/- 0.008),
+# 2026-10-15. ⚠️ It replaced a fixed `0.70 - 0.028 x (yards - 2)` guess from before the
+# goal-line and catch-model work, which read the two-pointer as 70% against a measured 47%,
+# so every team went for two in the fourth quarter about twice as often as the odds justify
+# (45% of Q4 touchdowns). ⚠️ The shape is not smooth and should not be smoothed: the try's
+# play call changes tier at 3 / 8 / 13 yards (`_simulateConversionPlay`), which is where the
+# steps are. Re-measure when that play call or the passing / goal-line models move.
+CONVERSION_MAKE_BY_DISTANCE = {
+    1: 0.514, 2: 0.469, 3: 0.417, 4: 0.375, 5: 0.364, 6: 0.431, 7: 0.383,
+    8: 0.363, 9: 0.389, 10: 0.362, 11: 0.431, 12: 0.398, 13: 0.404, 14: 0.229,
+    15: 0.209, 16: 0.193, 17: 0.196, 18: 0.192, 19: 0.189, 20: 0.178,
+}
 # "No kick" mode (gameRules.conversionKickEnabled=False): every post-TD try is a forced
 # go-for-it. When NOT in a Q4 comeback, a coach reaches for the highest-value rung whose
 # make estimate clears a personal floor — aggressive coaches accept lower odds (reach
@@ -4028,9 +4048,14 @@ CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (
 #
 # Same shape as the CONVERSION_FORCEGO_* floor above: the landing rung is taken when its
 # make estimate clears a floor that aggressiveness lowers.
-DARTS_LAND_MAKE_FLOOR = 0.45   # a neutral coach's minimum make% to try to win it outright
-DARTS_LAND_AGGR_SWING = 0.26   # +/- the floor across the coach-aggressiveness range
-DARTS_LAND_JITTER     = 0.06   # per-attempt randomness on the floor (variety)
+# ⚠️ RESCALED 2026-10-15 with `CONVERSION_MAKE_BY_DISTANCE`, which replaced an estimate that
+# read every rung far too high (the 5 at 34% against a measured 21%). The floors keep each
+# coach where they were on the ladder: a neutral coach lands the 4 most of the time and banks
+# instead of trying the 5, an aggressive one tries every rung, a conservative one banks.
+# They were 0.45 / 0.26 / 0.06 on the old scale.
+DARTS_LAND_MAKE_FLOOR = 0.33   # a neutral coach's minimum make% to try to win it outright
+DARTS_LAND_AGGR_SWING = 0.21   # +/- the floor across the coach-aggressiveness range
+DARTS_LAND_JITTER     = 0.05   # per-attempt randomness on the floor (variety)
 # Only defer to the coach when banking is MATERIALLY safer. Below this the landing rung
 # is close enough in odds that declining a win is just leaving the game on the field.
 DARTS_LAND_MIN_EDGE   = 0.06
@@ -4057,6 +4082,19 @@ CONVERSION_GO_Q3_DAMPEN      = 0.55
 CONVERSION_DRIVE_ODDS = (0.64, 0.12, 0.22, 0.02)
 CONVERSION_SECS_PER_DRIVE = 165.0     # regulation seconds per drive, both teams combined
 CONVERSION_TRAIL_SECS_PER_DRIVE = 150.0   # a trailing team's hurry-up drive, for counting the drives it can still get
+# How the coach reads the team's own defense (Game._opponentDriveOdds). The opponent's points per
+# drive this game is shrunk toward the league rate by this many drives of prior: about a third
+# of a team's ~11 drives, so by the fourth quarter the game's own evidence outweighs the prior
+# roughly two to one.
+CONVERSION_DEFENSE_PRIOR_DRIVES = 4
+# Temperament: the opponent's scoring chance as the coach perceives it is scaled by
+# 1 + aggressiveness lean x this, so the most conservative coach (60) rates the threat at a
+# quarter of its measured size and trusts the defense to get the stop, the most aggressive
+# (100) at 1.75x and goes for it now. Temperament works ONLY through this perception, so the
+# defense's showing always counts: a conservative coach whose defense is being shredded still
+# goes for the win, an aggressive one whose defense is pitching a shutout may take the tie.
+# Owner (2026-10-15): given the tie or the win, a conservative coach goes for the tie.
+CONVERSION_DEFENSE_TRUST_SWING = 0.75
 CONVERSION_CHASE_WIN_BELOW = 0.10     # below this win chance a trailing team weighs edges relative to its odds
 CONVERSION_VALUE_MIN_GAIN = 0.005     # win-chance edge below which the kick is automatic
 CONVERSION_VALUE_BASE = 0.35          # go probability at the smallest real edge ...
@@ -4385,10 +4423,20 @@ DRIVE_CLOCK_HURRY_FRAC = 0.625          # 2-minute-drill tempo below this
 DRIVE_CLOCK_TAKE_POINTS_FRAC = 0.167    # ~one snap left: take a makeable FG / heave a hail mary
 DRIVE_CLOCK_LOW_FRAC = 0.125            # amber chip / spike-to-stop trigger
 DRIVE_CLOCK_SPIKE_FRAC = 0.10           # critically low: spike to stop the game clock
-# Last-snap PUNT (deep in own territory, can't convert, out of FG range): rather than
-# hand the ball back on downs at your own spot, punt to flip field position.
-DRIVE_CLOCK_PUNT_MIN_YTE = 60           # only "deep" — ball on your own side (>=60 yds to EZ)
-DRIVE_CLOCK_PUNT_MIN_TOGO = 7           # only long yardage — can't realistically convert in one snap
+# Last-snap PUNT (own territory, out of FG range): rather than hand the ball back on
+# downs at your own spot, punt to flip field position. Applies on EVERY down, the final
+# one included, and it also bars the drive-clock Hail Mary from this territory (see
+# `playCaller`): a heave from your own side almost never scores, and its incompletion
+# hands the opponent a short field.
+DRIVE_CLOCK_PUNT_MIN_YTE = 50           # your own half of the field (>=50 yds to EZ)
+# 'series' reset only: a first down refills the clock there, so a short-yardage snap is
+# worth running for the conversion. Under 'possession' a conversion does not save the
+# drive, so the yardage is irrelevant and the punt applies at any distance.
+DRIVE_CLOCK_PUNT_MIN_TOGO = 7
+# Coach roll for that punt: base + span x clock IQ (0..1). A staff that snaps into a
+# turnover at its own 30 is not making a subtle error, so the floor is high.
+DRIVE_CLOCK_PUNT_BASE = 0.75
+DRIVE_CLOCK_PUNT_IQ_SPAN = 0.25
 
 # ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
 # Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the

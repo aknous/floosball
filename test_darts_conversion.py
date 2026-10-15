@@ -82,7 +82,10 @@ for ladder in (False, True):
 # ── 2. the coach decides when there IS a trade-off ──────────────────────────
 print("\n-- an aggressive coach takes the dart, a conservative one banks --")
 T = 24
-for need in (3, 4, 5):
+# ⚠️ Need 3 is no longer a trade-off. Since the 3 moved to the 3-yard line (2026-10-15) it
+# converts 41.7% against the 2's 46.9%, under `DARTS_LAND_MIN_EDGE`, so banking is not
+# materially safer and every coach takes the win (asserted with need 2 below).
+for need in (4, 5):
     mine = T - need
     aggro, _ = picks(True, mine, 100)
     cons, _ = picks(True, mine, 60)
@@ -98,6 +101,8 @@ print("\n-- and is never consulted when there is no trade-off --")
 for aggr, label in ((60, 'conservative'), (80, 'neutral'), (100, 'aggressive')):
     got, _ = picks(True, T - 2, aggr)
     expect(f"need 2: {label} takes the 2-pt that wins ({dict(got)})", set(got) == {2})
+    got, _ = picks(True, T - 3, aggr)
+    expect(f"need 3: {label} takes the 3 that wins ({dict(got)})", set(got) == {3})
 
 # ── 3. the ladder is an improvement to darts, not a hazard ──────────────────
 # ⚠️ Without it, needs 3/4/5 can only kick for 1 and stay short. This is the reason the
