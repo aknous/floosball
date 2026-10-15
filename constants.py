@@ -4385,10 +4385,20 @@ DRIVE_CLOCK_HURRY_FRAC = 0.625          # 2-minute-drill tempo below this
 DRIVE_CLOCK_TAKE_POINTS_FRAC = 0.167    # ~one snap left: take a makeable FG / heave a hail mary
 DRIVE_CLOCK_LOW_FRAC = 0.125            # amber chip / spike-to-stop trigger
 DRIVE_CLOCK_SPIKE_FRAC = 0.10           # critically low: spike to stop the game clock
-# Last-snap PUNT (deep in own territory, can't convert, out of FG range): rather than
-# hand the ball back on downs at your own spot, punt to flip field position.
-DRIVE_CLOCK_PUNT_MIN_YTE = 60           # only "deep" — ball on your own side (>=60 yds to EZ)
-DRIVE_CLOCK_PUNT_MIN_TOGO = 7           # only long yardage — can't realistically convert in one snap
+# Last-snap PUNT (own territory, out of FG range): rather than hand the ball back on
+# downs at your own spot, punt to flip field position. Applies on EVERY down, the final
+# one included, and it also bars the drive-clock Hail Mary from this territory (see
+# `playCaller`): a heave from your own side almost never scores, and its incompletion
+# hands the opponent a short field.
+DRIVE_CLOCK_PUNT_MIN_YTE = 50           # your own half of the field (>=50 yds to EZ)
+# 'series' reset only: a first down refills the clock there, so a short-yardage snap is
+# worth running for the conversion. Under 'possession' a conversion does not save the
+# drive, so the yardage is irrelevant and the punt applies at any distance.
+DRIVE_CLOCK_PUNT_MIN_TOGO = 7
+# Coach roll for that punt: base + span x clock IQ (0..1). A staff that snaps into a
+# turnover at its own 30 is not making a subtle error, so the floor is high.
+DRIVE_CLOCK_PUNT_BASE = 0.75
+DRIVE_CLOCK_PUNT_IQ_SPAN = 0.25
 
 # ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
 # Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the

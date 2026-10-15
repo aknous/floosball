@@ -125,7 +125,7 @@ class TheBranchReadsTheRightMargin(unittest.TestCase):
             src = fh.read()
         body = src.split('# ── Hail Mary: desperation deep throw ──')[1][:2600]
         self.assertIn('_hmDiff = decisionDiff', body)
-        self.assertIn('_driveHailMary = _dcLastPlay and _hmDiff <= 0', body)
+        self.assertIn('_driveHailMary = (_dcLastPlay and _hmDiff <= 0', body)
         self.assertNotIn('_dcLastPlay and scoreDiff <= 0', body,
                          'the drive-clock heave is reading the aggregate again')
 

@@ -3104,6 +3104,17 @@ class Game:
         """True when an ENABLED drive clock has run out for the current possession."""
         return self._driveClockActive() and self.driveClockRemaining <= 0
 
+    def _driveClockLastSnap(self) -> bool:
+        """Roughly one snap left on the Drive Clock: the window in which the offense takes
+        the points, punts, or heaves it (`DRIVE_CLOCK_TAKE_POINTS_FRAC` of a seconds
+        limit, the final play of a plays limit)."""
+        if not self._driveClockActive():
+            return False
+        from constants import DRIVE_CLOCK_TAKE_POINTS_FRAC
+        if getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays':
+            return self.driveClockRemaining <= 1
+        return self.driveClockRemaining <= DRIVE_CLOCK_TAKE_POINTS_FRAC * self._driveClockLimitSecs()
+
     def _driveClockLow(self) -> bool:
         """True when the drive clock is low enough that the offense should hurry —
         the last ~15s (seconds unit) or the last snap (plays unit). Drives the
@@ -3661,6 +3672,49 @@ class Game:
         self.play.insights['_otWeights'] = weights
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
+    def _driveClockPuntCall(self, scoreDiff: int, gameIQ: float) -> bool:
+        """On the Drive Clock's last snap, punt from the offense's own half rather than
+        snap into a turnover on downs at its own spot, which hands the defense a short
+        field. Sets the punt and returns True when it fires. The caller has already
+        established that this is the drive clock's last snap.
+
+        ⚠️ IT MUST ALSO RUN ON THE FINAL DOWN. It used to be early downs only ("4th is
+        the fourth-down caller's job"), but the drive-clock Hail Mary in `playCaller`
+        runs BEFORE the fourth-down caller and fired whenever the offense was tied or
+        trailing, in any quarter, from 30+ yards out, so a 4th-down punt never got a
+        look. Measured over 20 games at 70s/series: 18 of 26 expiries were in the
+        offense's own half and 15 of those were 4th-down heaves (4th & 6 from its own 26
+        in the first quarter). The Hail Mary is now barred from this territory too.
+
+        Under 'series' reset a first down refills the clock, so a short-yardage snap is
+        worth running for the conversion (`DRIVE_CLOCK_PUNT_MIN_TOGO`), and on a final
+        down `_fourthDownCaller`'s own go/punt model already weighs that. Under
+        'possession' a conversion cannot save the drive, so yardage does not matter.
+        """
+        from constants import (DRIVE_CLOCK_PUNT_MIN_YTE, DRIVE_CLOCK_PUNT_MIN_TOGO,
+                               DRIVE_CLOCK_PUNT_BASE, DRIVE_CLOCK_PUNT_IQ_SPAN)
+        if self.yardsToEndzone < DRIVE_CLOCK_PUNT_MIN_YTE:
+            return False
+        series = getattr(self.gameRules, 'driveClockReset', 'possession') == 'series'
+        if series and self.yardsToFirstDown < DRIVE_CLOCK_PUNT_MIN_TOGO:
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if (self._awakenedReadyFor(kicker, 'kick')
+                and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
+            return False   # a charged kicker takes the points instead
+        if (self.format.suppressPunt(self) or self._isFgDrainMode()
+                or self._isGarbageTime(scoreDiff)):
+            return False
+        if _random.random() >= DRIVE_CLOCK_PUNT_BASE + DRIVE_CLOCK_PUNT_IQ_SPAN * gameIQ:
+            return False   # a poor staff can still give it up
+        self.play.insights['clockMgmt'] = {
+            'decision': 'punt',
+            'reason': 'Drive clock expiring in own territory, punt to flip field position',
+            'clockRemaining': self.gameClockSeconds,
+        }
+        self.play.playType = PlayType.Punt
+        return True
+
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
         # Frames: each frame is a mini-game you're trying to WIN, so every score-relative
@@ -3707,6 +3761,13 @@ class Game:
         if self._dartsDriveIsDead():
             self.play.insights['dartsDeadDrive'] = True
             self.play.playType = PlayType.Punt
+            return PlayType.Punt
+        # Drive Clock last snap under 'possession' reset: a conversion cannot save the
+        # drive, so from the offense's own half the only useful snap is a punt. Under
+        # 'series' the model below decides (a short conversion refills the clock).
+        if (getattr(self.gameRules, 'driveClockReset', 'possession') != 'series'
+                and self._driveClockLastSnap()
+                and self._driveClockPuntCall(scoreDiff, self._coachClockIQ(coach))):
             return PlayType.Punt
         # Set sideline targeting for any pass plays called in this method
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
@@ -7575,29 +7636,11 @@ class Game:
                     self.play.playType = PlayType.FieldGoal
                     return
 
-            # Drive Clock last snap, deep in own territory, can't convert: PUNT rather
-            # than snap into a turnover on downs at your own spot. In series-reset mode a
-            # long-yardage set (e.g. 15 to go) the offense can't reach just hands the
-            # defense a short field every drive; punting flips field position. Early downs
-            # only (4th is the fourth-down caller's job), out of FG range (the deep gate
-            # guarantees it), long to go, coach-IQ gated so a sharp staff concedes the
-            # field-position battle instead of the turnover. A poor staff still gives it up.
-            from constants import DRIVE_CLOCK_PUNT_MIN_YTE, DRIVE_CLOCK_PUNT_MIN_TOGO
-            if (_dcExpiring
-                    and self.down < self.gameRules.downsPerSeries
-                    and self.yardsToEndzone >= DRIVE_CLOCK_PUNT_MIN_YTE
-                    and self.yardsToFirstDown >= DRIVE_CLOCK_PUNT_MIN_TOGO
-                    and not self.format.suppressPunt(self)
-                    and not self._isFgDrainMode()
-                    and not self._isGarbageTime(scoreDiff)):
-                if _random.random() < (0.4 + 0.55 * gameIQ):
-                    self.play.insights['clockMgmt'] = {
-                        'decision': 'punt',
-                        'reason': 'Drive clock expiring deep in own territory, punt to flip field position',
-                        'clockRemaining': self.gameClockSeconds,
-                    }
-                    self.play.playType = PlayType.Punt
-                    return
+            # Drive Clock last snap in own territory: punt rather than hand the defense a
+            # short field (`_driveClockPuntCall`; the final down asks the same question
+            # from `_fourthDownCaller`).
+            if _dcExpiring and self._driveClockPuntCall(scoreDiff, gameIQ):
+                return
 
             # Drive Clock (seconds) preservation: critically low with a down to
             # spare — spike to stop the game clock (which pauses the drive clock),
@@ -7886,7 +7929,14 @@ class Game:
         # drive ends with the frame.
         _gameHailMary = (_periodKind == 'game' and _hmDiff < 0
                          and _periodSecs <= 12)
-        _driveHailMary = _dcLastPlay and _hmDiff <= 0   # trailing or tied
+        # Trailing or tied, and NOT from the offense's own half: the possession is lost
+        # either way, so a heave from there trades a punt's field position for a throw
+        # that almost never scores (see the drive-clock punt above). A format that bars
+        # the punt keeps the heave.
+        from constants import DRIVE_CLOCK_PUNT_MIN_YTE as _DC_PUNT_YTE
+        _driveHailMary = (_dcLastPlay and _hmDiff <= 0
+                          and (self.yardsToEndzone < _DC_PUNT_YTE
+                               or self.format.suppressPunt(self)))
         if ((_gameHailMary or _driveHailMary)
                 and self.yardsToEndzone >= 30
                 and not self._isGarbageTime(_hmDiff)):
