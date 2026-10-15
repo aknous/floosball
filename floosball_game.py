@@ -1103,6 +1103,11 @@ class Game:
         # with `yardsToEndzone` this is the whole of a drive: started there, is here now.
         self.driveStartYardsToEZ = None
         self._driveTeam = None
+        # Each side's drives this game and the points its offense scored on them. Read by
+        # the conversion choice to judge how the scoring team's defense is holding up
+        # (`_opponentDriveOdds`).
+        self._drivesBy = {}
+        self._offensePointsBy = {}
         self.offensiveTeam: FloosTeam.Team = None
         self.defensiveTeam: FloosTeam.Team = None
         self.homeTeamElo = getattr(homeTeam, 'elo', 1500) if homeTeam else 1500
@@ -8092,6 +8097,7 @@ class Game:
             return
         self._driveTeam = team
         self.driveStartYardsToEZ = self.yardsToEndzone
+        self._drivesBy[id(team)] = self._drivesBy.get(id(team), 0) + 1
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
         # OT possession tracking: detect when each team's possession ends
@@ -14356,7 +14362,42 @@ class Game:
             opts.append((r, float(r['points']), self._estimateConversionProb(scoringTeam, r['distance'])))
         return opts
 
-    def _conversionWinChance(self, margin: float, drives: int, options: list) -> float:
+    def _opponentDriveOdds(self, scoringTeam: FloosTeam.Team) -> tuple:
+        """How the scoring team's coach expects the opponent's drives to go, as
+        (nothing, field goal, touchdown) per drive.
+
+        Two things move it off the league rates (`CONVERSION_DRIVE_ODDS`):
+          * **How the defense has played THIS game.** The opponent's points per drive so
+            far, shrunk toward the league rate by `CONVERSION_DEFENSE_PRIOR_DRIVES` drives
+            of prior, scales its chance of scoring. A defense that has been stopping them
+            makes a tie, or a lead that a field goal erases, worth more; one that has been
+            shredded makes the coach go for it now.
+          * **The coach's temperament.** A conservative coach trusts the defense to make the
+            stop, an aggressive one does not (`CONVERSION_DEFENSE_TRUST_SWING`).
+        """
+        from constants import (CONVERSION_DRIVE_ODDS, CONVERSION_DEFENSE_PRIOR_DRIVES,
+                               CONVERSION_DEFENSE_TRUST_SWING)
+        pNone, pFg, pTdKick, pTdTwo = CONVERSION_DRIVE_ODDS
+        pTd = pTdKick + pTdTwo
+        opp = self.awayTeam if scoringTeam is self.homeTeam else self.homeTeam
+        td = float(getattr(self.gameRules, 'touchdownPoints', 6))
+        xp = float(getattr(self.gameRules, 'extraPointPoints', 1))
+        priorPpd = pFg * float(self._fgValue()) + pTd * (td + xp)
+        drives = self._drivesBy.get(id(opp), 0)
+        points = self._offensePointsBy.get(id(opp), 0)
+        k = CONVERSION_DEFENSE_PRIOR_DRIVES
+        ratio = ((k * priorPpd + points) / (k + drives)) / priorPpd if priorPpd > 0 else 1.0
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL)
+                       - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        ratio *= max(0.0, 1.0 + aggressNorm * CONVERSION_DEFENSE_TRUST_SWING)
+        scoring = pFg + pTd
+        scaled = min(0.95, scoring * ratio)
+        f = scaled / scoring if scoring > 0 else 0.0
+        return (1.0 - scaled, pFg * f, pTd * f)
+
+    def _conversionWinChance(self, margin: float, drives: int, options: list,
+                             oppOdds: tuple = None, overtime: bool = False) -> float:
         """Chance the scoring team wins from `margin` (negative = behind) with `drives`
         possessions left in regulation, the OPPONENT receiving first and the ball
         alternating after that.
@@ -14375,12 +14416,30 @@ class Game:
         fg = float(self._fgValue())
         pNone, pFg, pTdKick, pTdTwo = CONVERSION_DRIVE_ODDS
         pTd = pTdKick + pTdTwo
+        oNone, oFg, oTd = oppOdds if oppOdds is not None else (pNone, pFg, pTd)
         choices = [(pts, p) for _, pts, p in options]
         memo = {}
+        # ⚠️ A TIE IS SUDDEN DEATH, AND WHO GETS THE BALL FIRST MATTERS. The next score wins,
+        # so from a tie with us receiving we win with pUs / (1 - (1-pUs)(1-pThem)), and with
+        # them receiving (1-pThem) times that. In overtime the side due the next possession
+        # is known: the second team's tying try hands the ball to the first team, which is
+        # why a tie there is worth well under a coin flip unless the defense is trusted to
+        # get the stop. A tie at the end of regulation goes to an overtime that could start
+        # either way, so it takes the average, which is exactly 0.5 when the two sides
+        # score at the same rate.
+        pUs, pThem = pFg + pTd, oFg + oTd
+        _sdDenom = 1.0 - (1.0 - pUs) * (1.0 - pThem)
+        sdUsFirst = pUs / _sdDenom if _sdDenom > 0 else 0.5
+        sdThemFirst = (1.0 - pThem) * sdUsFirst
+
+        def tieValue(oursNext):
+            if overtime:
+                return sdUsFirst if oursNext else sdThemFirst
+            return 0.5 * (sdUsFirst + sdThemFirst)
 
         def v(m, k, oursNext):
             if k <= 0:
-                return 1.0 if m > 0 else 0.5 if m == 0 else 0.0
+                return 1.0 if m > 0 else tieValue(oursNext) if m == 0 else 0.0
             key = (m, k, oursNext)
             if key in memo:
                 return memo[key]
@@ -14389,13 +14448,28 @@ class Game:
             afterTd = m + sign * td
             conv = [p * nxt(afterTd + sign * pts) + (1 - p) * nxt(afterTd) for pts, p in choices]
             best = (max(conv) if oursNext else min(conv)) if conv else nxt(afterTd)
-            out = pNone * nxt(m) + pFg * nxt(m + sign * fg) + pTd * best
+            if oursNext:
+                out = pNone * nxt(m) + pFg * nxt(m + sign * fg) + pTd * best
+            else:
+                out = oNone * nxt(m) + oFg * nxt(m + sign * fg) + oTd * best
             memo[key] = out
             return out
 
         return v(float(margin), int(drives), False)
 
-    def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list) -> dict:
+    def _overtimeDrivesAfterTry(self, scoringTeam: FloosTeam.Team) -> int:
+        """Possessions left in the game after this overtime try, for the win-value model.
+        The first team's touchdown leaves the opponent its guaranteed possession (1); the
+        second team's try is the last word (0): a lead wins, a tie goes to sudden death,
+        which the model scores as a coin flip."""
+        if (getattr(self, 'otPeriod', 0) <= 1
+                and scoringTeam is getattr(self, 'otFirstPossTeam', None)
+                and not getattr(self, 'otFirstPossComplete', False)):
+            return 1
+        return 0
+
+    def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list,
+                                 drives: int = None) -> dict:
         """Pick the conversion that leaves the best chance of winning.
 
         ⚠️ THE OLD CHART ONLY EVER LET A TRAILING TEAM GO, AND LET IT GO ALMOST
@@ -14426,29 +14500,51 @@ class Game:
         q = self.currentQuarter
         quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
         secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
-        drives = min(8, max(1, round(secsLeft / CONVERSION_SECS_PER_DRIVE)))
         mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
         margin = float(mine - theirs)
+        # `drives` given (overtime) is the exact count. Otherwise read it off the clock.
+        # ⚠️ A TRY WITH NO TIME LEFT IS THE LAST PLAY OF REGULATION. The clock split floors
+        # at one drive and the trailing branch at two, so a touchdown at 0:00 used to be
+        # valued as if the game went on, and a team that had just tied it took the 3 about
+        # half the time over the likelier 2.
+        if drives is None and secsLeft <= 0:
+            drives = 0
+        fixedDrives = drives is not None
+        if not fixedDrives:
+            drives = min(8, max(1, round(secsLeft / CONVERSION_SECS_PER_DRIVE)))
         # ⚠️ A TEAM BEHIND PLAYS FOR THE POSSESSIONS IT NEEDS, clock permitting. The even
         # clock split gives a team down 18 with 5:49 left ONE more drive, from which no
         # conversion changes anything — so the model shrugged and kicked what is really a
         # free roll. A trailing side hurries and onside-kicks for more, so it plans on as
         # many own drives as the deficit needs, up to one per CONVERSION_TRAIL_SECS_PER_DRIVE
         # of clock (and always at least one: a stop, an onside kick). Opponent receives first.
-        if margin < 0:
+        if margin < 0 and not fixedDrives:
             from constants import CONVERSION_TRAIL_SECS_PER_DRIVE
             needed = math.ceil(-margin / (self._maxPossession() or 8.0))
             affordable = 1 + int(secsLeft // CONVERSION_TRAIL_SECS_PER_DRIVE)
             drives = max(drives, 2 * max(1, min(needed, affordable)))
-        stand = self._conversionWinChance(margin, drives, options)
+        oppOdds = self._opponentDriveOdds(scoringTeam)
+        overtime = self.currentQuarter >= 5
+        winChance = lambda m: self._conversionWinChance(m, drives, options,
+                                                        oppOdds=oppOdds, overtime=overtime)
+        stand = winChance(margin)
         valued = []
         for rung, pts, p in options:
-            win = p * self._conversionWinChance(margin + pts, drives, options) + (1 - p) * stand
+            win = p * winChance(margin + pts) + (1 - p) * stand
             valued.append((win, p, rung))
-        safest = max(valued, key=lambda t: t[1])          # the highest make chance
         best = max(valued, key=lambda t: (t[0], t[1]))
+        # ⚠️ THE CONSERVATIVE CALL IS THE BEST OF THE SAFER TRIES, NOT THE SAFEST TRY. It
+        # used to be the single most makeable option, which is right when that is the kick
+        # but not under the ladder: in overtime, down 3 after the touchdown, the most
+        # makeable try is the 2 and it loses even when made. A cautious coach there goes
+        # for the TIE (the 3), so the alternative is the most valuable try that is more
+        # likely to convert than the best one. With no such try the best one is the call.
+        saferTries = [t for t in valued if t[1] > best[1]]
+        safest = max(saferTries, key=lambda t: (t[0], t[1])) if saferTries else best
         gain = best[0] - safest[0]
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         # ⚠️ A CHASING TEAM MAXIMISES ITS CHANCES HOWEVER SMALL THEY ARE. Down 18 the win
         # chance is ~1% either way, so the absolute edge of a free roll is a rounding error
         # and a flat threshold kicked it — but 1% -> 2% doubles the team's chances. Behind,
@@ -14462,10 +14558,10 @@ class Game:
             gain = gain / max(0.02, 2.0 * safest[0])
         if best[2] is safest[2] or gain <= CONVERSION_VALUE_MIN_GAIN:
             return safest[2]
-        coach = getattr(scoringTeam, 'coach', None)
-        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = CONVERSION_VALUE_BASE + gain * CONVERSION_VALUE_GAIN_SCALE + aggressNorm * 0.15
-        return best[2] if random.random() < max(0.05, min(0.97, pct)) else safest[2]
+        # A clear edge is taken every time. The cap used to be 0.97, so 3% of plainly
+        # decided calls (down 3 at 0:00 with the 4 to win) took the 2 and lost.
+        return best[2] if random.random() < max(0.05, min(1.0, pct)) else safest[2]
 
     def _chooseConversion(self, scoringTeam: FloosTeam.Team) -> dict:
         """Pick the post-TD conversion rung (Conversion-Ladder-aware). Returns a
@@ -14490,14 +14586,25 @@ class Game:
         # kick, byte-identical to the old kick-vs-go decision.
         ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
         kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
-        fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
+        # ⚠️ WITH THE KICK GONE, THE DEFAULT IS THE TWO-POINT TRY (owner, 2026-10-15: "the 2
+        # pt conversion should essentially be the default like the 1pt kick usually is"). It
+        # used to be `_forcedGoRung`, which reached up the ladder by coach aggressiveness off
+        # a make-rate estimate calibrated before the goal-line work (it assumes 70% for the
+        # two-pointer, measured 45%), so a 90+ coach took the 3 or the 4 on every touchdown
+        # from the first quarter on. The rungs above it are now taken only where the score
+        # calls for them: Q4 and overtime, on win value.
+        fallback = (kick if (kickAllowed or not goRungs)
+                    else min(goRungs, key=lambda r: r['distance']))
         # Innings: no game clock (quarter is always 1), so the standard Q3/Q4 comeback gate
         # never fires. Going for the TOP rung is the only way to CONTINUE the at-bat, which is
-        # worth far more than a clock game's points-only gamble — so innings has its own policy.
+        # worth far more than a clock game's points-only gamble — so innings has its own policy,
+        # and keeps the aggressiveness-picked rung as the try it settles for.
         from constants import INNINGS_CONTINUATION_ENABLED
         if (INNINGS_CONTINUATION_ENABLED and goRungs
                 and getattr(self.format, 'key', '') == 'innings'):
-            return self._chooseInningsConversion(scoringTeam, goRungs, fallback)
+            inningsFallback = (fallback if (kickAllowed or not goRungs)
+                               else self._forcedGoRung(scoringTeam, goRungs))
+            return self._chooseInningsConversion(scoringTeam, goRungs, inningsFallback)
         # Frames: when the frames finish LEVEL the match falls to the total-points
         # tiebreak, so in the final frame the exact points margin is the whole game.
         # Returns None to defer to the standard policy whenever points aren't decisive.
@@ -14525,6 +14632,18 @@ class Game:
         # this sim, so on expected points alone (1.4 vs 0.95) the model goes for two on
         # nearly every touchdown when there is a lot of game left — correct for the sim's
         # odds, and nothing like football. Other formats keep the desire chart below.
+        # ⚠️ OVERTIME DECIDES ON WIN VALUE TOO, OVER THE POSSESSIONS OVERTIME ACTUALLY HAS.
+        # It used to take the default here, blind to the score, so the second team, down 3
+        # after its touchdown, went for two and lost even when it made it (and down 2 under
+        # the kick rules, kicked one and lost). In the first overtime the second team's try
+        # is the last word (a lead wins, a tie goes on to sudden death), and the first
+        # team's try is followed by exactly one opponent possession. A touchdown in sudden
+        # death ends the game before the try, so that case never gets here.
+        if (goRungs and self.currentQuarter >= 5
+                and getattr(self.format, 'key', 'standard') == 'standard'):
+            return self._chooseConversionByValue(
+                scoringTeam, self._conversionOptions(scoringTeam, kickAllowed, goRungs, kick),
+                drives=self._overtimeDrivesAfterTry(scoringTeam))
         if goRungs and self.currentQuarter <= 4 and getattr(self.format, 'key', 'standard') == 'standard':
             from constants import CONVERSION_VALUE_QUARTERS
             if self.currentQuarter in CONVERSION_VALUE_QUARTERS:
@@ -16041,6 +16160,10 @@ class Game:
         # makes a missed XP show as a real negative WPA event).
         if hasattr(self, 'play') and self.play is not None:
             self.play.scoringTeam = team
+        # Points the OFFENSE put up (a return touchdown or a safety belongs to the defense
+        # and says nothing about how the other side's defense played).
+        if team is self.offensiveTeam:
+            self._offensePointsBy[id(team)] = self._offensePointsBy.get(id(team), 0) + points
         # Points can be fractional (rule-vote float FG/TD values); round the running
         # totals so float summation never leaves noise (24.000000000000004) on the
         # scoreboard, box score, standings, or a frame's points.

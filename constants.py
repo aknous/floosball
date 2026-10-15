@@ -4057,6 +4057,19 @@ CONVERSION_GO_Q3_DAMPEN      = 0.55
 CONVERSION_DRIVE_ODDS = (0.64, 0.12, 0.22, 0.02)
 CONVERSION_SECS_PER_DRIVE = 165.0     # regulation seconds per drive, both teams combined
 CONVERSION_TRAIL_SECS_PER_DRIVE = 150.0   # a trailing team's hurry-up drive, for counting the drives it can still get
+# How the coach reads the team's own defense (Game._opponentDriveOdds). The opponent's points per
+# drive this game is shrunk toward the league rate by this many drives of prior: about a third
+# of a team's ~11 drives, so by the fourth quarter the game's own evidence outweighs the prior
+# roughly two to one.
+CONVERSION_DEFENSE_PRIOR_DRIVES = 4
+# Temperament: the opponent's scoring chance as the coach perceives it is scaled by
+# 1 + aggressiveness lean x this, so the most conservative coach (60) rates the threat at a
+# quarter of its measured size and trusts the defense to get the stop, the most aggressive
+# (100) at 1.75x and goes for it now. Temperament works ONLY through this perception, so the
+# defense's showing always counts: a conservative coach whose defense is being shredded still
+# goes for the win, an aggressive one whose defense is pitching a shutout may take the tie.
+# Owner (2026-10-15): given the tie or the win, a conservative coach goes for the tie.
+CONVERSION_DEFENSE_TRUST_SWING = 0.75
 CONVERSION_CHASE_WIN_BELOW = 0.10     # below this win chance a trailing team weighs edges relative to its odds
 CONVERSION_VALUE_MIN_GAIN = 0.005     # win-chance edge below which the kick is automatic
 CONVERSION_VALUE_BASE = 0.35          # go probability at the smallest real edge ...
