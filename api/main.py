@@ -5983,13 +5983,26 @@ def _acceptNamesIntoPool(pm, names: list, source: str = "admin") -> dict:
         seen.add(n)
         deduped.append(n)
 
+    # ⚠️ ONE FORM OF A LINEAGE AT A TIME (see `connection._normalizeNamePool`): a name
+    # whose base form is already pooled, held, or worn by a live player or coach would
+    # fork that lineage, so it is refused here rather than cleaned up at the next boot.
+    from name_similarity import normalizeName
+    pooled = {normalizeName(x) for x in (getattr(pm, 'unusedNames', None) or [])}
+    pooled |= {normalizeName(x[0]) for x in (getattr(pm, 'pendingNames', None) or [])}
+    live = {normalizeName(x) for x, source in _leagueNames(pm) if source in ('player', 'coach')}
+
     rejectedInUse: list = []
+    rejectedInPool: list = []
     accepted: list = []
     for n in deduped:
-        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(n):
+        norm = normalizeName(n)
+        if norm in pooled:
+            rejectedInPool.append(n)
+        elif (hasattr(pm, 'isNameInUse') and pm.isNameInUse(n)) or norm in live:
             rejectedInUse.append(n)
         else:
             accepted.append(n)
+            pooled.add(norm)
 
     if accepted:
         pm.unusedNames.extend(accepted)
@@ -5999,7 +6012,49 @@ def _acceptNamesIntoPool(pm, names: list, source: str = "admin") -> dict:
         _recordCuratedNames(pm, accepted, source)
 
     return {"accepted": accepted, "rejectedInUse": rejectedInUse,
-            "duplicatesInBatch": duplicatesInBatch}
+            "rejectedInPool": rejectedInPool, "duplicatesInBatch": duplicatesInBatch}
+
+
+def _leagueNames(pm, includeSuggested: bool = False) -> list:
+    """Every name a new one could collide with, as (name, source): the unused pool
+    ('pool'), names serving their reuse hold ('held'), players on a roster or in free
+    agency ('player'), retired players ('retired'), coaches ('coach'), and optionally
+    Discord suggestions awaiting review ('suggested')."""
+    out = [(n, 'pool') for n in (getattr(pm, 'unusedNames', None) or [])]
+    out += [(n[0], 'held') for n in (getattr(pm, 'pendingNames', None) or [])]
+    from database.connection import get_session
+    from database.models import Player as DBPlayer, Coach as DBCoach, NameSubmission
+    session = get_session()
+    try:
+        for name, serviceTime in session.query(DBPlayer.name, DBPlayer.service_time).all():
+            out.append((name, 'retired' if serviceTime == 'Retired' else 'player'))
+        out += [(r[0], 'coach') for r in session.query(DBCoach.name).all()]
+        if includeSuggested:
+            out += [(r[0], 'suggested') for r in session.query(NameSubmission.name)
+                    .filter(NameSubmission.status == 'pending').all()]
+    except Exception as e:
+        logger.warning(f"Could not read league names: {e}")
+    finally:
+        session.close()
+    return out
+
+
+def _nameCheck(pm, index, name: str, batchPeers=()) -> dict:
+    """How a candidate name sits against the league: 'blocked' (adding it would be
+    refused: same name or lineage as one pooled, held, or worn by a live player or coach),
+    'similar' (close to an existing name), or 'clear'."""
+    from name_similarity import NameIndex
+    matches = index.similarTo(name)
+    peers = [p for p in batchPeers if p != name]
+    if peers:
+        matches = sorted(matches + NameIndex([(p, 'batch') for p in peers]).similarTo(name),
+                         key=lambda m: (-m['score'], m['name']))[:5]
+    blocked = any(m['sameLineage'] and m['source'] in ('pool', 'held', 'player', 'coach')
+                  for m in matches)
+    if not blocked and hasattr(pm, 'isNameInUse') and pm.isNameInUse(name):
+        blocked = True
+    status = 'blocked' if blocked else ('similar' if matches else 'clear')
+    return {"name": name, "status": status, "matches": matches}
 
 
 def _recordCuratedNames(pm, names: list, source: str = "admin") -> None:
@@ -6057,8 +6112,42 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
         "added": len(result["accepted"]),
         "total": len(pm.unusedNames),
         "rejectedInUse": result["rejectedInUse"],
+        "rejectedInPool": result["rejectedInPool"],
         "duplicatesInBatch": result["duplicatesInBatch"],
     }
+
+
+@app.get("/api/admin/names/pool")
+async def admin_name_pool(_auth: None = Depends(_checkAdminAuth)):
+    """The unused name pool, alphabetical, plus the names serving their reuse hold."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    pm = floosball_app.playerManager
+    names = sorted(set(pm.unusedNames or []), key=str.lower)
+    held = sorted(({"name": n, "availableSeason": season}
+                   for n, season in (getattr(pm, 'pendingNames', None) or [])),
+                  key=lambda h: h["name"].lower())
+    return {"names": names, "total": len(names), "held": held}
+
+
+@app.post("/api/admin/names/check")
+async def admin_check_names(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
+    """Before adding names: for each, the existing names it reads too close to
+    (`name_similarity`), across the pool, held names, players, retirees, coaches, pending
+    Discord suggestions and the rest of the batch. Adds nothing."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    names = payload.get("names", [])
+    if not isinstance(names, list) or not names:
+        raise HTTPException(400, "'names' must be a non-empty list of strings")
+    if len(names) > 500:
+        raise HTTPException(400, "Too many names; maximum 500 per request")
+    from name_similarity import NameIndex
+    names = list(dict.fromkeys(' '.join(n.split()) for n in names
+                               if isinstance(n, str) and n.strip()))
+    pm = floosball_app.playerManager
+    index = NameIndex(_leagueNames(pm, includeSuggested=True))
+    return {"results": [_nameCheck(pm, index, n, names) for n in names]}
 
 
 @app.get("/api/app-settings")
@@ -8550,9 +8639,13 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     ⚠️ THE BLOCK AND THE WALK-YEAR LIST ARE THE SECTIONS WITH EDITORIAL WEIGHT, and the
     ones that make the page worth visiting outside the trade window. "These 33 players are
     leaving for nothing unless someone moves" is a story every week of the season.
+
+    ⚠️ WITH TRADING OFF THE PAGE STAYS, ITS TRADE SECTIONS GO (owner, 2026-10-16). The draft
+    order, the class, the walk-years and the moves feed have nothing to do with the market,
+    so `_tradesHidden()` empties `trades` and `block`, reports every pick as its own team's
+    (rookie drafts ignore pick ownership while trading is off), and drops the roster moves a
+    trade forced (recap rows carrying a trade id).
     """
-    if _tradesHidden():
-        raise HTTPException(404, "Not found")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON, GM_ACTIVE_WEEK
@@ -8564,6 +8657,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
     teamsById = {getattr(t, 'id', None): t for t in (getattr(tm, 'teams', None) or [])}
+    tradesHidden = _tradesHidden()
 
     def teamBlob(teamId):
         team = teamsById.get(teamId)
@@ -8578,8 +8672,11 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     session = get_session()
     try:
         ranked, orderFinal, playoffSlotsFrom = _rookieDraftOrder()
-        ownerByOrigin = {r.original_team_id: r.current_owner_id for r in
-                         session.query(DraftPick).filter_by(season=season, used=False).all()}
+        # With trading off each team drafts in its own slot (`_rookieDraftSlots`), so a
+        # leftover ownership row would show a trade the draft will not honor.
+        ownerByOrigin = {} if tradesHidden else {
+            r.original_team_id: r.current_owner_id for r in
+            session.query(DraftPick).filter_by(season=season, used=False).all()}
         def recordOf(teamId):
             st = getattr(teamsById.get(teamId), 'seasonTeamStats', None) or {}
             return {"wins": int(st.get('wins', 0) or 0),
@@ -8607,9 +8704,10 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                 "ownerRecord": recordOf(ownerId),
             })
 
-        trades = (session.query(Trade)
-                  .filter(Trade.season == season)
-                  .order_by(Trade.id.desc()).limit(limit).all())
+        trades = [] if tradesHidden else (
+            session.query(Trade)
+            .filter(Trade.season == season)
+            .order_by(Trade.id.desc()).limit(limit).all())
         # ⚠️ RATINGS ARE RESOLVED AT READ TIME, NOT STORED IN THE MANIFEST. The manifest
         # records WHAT changed hands — kind, id, name, detail — and adding a rating to it
         # would only ever help trades settled after the change, while every trade already
@@ -8640,12 +8738,15 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             "buyerWhy": getattr(t, 'buyer_why', None),
         } for t in trades]
 
-        moves = (session.query(SeasonRecapEvent)
-                 .filter(SeasonRecapEvent.season == season,
-                         SeasonRecapEvent.event_type.in_(
-                             ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
-                              'rookie_pick', 'retirement')))
-                 .order_by(SeasonRecapEvent.id.desc()).limit(limit).all())
+        movesQuery = (session.query(SeasonRecapEvent)
+                      .filter(SeasonRecapEvent.season == season,
+                              SeasonRecapEvent.event_type.in_(
+                                  ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
+                                   'rookie_pick', 'retirement'))))
+        if tradesHidden:
+            # A cut, signing or promotion a trade forced carries the trade's id.
+            movesQuery = movesQuery.filter(SeasonRecapEvent.trade_id.is_(None))
+        moves = movesQuery.order_by(SeasonRecapEvent.id.desc()).limit(limit).all()
         moveRows = [{
             "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
             "playerId": m.player_id, "player": m.player_name,
@@ -8696,7 +8797,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
 
     block = []
     tradingOn = tradingEnabled()
-    if windowState == TRADE_WINDOW_OPEN and sm and sm.currentSeason:
+    if not tradesHidden and windowState == TRADE_WINDOW_OPEN and sm and sm.currentSeason:
         try:
             from managers.tradeManager import TradeMarket
             brain = sm._foBrainForOffseason()
@@ -11846,12 +11947,13 @@ def _tradesHidden() -> bool:
 
 
 def _transactionsAvailable(cs) -> bool:
-    """Whether the Transactions page is open: from the week the in-season trade window
-    opens, through the deadline, the playoffs and the offseason. Closed before that."""
+    """Whether the Transactions page is open: from week 15 (the week the in-season trade
+    window opens), through the deadline, the playoffs and the offseason. Closed before that.
+    Same rule with trading off, when the page serves no trade sections (owner, 2026-10-16)."""
     import trading
     from constants import TRADE_MIN_CERTAINTY
     sm = floosball_app.seasonManager if floosball_app else None
-    if cs is None or _tradesHidden():
+    if cs is None:
         return False
     if cs.isComplete or getattr(sm, '_offseasonFlowPhase', None) is not None:
         return True
@@ -15488,6 +15590,17 @@ async def admin_list_name_submissions(status: str = Query('pending'),
         if status and status != 'all':
             q = q.filter(NameSubmission.status == status)
         rows = q.order_by(NameSubmission.created_at.desc()).limit(500).all()
+        # A pending suggestion shows the names it reads close to, so approving it gets
+        # the same look a typed name gets in the add box.
+        pendingRows = [r for r in rows if r.status == 'pending']
+        similarById = {}
+        if pendingRows and floosball_app is not None:
+            from name_similarity import NameIndex
+            pm = floosball_app.playerManager
+            index = NameIndex(_leagueNames(pm, includeSuggested=True))
+            for r in pendingRows:
+                similarById[r.id] = [m for m in index.similarTo(r.name)
+                                     if not (m['source'] == 'suggested' and m['name'] == r.name)]
         counts = {}
         for st in ('pending', 'approved', 'rejected'):
             counts[st] = session.query(NameSubmission).filter(
@@ -15501,6 +15614,7 @@ async def admin_list_name_submissions(status: str = Query('pending'),
                 "discordId": r.discord_id,
                 "createdAt": r.created_at.isoformat() if r.created_at else None,
                 "reviewedAt": r.reviewed_at.isoformat() if r.reviewed_at else None,
+                "similar": similarById.get(r.id, []),
             } for r in rows],
             "counts": counts,
         }
