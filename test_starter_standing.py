@@ -175,16 +175,91 @@ def test_re_sign_priority_carries_the_starter_standing():
     assert ranked[0][1] > ranked[1][1]
 
 
-def test_a_last_window_prospect_must_roughly_match_today_too():
+def test_a_last_window_prospect_must_roughly_match_a_prime_starter_today():
     """Measured on a prod copy before this guard: Anaheim cut a 90 TE with three years
-    left for an 82 prospect, because aging and projected growth evened the values."""
+    left for an 82 prospect, because aging and projected growth evened the values. A
+    starter who is NOT declining is still measured as he is today."""
     brain = Brain()
     prospect = _player(10, 82, position=Position.TE)
-    star = _player(11, 90, nextSeason=86.0, position=Position.TE)
+    star = _player(11, 90, position=Position.TE)
     assert not brain.prospectReplacesStarter(prospect, star, _team(), _coach(aggressiveness=100),
                                              finalWindow=True)
     close = _player(12, 86, nextSeason=83.0, position=Position.TE)
     assert brain.prospectReplacesStarter(prospect, close, _team(), _coach(), finalWindow=True)
+
+
+def test_a_declining_starter_is_gated_on_next_season_then_value_decides():
+    """owner, 2026-10-17: a starter past his peak is measured at next season's
+    projection, so an 82 prospect is within reach of a 90 falling to 86. The gate no
+    longer vetoes; the value comparison (aging over the horizon, the GM's bar) decides."""
+    brain = Brain()
+    prospect = _player(10, 82, position=Position.TE)
+    fading = _player(11, 90, nextSeason=86.0, position=Position.TE)
+    assert brain.roughlyMatches(prospect, fading, _coach())
+    assert not brain.roughlyMatches(prospect, _player(12, 90, position=Position.TE), _coach())
+    # Neutral GM: 82 against 90 less 6 of aging is still short of the bar.
+    assert not brain.prospectReplacesStarter(prospect, fading, _team(), _coach(),
+                                             finalWindow=True)
+    # An aggressive GM bets on the prospect on that close call.
+    assert brain.prospectReplacesStarter(prospect, fading, _team(),
+                                         _coach(aggressiveness=100), finalWindow=True)
+
+
+def _rising(pid, rating, ceiling, position=Position.TE):
+    p = _player(pid, rating, position=position)
+    p.computeCeilingRating = lambda c=ceiling: c
+    return p
+
+
+def test_a_prospect_grows_over_the_same_horizon_the_starter_declines_over():
+    """Next season's value credits a share f of the gap to the ceiling; each later
+    season realises f of what is left, over FO_STANDING_HORIZON_SEASONS."""
+    from constants import FO_CEILING_CREDIT
+    brain = Brain()
+    coach = _coach()
+    prospect = _rising(10, 78, 92)
+    f = FO_CEILING_CREDIT * brain._attrLean(coach, 'playerDevelopment')
+    H = FO_STANDING_HORIZON_SEASONS
+    expected = (14 * ((1 - f) - (1 - f) ** H) * brain.scoutingVision(coach, _team())
+                * POSITION_VALUE['TE'])
+    got = brain._growthBeyondNextSeason(prospect, _team(), coach)
+    assert abs(got - expected) < 1e-6, (got, expected)
+    # Never past the ceiling, even for the best developer.
+    best = _coach(playerDevelopment=100, scouting=100)
+    assert brain._growthBeyondNextSeason(prospect, _team(), best) < 14 * POSITION_VALUE['TE']
+    # Nothing for a player with no headroom or past his peak.
+    assert brain._growthBeyondNextSeason(_player(11, 78), _team(), coach) == 0.0
+    aging = _rising(12, 78, 92)
+    aging.projectedRatingPastPeak = lambda devBias: 77.0
+    assert brain._growthBeyondNextSeason(aging, _team(), coach) == 0.0
+
+
+def test_growth_counts_on_both_sides_of_the_comparison():
+    """A developing starter's growth is extended too, so two equal young players with
+    equal headroom compare as equal: the horizon does not favour the prospect."""
+    brain = Brain()
+    a, b = _rising(10, 80, 90), _rising(11, 80, 90)
+    assert abs(brain.prospectEdgeOver(a, b, _team(), _coach())) < 1e-9
+
+
+def test_an_aging_starter_rated_higher_can_lose_to_a_rising_prospect():
+    """The owner's question: the starter is rated higher today but aging out. Against
+    the same prospect, the fading starter is replaced and a prime one is not."""
+    brain = Brain()
+    prospect = _rising(10, 82, 94)
+    fading = _player(11, 85, nextSeason=83.5, position=Position.TE)
+    prime = _player(12, 85, position=Position.TE)
+    assert brain.prospectReplacesStarter(prospect, fading, _team(), _coach(), finalWindow=True)
+    assert not brain.prospectReplacesStarter(prospect, prime, _team(), _coach(),
+                                             finalWindow=True)
+
+
+def test_earlier_window_and_resign_gates_read_a_declining_starter_forward():
+    brain = Brain()
+    prospect = _player(10, 84)
+    fading = _player(11, 86, nextSeason=83.0)
+    assert brain.ratedAtLeast(prospect, fading, _coach(), strictly=True)
+    assert not brain.ratedAtLeast(prospect, _player(12, 86), _coach())
 
 
 def test_nobody_signed_this_offseason_is_cut_anywhere():
@@ -221,13 +296,17 @@ def test_a_last_chance_prospect_is_weighed_at_re_sign_as_his_promotion_will_be()
     assert keptLast == []
 
 
-def test_a_prospect_about_to_wash_out_cannot_replace_anyone():
-    """The re-sign runs before the prospect window advances; a prospect released there
-    used to count as a replacement, so the starter walked for a man about to leave."""
+def test_a_prospect_about_to_wash_out_is_a_last_chance_alternative():
+    """The re-sign runs before the prospect window advances. A prospect about to wash
+    out was once left out of the alternatives, on the reasoning that he was about to
+    leave; that kept the starter by default and lost the prospect (Raccoons, season 10:
+    Lizardo released with the TE slot empty). Step 3.78 now promotes him into a slot
+    this decision leaves open, so he is weighed on the last-chance rules instead
+    (owner, 2026-10-17; behaviour in test_prospect_last_window.py)."""
     import inspect
     from managers import seasonManager
     src = inspect.getsource(seasonManager.SeasonManager)
-    assert 'if served >= PROSPECT_DEVELOPMENT_WINDOW - 1:' in src
+    assert 'if served >= PROSPECT_DEVELOPMENT_WINDOW - 2:' in src
     assert 'lastChance=lastChance' in src
 
 
@@ -267,3 +346,16 @@ def test_the_fa_draft_board_carries_the_incumbents_standing():
     assert standing < 0
     assert abs(board[1] - (80 * POSITION_VALUE['RB'] + standing)) < 1e-6
     assert board[3] == 80 * POSITION_VALUE['RB']     # a prospect gets no standing
+
+
+def test_season_rating_reads_growth_and_aging_through_scouting():
+    """Who is better THIS season (owner, 2026-10-17): today's rating moved toward next
+    season's projection by the GM's scouting vision."""
+    brain = Brain()
+    coach = _coach()
+    vision = brain.scoutingVision(coach, _team())
+    aging = _player(1, 85, nextSeason=83.0)
+    assert abs(brain.seasonRating(aging, coach, _team()) - (85 - 2.0 * vision)) < 1e-9
+    assert brain.seasonRating(_player(2, 80), coach, _team()) == 80.0
+    rising = _rising(3, 78, 92)
+    assert 78 < brain.seasonRating(rising, coach, _team()) < 92

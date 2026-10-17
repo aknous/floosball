@@ -84,17 +84,20 @@ class Boards(Brain):
 
 
 def test_the_teams_ahead_pick_off_their_own_boards():
-    """The Bees pick 3rd. On their board the third-best is a QB, but the clubs ahead
-    take a WR and a QB on THEIR boards, so the Bees get the other QB, not a WR."""
-    qbA, qbB = _p(1, 80, Position.QB, ceiling=99, rookie=True), _p(2, 80, Position.QB, ceiling=96, rookie=True)
+    """The Bees pick 2nd (the best-available slots are the top 2 since 2026-10-17). On
+    their own board the WR is second-best, but the club ahead takes the WR on ITS board,
+    so the Bees get the QB they rate highest, not the WR."""
+    qbA = _p(1, 80, Position.QB, ceiling=99, rookie=True)
     wr = _p(3, 80, Position.WR, ceiling=97, rookie=True)
     rb = _p(4, 80, Position.RB, ceiling=90, rookie=True)
-    pm = _pm([qbA, qbB, wr, rb])
-    first = _team(1)                                    # true reads: qbA
-    second = _team(2, reads={3: 100})                   # loves the WR
-    bees = _team(3, reads={4: 98})                      # rates the RB above qbB
-    got = pm.expectedDraftees(Boards(), bees, [first, second, bees])
-    assert got == [rb], [r.id for r in got]
+    pm = _pm([qbA, wr, rb])
+    first = _team(1, reads={3: 100})                    # loves the WR
+    bees = _team(3)                                     # true reads: qbA, then the WR
+    got = pm.expectedDraftees(Boards(), bees, [first, bees])
+    assert got == [qbA], [r.id for r in got]
+    # A third pick is past the best-available slots and plans on nobody.
+    third = _team(4)
+    assert pm.expectedDraftees(Boards(), third, [first, bees, third]) == []
 
 
 def test_a_later_pick_plans_on_nobody():

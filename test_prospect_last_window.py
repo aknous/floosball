@@ -45,7 +45,7 @@ def test_final_window_is_the_season_before_release():
 def test_a_fresh_prospect_is_not_on_his_last_chance():
     """The old bar has to survive every earlier window — there IS a next year then,
     and promoting a project player over a better free agent is the failure the
-    FO_PROSPECT_PROMOTE_EDGE bar exists to prevent."""
+    FA-draft rule (`prospectTakesSlot`) exists to prevent."""
     assert SeasonManager._isFinalProspectWindow(FakeProspect(0)) is False
     print("PASS a fresh prospect still faces the free-agent bar")
 
@@ -176,7 +176,7 @@ class StubBrain:
         self.replacement = replacement
 
     def decisionValue(self, player, coach=None, rng=None, team=None):
-        return float(player.playerRating)
+        return float(getattr(player, 'value', player.playerRating))
 
     def bestReplacementValue(self, player, coach=None, pool=None, rng=None,
                              pickDepth=0, team=None):
@@ -185,12 +185,33 @@ class StubBrain:
     def faPickDepth(self, team, faOrder=None):
         return 0
 
+    # Who is better this season: a knob per player (`seasonNext`), else today's rating.
+    def seasonRating(self, player, coach=None, team=None):
+        return float(getattr(player, 'seasonNext', player.playerRating))
+
+    # The free agent the team can expect at its pick (step 3.78's washout check): a knob.
+    expectedFa = None
+
+    def expectedFreeAgent(self, position, team=None, coach=None, pickDepth=0, pool=None):
+        return self.expectedFa
+
+    prospectTakesSlot = FrontOfficeBrain.prospectTakesSlot
+
     # The standing/bar layer at neutral: no standing, the bar is its base. The
     # real weighing is covered in test_starter_standing.py.
     def starterStanding(self, starter, team=None, coach=None):
         return 0.0
 
-    roughlyMatchesToday = staticmethod(FrontOfficeBrain.roughlyMatchesToday)
+    # The today-gates at their simplest: no aging, so the starter is measured as he is
+    # today (the declining-starter reading is covered in test_starter_standing.py).
+    def roughlyMatches(self, prospect, starter, coach=None):
+        from constants import FO_PROSPECT_LAST_WINDOW_TODAY_GAP
+        return prospect.playerRating >= starter.playerRating - FO_PROSPECT_LAST_WINDOW_TODAY_GAP
+
+    def ratedAtLeast(self, prospect, starter, coach=None, strictly=False):
+        if strictly:
+            return prospect.playerRating > starter.playerRating
+        return prospect.playerRating >= starter.playerRating
 
     def moveOnBar(self, coach, base, floor=None):
         return max(base, floor) if floor is not None else base
@@ -259,6 +280,7 @@ class StubSM:
     _cutPlanForProspect = SeasonManager._cutPlanForProspect
     _executeProspectCut = SeasonManager._executeProspectCut
     _promoteProspectsAutonomously = SeasonManager._promoteProspectsAutonomously
+    _prospectContractYields = SeasonManager._prospectContractYields
 
     def _recordOffseasonEvent(self, *a, **kw):
         pass
@@ -274,20 +296,18 @@ class StubSM:
 LAST = PROSPECT_DEVELOPMENT_WINDOW - 1
 
 
-def test_last_window_promotes_past_the_free_agent_bar():
-    """⚠️ THE BAR IS THE WRONG COMPARISON ON THE FINAL WINDOW. He walks either way,
-    so the club is choosing between him and an EMPTY SLOT (which rates 50), not
-    between him and a free agent it could sign."""
-    prospect = FakeBrainPlayer('Headliner', 74)
-    prospect.prospect_seasons = LAST
-    team = StubTeam({'qb': None, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1}, [prospect])
-    # A far better free agent is available — under the old rule he stays down.
-    sm = StubSM(StubBrain(replacement=200.0), StubPlayerManager())
-    promotions = sm._promoteProspectsAutonomously(team)
-    assert [p['name'] for p in promotions] == ['Headliner']
-    assert team.rosterDict['qb'] is prospect
-    assert prospect.is_prospect is False
-    print("PASS last window promotes into an open slot regardless of the bar")
+def test_the_kickoff_leaves_open_slots_to_the_fa_draft():
+    """owner, 2026-10-17: "teams should be able to hold off on promoting until the free
+    agent draft". An open slot is filled there, where the prospect is weighed against
+    the free agents the team can sign (test_fa_draft_prospect_choice.py), at every window."""
+    for seasons in (0, LAST):
+        prospect = FakeBrainPlayer('Headliner', 74)
+        prospect.prospect_seasons = seasons
+        team = StubTeam({'qb': None, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': 1}, [prospect])
+        sm = StubSM(StubBrain(replacement=0.0), StubPlayerManager())
+        assert sm._promoteProspectsAutonomously(team) == []
+        assert team.rosterDict['qb'] is None and prospect.is_prospect is True
+    print("PASS the kickoff leaves open slots to the FA draft")
 
 
 def test_earlier_window_still_respects_the_bar():
@@ -502,3 +522,196 @@ def test_nobody_is_cut_for_a_prospect_who_is_not_finally_promoted():
     names = [p['name'] for p in sm._promoteProspectsAutonomously(team)]
     assert names == ['Better']          # Worse only clears 78 by 2, under the margin
     assert pm.released == [qb]
+
+
+# ------------------------------------- step 3.78: the last look before the release
+#
+# owner, 2026-10-17. Prod season 10: the Raccoons let Crunchtime McCown (79) walk at
+# step 3, then step 3.78 released Dearie Lizardo (TE, 86) with their TE slot empty,
+# because the only promotion pass after step 3 was the FA kickoff, after the release.
+
+
+def test_washout_pass_promotes_a_prospect_about_to_be_released():
+    washout = FakeBrainPlayer('Lizardo', 86, position=Position.TE)
+    washout.prospect_seasons = LAST
+    team = StubTeam({'qb': 1, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': None, 'k': 1}, [washout])
+    brain = StubBrain()
+    brain.expectedFa = FakeBrainPlayer('Dunebuggy', 77, position=Position.TE)
+    sm = StubSM(brain, StubPlayerManager())
+    promotions = sm._promoteProspectsAutonomously(team, washoutOnly=True)
+    assert [p['name'] for p in promotions] == ['Lizardo']
+    assert team.rosterDict['te'] is washout and washout.is_prospect is False
+    print("PASS a washing-out prospect goes into the open slot before the release")
+
+
+def test_washout_pass_lets_him_go_when_the_market_has_better():
+    """He is released before the FA draft, so his open-slot decision is made here,
+    against the free agent this team can expect at its pick (owner, 2026-10-17)."""
+    washout = FakeBrainPlayer('Bodie', 64, position=Position.WR)
+    washout.prospect_seasons = LAST
+    team = StubTeam({'qb': 1, 'rb': 1, 'wr1': 1, 'wr2': None, 'te': 1, 'k': 1}, [washout])
+    brain = StubBrain()
+    brain.expectedFa = FakeBrainPlayer('Veteran', 74, position=Position.WR)
+    sm = StubSM(brain, StubPlayerManager())
+    assert sm._promoteProspectsAutonomously(team, washoutOnly=True) == []
+    assert team.rosterDict['wr2'] is None and washout.is_prospect is True
+    # ...but one projecting to be as good this season still takes it.
+    washout.seasonNext = 75
+    assert [p['name'] for p in sm._promoteProspectsAutonomously(team, washoutOnly=True)] \
+        == ['Bodie']
+    print("PASS the washout pass weighs the free agent the team can expect")
+
+
+def test_washout_pass_leaves_prospects_with_time_left_for_the_kickoff():
+    """Only the prospects this release would take: anyone else keeps the FA bar and
+    the kickoff pass, so an open slot is not handed to a project player early."""
+    kid = FakeBrainPlayer('Kid', 90, position=Position.TE)
+    kid.prospect_seasons = LAST - 1
+    team = StubTeam({'qb': 1, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': None, 'k': 1}, [kid])
+    sm = StubSM(StubBrain(replacement=0.0), StubPlayerManager())
+    assert sm._promoteProspectsAutonomously(team, washoutOnly=True) == []
+    assert team.rosterDict['te'] is None
+    print("PASS the washout pass ignores prospects with a window left")
+
+
+def test_washout_pass_can_cut_a_roster_player_for_him():
+    washout = FakeBrainPlayer('Headliner', 88)
+    washout.prospect_seasons = LAST
+    incumbent = FakeBrainPlayer('Journeyman', 72, termRemaining=2)
+    incumbent.term = 3
+    team = _filledQb(incumbent, washout)
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert [p['name'] for p in sm._promoteProspectsAutonomously(team, washoutOnly=True)] \
+        == ['Headliner']
+    assert pm.released == [incumbent]
+    print("PASS the washout pass cuts a weaker starter to keep him")
+
+
+def test_washout_pass_runs_inside_the_gate_before_the_release():
+    src = _seasonManagerSource()
+    gate = src.index("if not self._isOffseasonStepComplete('prospect_window'):")
+    look = src.index('await self._promoteWashoutProspects()')
+    release = src.index('self.playerManager._advanceProspectWindow()')
+    assert gate < look < release
+    print("PASS gate -> last look -> release")
+
+
+def test_resign_check_weighs_a_washing_out_prospect():
+    """The step-3 re-sign decision must see a WINDOW-1 prospect as a last-chance
+    alternative: if he roughly matches the expiring starter the starter walks and the
+    3.78 pass promotes the prospect into the open slot. Leaving him out kept the
+    starter (or let him walk to the market) and lost the prospect either way."""
+    src = _seasonManagerSource()
+    block = src[src.index('internal, lastChance = [], set()'):]
+    block = block[:block.index('chooseResigns(')]
+    assert 'continue' not in block.split('internal.append(pr)')[1]
+    assert 'served >= PROSPECT_DEVELOPMENT_WINDOW - 2' in block
+    assert 'if served >= PROSPECT_DEVELOPMENT_WINDOW - 1:\n                    continue' \
+        not in block
+    print("PASS washing-out prospects are last-chance alternatives at re-sign")
+
+
+# ------------------------------- two prospects, one slot: the better player wins
+#
+# owner, 2026-10-17: "the better player should always win ... if a team has two
+# prospects at the same position, there needs to be a point where the team chooses one
+# or the other". Prod-snapshot sim, season 11: WAS promoted a 68 K rookie (whose
+# projected ceiling gave him the higher decisionValue) over Blorbos Phil (75, last
+# chance); Blorbos then washed out behind the rookie's protected prospect contract.
+
+def _k(name, rating, seasons, seasonNext=None, value=None):
+    p = FakeBrainPlayer(name, rating, position=Position.K)
+    p.prospect_seasons = seasons
+    if seasonNext is not None:
+        p.seasonNext = seasonNext
+    if value is not None:
+        p.value = value
+    return p
+
+
+def _openK(prospects):
+    return StubTeam({'qb': 1, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': None}, prospects)
+
+
+# The choice between two prospects for an OPEN slot is the FA draft's now:
+# test_fa_draft_prospect_choice.py::test_the_better_of_two_prospects_this_season_is_the_one_weighed
+
+
+def _prospectContractK(name, rating, seasonNext=None, pid=900):
+    p = FakeBrainPlayer(name, rating, position=Position.K, termRemaining=2)
+    p.term = 3
+    p.onProspectContract = True
+    p.is_prospect = False
+    p.id = pid
+    if seasonNext is not None:
+        p.seasonNext = seasonNext
+    return p
+
+
+def _filledK(incumbent, prospects):
+    return StubTeam({'qb': 1, 'rb': 1, 'wr1': 1, 'wr2': 1, 'te': 1, 'k': incumbent}, prospects)
+
+
+def test_a_prospect_contract_yields_to_a_better_prospect():
+    starter = _prospectContractK('Willia', 68, seasonNext=69)
+    challenger = _k('Blorbos', 76, LAST, seasonNext=77)
+    team = _filledK(starter, [challenger])
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert [p['name'] for p in sm._promoteProspectsAutonomously(team)] == ['Blorbos']
+    assert pm.released == [starter] and team.rosterDict['k'] is challenger
+    print("PASS a prospect contract gives way to a better prospect")
+
+
+def test_an_early_window_prospect_also_wins_when_better_this_season():
+    starter = _prospectContractK('Willia', 68, seasonNext=69)
+    challenger = _k('Kid', 74, 0, seasonNext=75)
+    team = _filledK(starter, [challenger])
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert [p['name'] for p in sm._promoteProspectsAutonomously(team)] == ['Kid']
+    assert pm.released == [starter]
+    print("PASS an early-window prospect who is better this season takes the slot")
+
+
+def test_a_prospect_contract_holds_against_a_worse_prospect():
+    starter = _prospectContractK('Willia', 76, seasonNext=78)
+    challenger = _k('Blorbos', 75, LAST, seasonNext=76)
+    team = _filledK(starter, [challenger])
+    pm = StubPlayerManager()
+    sm = StubSM(StubBrain(replacement=0.0), pm)
+    assert sm._promoteProspectsAutonomously(team) == []
+    assert pm.released == []
+    print("PASS a prospect contract holds against a prospect who is not better")
+
+
+def test_the_exception_does_not_reach_this_offseasons_promotion_or_a_fan_favorite():
+    from managers.playerManager import stampPromotion, setFanSentiment
+    from constants import FAN_VERDICT_KEEP_SENTIMENT
+    # Promoted earlier in this same offseason.
+    starter = _prospectContractK('Fresh', 68, seasonNext=69)
+    stampPromotion(starter, 0)              # StubSM's season number is 0
+    team = _filledK(starter, [_k('Blorbos', 76, LAST, seasonNext=77)])
+    pm = StubPlayerManager()
+    assert StubSM(StubBrain(replacement=0.0), pm)._promoteProspectsAutonomously(team) == []
+    # A player his fans clearly want.
+    favorite = _prospectContractK('Favorite', 68, seasonNext=69, pid=901)
+    setFanSentiment({901: FAN_VERDICT_KEEP_SENTIMENT})
+    try:
+        team = _filledK(favorite, [_k('Blorbos', 76, LAST, seasonNext=77)])
+        pm = StubPlayerManager()
+        assert StubSM(StubBrain(replacement=0.0), pm)._promoteProspectsAutonomously(team) == []
+        assert pm.released == []
+    finally:
+        setFanSentiment({})
+    print("PASS same-offseason promotions and fan favorites stay protected")
+
+
+def test_the_exception_is_only_for_the_prospect_choice():
+    """Every other cut path still reads the full protection."""
+    from managers.playerManager import isCutProtected
+    starter = _prospectContractK('Willia', 68)
+    assert isCutProtected(starter, 0) is True
+    assert isCutProtected(starter, 0, ignoreProspectContract=True) is False
+    print("PASS the prospect contract still protects everywhere else")
