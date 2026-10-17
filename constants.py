@@ -2774,8 +2774,14 @@ ROOKIE_DRAFT_ENABLED = True
 # 2026-10-01: "with high picks, prospects are assets"). A top pick is the one chance at a
 # headline prospect, and on the old board the QB multiplier let a 75-ceiling quarterback
 # go #2 while a 99 went #4. After these slots the board shifts from asset value toward
-# NEED, reaching pure need at the last pick of the draft (playerManager.rookieNeedWeight).
-ROOKIE_DRAFT_BPA_SLOTS = 5
+# NEED (playerManager.rookieNeedWeight).
+# ⚠️ 5 -> 2, AND PURE NEED BY PICK 8 INSTEAD OF THE LAST PICK (owner, 2026-10-17:
+# "hopefully teams are drafting based on need outside of the top couple picks"). At 5
+# slots with a linear ramp to #32, need was ~19% of the decision at #10 and ~44% at #17,
+# and 16% of the picks after #5 landed behind a 4-star+ starter, where a good prospect
+# washes out (prod: Hersh Pruitt #8 behind a 92 TE; SEA's two RBs behind an 84-88).
+ROOKIE_DRAFT_BPA_SLOTS = 2
+ROOKIE_DRAFT_NEED_FULL_SLOT = 8
 
 
 def rookieDraftEnabled() -> bool:
@@ -3080,14 +3086,10 @@ FO_CUT_MIN_CONFIDENCE = 0.60
 # a good team picking late sees thin leftovers and holds onto its own.
 FO_FA_CONTENTION = 0.30
 
-# Benefit of the doubt given to a prospect the team ALREADY owns when weighing
-# promotion against signing a free agent. Promotion costs the team nothing and
-# the prospect is under its own control, so a prospect within this fraction of
-# the free agent it could otherwise land gets the roster spot. Below 1.0 or a
-# prospect essentially never wins — a developing player's forward projection
-# sits under a proven veteran's almost by definition, and the whole pipeline
-# would wash out to free agency instead of ever reaching a roster.
-FO_PROSPECT_PROMOTE_EDGE = 0.88
+# FO_PROSPECT_PROMOTE_EDGE (0.88, a value bar for promoting into an open slot at the
+# kickoff) was removed 2026-10-17: open slots are filled in the FA draft, where a
+# prospect takes the slot unless a free agent the team can sign is better today AND this
+# season (`frontOfficeBrain.prospectTakesSlot`).
 
 # ---- Attitude: a toxic player damages the room, and the GM could not see it ----
 # ⚠️ THE SIM MODELS THE DAMAGE AND GAVE THE GM NO WAY TO PERCEIVE IT.

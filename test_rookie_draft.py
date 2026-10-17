@@ -91,6 +91,8 @@ class Harness:
     bpaChoice = PlayerManager.bpaChoice
     rookieBoardValue = PlayerManager.rookieBoardValue
     rookieNeedValue = PlayerManager.rookieNeedValue
+    _rookieNeedBar = PlayerManager._rookieNeedBar
+    rookieNeedMargin = PlayerManager.rookieNeedMargin
     rookieNeedWeight = staticmethod(PlayerManager.rookieNeedWeight)
 
 
@@ -216,9 +218,12 @@ def test_a_top_pick_passes_on_a_kicker():
 
 
 def _fillersThenChoice(choices, chooserRoster=None, teams=7):
-    """Five high-ceiling fillers taken by the best-available picks 1-5, then the
-    remaining clubs choose among `choices` {name: (position, rating, ceiling)}."""
-    filler = [FakePlayer(10 + i, 60, Position.RB, f'Filler {i}') for i in range(5)]
+    """Five high-ceiling fillers taken by picks 1-5, then the remaining clubs choose
+    among `choices` {name: (position, rating, ceiling)}. The fillers are 99-95 ceiling
+    QBs so they go first under the best-available board AND under need (picks 3-5 weigh
+    need since the best-available slots dropped to 2): no empty roster can prefer
+    anything else."""
+    filler = [FakePlayer(10 + i, 60, Position.QB, f'Filler {i}') for i in range(5)]
     picks = [FakePlayer(20 + i, rating, pos, name)
              for i, (name, (pos, rating, _)) in enumerate(choices.items())]
     ceilings = {name: c for name, (_, _, c) in choices.items()}
@@ -242,11 +247,16 @@ def test_after_the_top_five_the_board_prices_the_ceiling_above_replacement():
 
 
 def test_need_weight_ramps_from_the_end_of_the_best_available_picks():
-    from constants import ROOKIE_DRAFT_BPA_SLOTS as B
+    """owner, 2026-10-17: need "outside of the top couple picks", pure need by
+    ROOKIE_DRAFT_NEED_FULL_SLOT rather than only at the last pick."""
+    from constants import ROOKIE_DRAFT_BPA_SLOTS as B, ROOKIE_DRAFT_NEED_FULL_SLOT as F
     w = PlayerManager.rookieNeedWeight
+    assert B == 2 and F == 8
     assert w(1, 32) == 0.0 and w(B, 32) == 0.0, "the best-available picks ignore need"
-    assert 0.0 < w(B + 1, 32) < w(20, 32) < 1.0, "need grows pick by pick"
+    assert 0.0 < w(B + 1, 32) < w(F - 1, 32) < 1.0, "need grows pick by pick"
+    assert w(F, 32) == 1.0 and w(20, 32) == 1.0, "pure need from pick 8 on"
     assert w(32, 32) == 1.0, "the last pick is pure need"
+    assert w(4, 4) == 1.0, "a short draft reaches pure need at its last pick"
 
 
 def test_a_late_pick_fills_a_hole_over_a_better_asset():
@@ -327,3 +337,19 @@ def test_an_exhausted_class_ends_the_draft_cleanly():
     assert len(picks) == 1
     assert events[-1]['type'] == 'complete'
     print("PASS a short class ends the draft without stranding anyone")
+
+
+def test_with_no_need_left_the_pick_is_the_least_blocked_rookie():
+    """owner, 2026-10-17: drafting on need. When nobody left on the board fills a hole,
+    every need value is 0 and the pick used to fall to the highest ceiling at ANY
+    position, i.e. a QB behind a 90 QB. Now it is the rookie who comes closest to the
+    player he would have to beat."""
+    starterQb = FakePlayer(98, 95, Position.QB, 'Starter QB'); starterQb.termRemaining = 3
+    starterRb = FakePlayer(99, 82, Position.RB, 'Starter RB'); starterRb.termRemaining = 3
+    # Six clubs: the chooser holds the last pick, which is pure need. Neither rookie beats
+    # its starter (QB 88 under 95, RB 80 under 82), so both need values are 0.
+    picks = _fillersThenChoice({'Blocked QB': (Position.QB, 70, 88),
+                                'Close RB': (Position.RB, 70, 80)},
+                               chooserRoster={'qb': starterQb, 'rb': starterRb}, teams=6)
+    assert picks[5]['playerName'] == 'Close RB', picks[5]
+    print("PASS a pure-need pick with no need left takes the least-blocked rookie")

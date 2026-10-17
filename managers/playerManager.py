@@ -131,8 +131,12 @@ def signedThisOffseason(player) -> bool:
     return bool(term) and remaining >= term
 
 
-def isCutProtected(player, season) -> bool:
+def isCutProtected(player, season, ignoreProspectContract: bool = False) -> bool:
     """May this rostered player NOT be cut? The one predicate every cut path reads.
+
+    `ignoreProspectContract` is for ONE caller, the team choosing between two of its own
+    prospects (`seasonManager._prospectContractYields`, owner 2026-10-17): the promotion
+    contract yields there, the other two rules still hold.
 
     Three rules:
       - his own fans clearly want him (`fanVerdict` 'keep', average 4+);
@@ -146,7 +150,7 @@ def isCutProtected(player, season) -> bool:
     """
     if player is None:
         return False
-    if getattr(player, 'onProspectContract', False):
+    if getattr(player, 'onProspectContract', False) and not ignoreProspectContract:
         return True
     # A player his own fans clearly want (average 4+) cannot be cut (owner, 2026-10-03).
     if fanVerdict(player) == 'keep':
@@ -4729,6 +4733,21 @@ class PlayerManager:
         import trading
         from constants import REPLACEMENT_RATING
         from managers.frontOfficeBrain import positionValue
+        ceiling = self.rookieCeiling(brain, team, rookie)
+        upgrade = max(0.0, ceiling - self._rookieNeedBar(brain, team, rookie))
+        try:
+            posW = positionValue(rookie)
+        except Exception:
+            posW = trading.averagePositionWeight()
+        return trading.prospectValue(float(REPLACEMENT_RATING) + upgrade, 0,
+                                     rookieTerm=trading.rookieTermForSkill(ceiling),
+                                     positionWeight=posW)
+
+    def _rookieNeedBar(self, brain, team, rookie) -> float:
+        """What a rookie must beat to fill a need at his position: the higher of the
+        team's weaker starter there (a walk-year or retiring starter counts as nobody)
+        and the best ceiling already in its pipeline there, never below replacement."""
+        from constants import REPLACEMENT_RATING
         posValue = getattr(getattr(rookie, 'position', None), 'value', None)
         slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
         starters = []
@@ -4742,16 +4761,16 @@ class PlayerManager:
         for prospect in getattr(team, 'prospects', None) or []:
             if getattr(getattr(prospect, 'position', None), 'value', None) == posValue:
                 bar = max(bar, self.rookieCeiling(brain, team, prospect))
-        bar = max(bar, float(REPLACEMENT_RATING))
-        ceiling = self.rookieCeiling(brain, team, rookie)
-        upgrade = max(0.0, ceiling - bar)
-        try:
-            posW = positionValue(rookie)
-        except Exception:
-            posW = trading.averagePositionWeight()
-        return trading.prospectValue(float(REPLACEMENT_RATING) + upgrade, 0,
-                                     rookieTerm=trading.rookieTermForSkill(ceiling),
-                                     positionWeight=posW)
+        return max(bar, float(REPLACEMENT_RATING))
+
+    def rookieNeedMargin(self, brain, team, rookie) -> float:
+        """How close the rookie's ceiling (this team's read) comes to what he must beat
+        at his position; negative when he is blocked. The draft's tie-break once no rookie
+        left fills a need (owner, 2026-10-17): take the one with the best chance of
+        earning a spot. It used to fall to the highest ceiling at ANY position, so with
+        pure need weighting a team still took a QB behind its 90 QB (prod-snapshot sim:
+        17% of picks 9-32 landed behind a 4-star+ starter)."""
+        return self.rookieCeiling(brain, team, rookie) - self._rookieNeedBar(brain, team, rookie)
 
     def bpaChoice(self, brain, team, eligible):
         """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
@@ -4808,12 +4827,16 @@ class PlayerManager:
         """How much a pick weighs NEED against asset value (owner, 2026-10-01: early
         picks take the best player available, and "the further back the draft goes, the
         more teams draft by need"). 0 through `ROOKIE_DRAFT_BPA_SLOTS`, rising evenly to
-        1 at the last pick."""
-        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        1 at `ROOKIE_DRAFT_NEED_FULL_SLOT` (owner, 2026-10-17: need "outside of the top
+        couple picks"), or at the last pick in a draft shorter than that."""
+        from constants import ROOKIE_DRAFT_BPA_SLOTS, ROOKIE_DRAFT_NEED_FULL_SLOT
         start = int(ROOKIE_DRAFT_BPA_SLOTS)
         if slot <= start or draftLength <= start:
             return 0.0
-        return min(1.0, (slot - start) / float(draftLength - start))
+        full = min(int(ROOKIE_DRAFT_NEED_FULL_SLOT), int(draftLength))
+        if full <= start:
+            return 1.0
+        return min(1.0, (slot - start) / float(full - start))
 
     def countTeamProspectsAtPosition(self, team, position) -> int:
         """How many prospects this team already holds at a given Position enum."""
@@ -5175,12 +5198,15 @@ class PlayerManager:
             else:
                 # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
                 # `prospectValue` readings, one above replacement and one above what this
-                # club already has, so they blend on one scale. Tie-break toward the
-                # higher ceiling, then a position this club is thin at.
+                # club already has, so they blend on one scale. Tie-break (a pure-need
+                # pick where nobody left fills a need scores 0 for everyone) toward the
+                # rookie least blocked at his position, then the higher ceiling, then a
+                # position this club is thin at.
                 needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
                 pick = max(eligible, key=lambda r: (
                     (1.0 - needW) * self.rookieBoardValue(brain, team, r)
                     + needW * self.rookieNeedValue(brain, team, r),
+                    self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
                     self.rookieCeiling(brain, team, r),
                     -self.countTeamProspectsAtPosition(team, r.position)))
             available.remove(pick)
@@ -5789,25 +5815,55 @@ class PlayerManager:
                     out.append((sl, best, 'upgrade'))
             return out
 
+        # ⚠️ PROSPECT OR FREE AGENT, ONE DECISION PER OPEN SLOT (owner, 2026-10-17). The
+        # prospect takes the slot unless a free agent this team can sign is better today
+        # AND this season (`brain.prospectTakesSlot`); when the free agent wins he signs
+        # for the seasons left on the prospect's window (`windowTerms`), so his contract
+        # ends in the offseason the prospect gets his last look and the team chooses then.
+        # Both used to go in as candidates and the higher BOARD value won, which credits a
+        # prospect's ceiling: a 64 rookie WR took a slot an 83 had just left.
+        from constants import PROSPECT_DEVELOPMENT_WINDOW
+        faBrain = getattr(self, '_faBrain', None)
+        coach = getattr(team, 'coach', None)
+        windowTerms = {}
+
+        def _seasonRating(p):
+            if faBrain is not None:
+                try:
+                    return faBrain.seasonRating(p, coach, team)
+                except Exception:
+                    pass
+            return float(getattr(p, 'playerRating', 0) or 0)
+
+        def _prospectTakes(prospect, fa):
+            if faBrain is not None:
+                try:
+                    return faBrain.prospectTakesSlot(prospect, fa, coach, team)
+                except Exception:
+                    pass
+            return (fa is None or float(getattr(prospect, 'playerRating', 0) or 0)
+                    >= float(getattr(fa, 'playerRating', 0) or 0))
+
         def _gather(applyReleaseBlock, applyBoard=True):
             cands = []  # (slot, player, kind) where kind ∈ {'fa', 'prospect', 'upgrade'}
+            windowTerms.clear()
             for posVal, slot in firstOpenSlotByPos.items():
                 faList = POS_TO_FALIST.get(posVal, [])
                 bestFa = _bestFaFor(faList, applyReleaseBlock, applyBoard)
-                if bestFa is not None:
-                    cands.append((slot, bestFa, 'fa'))
                 posProspects = [p for p in prospects if p.position.value == posVal]
-                if posProspects:
-                    # Prospects are priced onto the same board (see
-                    # buildDraftBoard's alsoValue), so ranking them by the
-                    # board keeps one currency across the whole comparison.
-                    if board:
-                        best = max(posProspects,
-                                   key=lambda p: board.get(getattr(p, 'id', None),
-                                                           getattr(p, 'playerRating', 0)))
-                    else:
-                        best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
+                if not posProspects:
+                    if bestFa is not None:
+                        cands.append((slot, bestFa, 'fa'))
+                    continue
+                # The better player this season among the team's own prospects.
+                best = max(posProspects, key=_seasonRating)
+                if _prospectTakes(best, bestFa):
                     cands.append((slot, best, 'prospect'))
+                else:
+                    cands.append((slot, bestFa, 'fa'))
+                    left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(
+                        getattr(best, 'prospect_seasons', 0) or 0)
+                    windowTerms[(slot, getattr(bestFa, 'id', None))] = (max(1, left), best)
             return cands
 
         # Widen the search one rule at a time rather than leaving a slot empty:
@@ -5845,6 +5901,8 @@ class PlayerManager:
         # the binding-vote system — `_gmFaPositionPriority` was only ever assigned an
         # empty dict, so the override never fired.
         slot, candidate, kind = max(candidates, key=_rating)
+        windowTerm = windowTerms.get((slot, getattr(candidate, 'id', None))) \
+            if kind == 'fa' else None
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 
@@ -5965,7 +6023,16 @@ class PlayerManager:
                 team._draftFilledSlots = set()
             team._draftFilledSlots.add(slot)
             team.assignPlayerNumber(selectedPlayer)
-            selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
+            if windowTerm:
+                # Signed over the team's own prospect: the deal covers the seasons left on
+                # his window and no more, so the prospect is not blocked behind it.
+                selectedPlayer.term = windowTerm[0]
+                logger.info(f"FA draft: {team.name} signs {selectedPlayer.name} "
+                            f"({selectedPlayer.playerRating}) over prospect "
+                            f"{windowTerm[1].name} ({windowTerm[1].playerRating}) for "
+                            f"{windowTerm[0]} season(s), his window")
+            else:
+                selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
             selectedPlayer.termRemaining = selectedPlayer.term
 
             transactionId = f"{team.name}_{selectedPlayer.name}"

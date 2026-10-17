@@ -841,30 +841,139 @@ class FrontOfficeBrain:
     def prospectEdgeOver(self, prospect, starter, team=None, coach=None) -> float:
         """How far this GM rates the prospect above the starter, standing included. The
         caller compares it to `moveOnBar`. One definition for the promotion pass and the
-        re-sign check, so the two cannot disagree about the same pair of players."""
+        re-sign check, so the two cannot disagree about the same pair of players.
+
+        ⚠️ BOTH SIDES OVER THE SAME HORIZON (owner, 2026-10-17). The starter's standing
+        extends a past-peak decline over FO_STANDING_HORIZON_SEASONS, while each value
+        prices next season only, so a prospect's growth counted for one season against
+        three of the starter's decline. `_growthBeyondNextSeason` adds the rest of the
+        horizon to whichever side is still developing."""
         return (self.decisionValue(prospect, coach, team=team)
+                + self._growthBeyondNextSeason(prospect, team, coach)
                 - self.decisionValue(starter, coach, team=team)
+                - self._growthBeyondNextSeason(starter, team, coach)
                 - self.starterStanding(starter, team, coach))
 
-    @staticmethod
-    def roughlyMatchesToday(prospect, starter) -> bool:
-        """Is the prospect within FO_PROSPECT_LAST_WINDOW_TODAY_GAP of the starter's
-        rating today? The last-window floor under the value comparison."""
+    def _growthBeyondNextSeason(self, player, team=None, coach=None) -> float:
+        """Value points (>= 0) for a DEVELOPING player's growth after next season, over
+        the rest of FO_STANDING_HORIZON_SEASONS: the mirror of `_agingDrag`.
+
+        Next season's value (`trueForwardRating`) credits a share f of the gap to this
+        team's read of his ceiling, f = FO_CEILING_CREDIT x the GM's playerDevelopment
+        lean. Each later season realises the same share of what is left, so the extra
+        over the horizon H is gap x ((1-f) - (1-f)^H), which never passes the ceiling.
+        Seen through scouting vision like the next-season projection in
+        `perceivedValue`, and position-weighted like the value it adds to.
+        A player at or past his peak gets nothing here (his decline is `_agingDrag`)."""
+        if not FO_STANDING_ENABLED or player is None:
+            return 0.0
+        if self._nextSeasonRatingPastPeak(player, coach) is not None:
+            return 0.0
+        try:
+            if self.classifyArc(player) != ARC_DEVELOPING:
+                return 0.0
+            current = float(getattr(player, 'playerRating', 0) or 0)
+            gap = max(0.0, float(self._ceilingRating(player, team)) - current)
+        except Exception:
+            return 0.0
+        if gap <= 0:
+            return 0.0
+        horizon = max(1, int(FO_STANDING_HORIZON_SEASONS))
+        f = _clamp(FO_CEILING_CREDIT * self._attrLean(coach, 'playerDevelopment'), 0.0, 1.0)
+        extra = gap * ((1.0 - f) - (1.0 - f) ** horizon)
+        if extra <= 0:
+            return 0.0
+        return extra * self.scoutingVision(coach, team) * positionValue(player, venueBiasFor(team))
+
+    def seasonRating(self, player, coach=None, team=None) -> float:
+        """The rating this GM expects from the player in the coming season: today's
+        rating moved toward next season's projection (`trueForwardRating`: growth toward
+        his ceiling, or the sim's aging past his peak) by its scouting vision, without the
+        scouting noise. Used where the question is simply who will be the better player
+        this season (owner, 2026-10-17), e.g. two prospects for one slot."""
+        current = float(getattr(player, 'playerRating', 0) or 0)
+        try:
+            forward = float(self.trueForwardRating(player, coach, team))
+        except Exception:
+            return current
+        return current + (forward - current) * self.scoutingVision(coach, team)
+
+    def expectedFreeAgent(self, position, team=None, coach=None, pickDepth=0, pool=None):
+        """The free agent this team can realistically sign at `position`: the
+        `pickDepth`-th on its own board (decisionValue order) among players who would
+        sign here, are not retiring, and did not just leave this team. None if the
+        position will be picked clean first. The player, not his value, so a caller can
+        ask how good he is (`prospectTakesSlot`)."""
+        if pool is None:
+            pool = getattr(self.playerManager, 'freeAgents', None) or []
+        teamName = getattr(team, 'name', None)
+        cands = []
+        for fa in pool:
+            if fa is None or getattr(fa, 'position', None) != position:
+                continue
+            if getattr(fa, 'willRetire', False):
+                continue
+            if team is not None and not self.willSignWith(fa, team):
+                continue
+            if (teamName is not None and getattr(fa, 'previousTeam', None) == teamName
+                    and getattr(fa, 'freeAgentYears', 1) == 0):
+                continue
+            cands.append(fa)
+        cands.sort(key=lambda fa: -self.decisionValue(fa, coach, team=team))
+        depth = max(0, int(pickDepth or 0))
+        return cands[depth] if depth < len(cands) else None
+
+    def prospectTakesSlot(self, prospect, freeAgent, coach=None, team=None) -> bool:
+        """Should this team fill an open slot with its prospect rather than this free
+        agent? (owner, 2026-10-17.) Yes unless the free agent is better today AND better
+        this season: a prospect who is already as good, or who projects to be as good
+        once this offseason's development lands (`seasonRating`), takes the slot.
+        Otherwise the free agent signs, for the seasons left on the prospect's window
+        (the FA draft's job), and the choice comes back when that contract ends."""
+        if freeAgent is None:
+            return True
+        if (float(getattr(prospect, 'playerRating', 0) or 0)
+                >= float(getattr(freeAgent, 'playerRating', 0) or 0)):
+            return True
+        return (self.seasonRating(prospect, coach, team)
+                >= self.seasonRating(freeAgent, coach, team))
+
+    def gateRatingOf(self, starter, coach=None) -> float:
+        """The starter's rating for the today-gates a prospect must pass: today's rating,
+        or next season's projection if he is past his peak and declining (owner,
+        2026-10-17). A rising or prime starter is still measured as he is today, so a
+        clearly better player in his prime is never cut for a projection."""
+        today = float(getattr(starter, 'playerRating', 0) or 0)
+        nextSeason = self._nextSeasonRatingPastPeak(starter, coach)
+        if nextSeason is not None and float(nextSeason) < today:
+            return float(nextSeason)
+        return today
+
+    def roughlyMatches(self, prospect, starter, coach=None) -> bool:
+        """Is the prospect within FO_PROSPECT_LAST_WINDOW_TODAY_GAP of the starter
+        (`gateRatingOf`)? The last-window floor under the value comparison."""
         return (float(getattr(prospect, 'playerRating', 0) or 0)
-                >= float(getattr(starter, 'playerRating', 0) or 0)
-                - FO_PROSPECT_LAST_WINDOW_TODAY_GAP)
+                >= self.gateRatingOf(starter, coach) - FO_PROSPECT_LAST_WINDOW_TODAY_GAP)
+
+    def ratedAtLeast(self, prospect, starter, coach=None, strictly=False) -> bool:
+        """Is the prospect rated at least (or strictly above, `strictly`) the starter
+        (`gateRatingOf`)? The earlier-window and re-sign floor."""
+        mine = float(getattr(prospect, 'playerRating', 0) or 0)
+        theirs = self.gateRatingOf(starter, coach)
+        return mine > theirs if strictly else mine >= theirs
 
     def prospectReplacesStarter(self, prospect, starter, team=None, coach=None,
                                 finalWindow: bool = False) -> bool:
         """Would this GM put the prospect in the starter's place?
 
         On the prospect's LAST window he only has to roughly match the starter: on value
-        (FO_PROSPECT_LAST_WINDOW_BAR) and within half a tier today
-        (`roughlyMatchesToday`), because the alternative is losing him for nothing.
+        (FO_PROSPECT_LAST_WINDOW_BAR) and within half a tier (`roughlyMatches`: today,
+        or next season for a declining starter), because the alternative is losing him
+        for nothing.
         Otherwise he must clear the ordinary cut margin. Either bar moves with the GM's
         aggressiveness. The rated-higher-today rule for an earlier window, and every
         protection on the starter, are the caller's."""
-        if finalWindow and not self.roughlyMatchesToday(prospect, starter):
+        if finalWindow and not self.roughlyMatches(prospect, starter, coach):
             return False
         base = FO_PROSPECT_LAST_WINDOW_BAR if finalWindow else FO_CUT_UPGRADE_MARGIN
         return self.prospectEdgeOver(prospect, starter, team, coach) >= self.moveOnBar(coach, base)
@@ -1235,8 +1344,7 @@ class FrontOfficeBrain:
                 else:
                     covers = (self.prospectEdgeOver(alt, pl, team, coach)
                               >= self.moveOnBar(coach, FO_RESIGN_SURPLUS_MARGIN)
-                              and float(getattr(alt, 'playerRating', 0) or 0)
-                              >= float(getattr(pl, 'playerRating', 0) or 0))
+                              and self.ratedAtLeast(alt, pl, coach))
                 if covers:
                     coveredIds.add(id(pl))
 
