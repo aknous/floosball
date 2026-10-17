@@ -33,8 +33,23 @@ def test_trade_news_and_recap_rows_are_filtered():
     assert "e.event_type == 'trade'" in api
     assert "t.get('type') != 'trade'" in api
     assert "!= 'trade'" in _src('front_page.py')
-    assert re.search(r"if cs is None or _tradesHidden\(\):\s+return False", api), \
-        "the Transactions nav entry must stay closed while trading is off"
+
+
+def test_the_transactions_page_stays_without_its_trade_sections():
+    """Owner, 2026-10-16: the page comes back with trading off, minus the trade boards.
+    It opens at week 15 as before, and the endpoint empties trades and the block, ignores
+    pick ownership and drops the moves a trade forced."""
+    api = _src('api/main.py')
+    i = api.index('def _transactionsAvailable(')
+    gate = api[i:api.index('\ndef ', i + 10)]
+    assert '_tradesHidden' not in gate, "the page opens on the week, trading on or off"
+    i = api.index('@app.get("/api/transactions")')
+    body = api[i:api.index('\n@app.', i + 10)]
+    assert 'trades = [] if tradesHidden else' in body
+    assert 'ownerByOrigin = {} if tradesHidden else' in body
+    assert 'SeasonRecapEvent.trade_id.is_(None)' in body
+    assert 'if not tradesHidden and windowState == TRADE_WINDOW_OPEN' in body
+    assert 'raise HTTPException(404' not in body
 
 
 def test_with_trading_off_every_team_drafts_in_its_own_slot():

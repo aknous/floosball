@@ -5272,6 +5272,11 @@ GM_VOTE_TYPES: set = set()
 NAME_SUBMISSION_PENDING_CAP = 10
 NAME_SUBMISSION_MIN_LENGTH = 2
 NAME_SUBMISSION_MAX_LENGTH = 60
+# How close two names must read before the admin name tools flag them (`name_similarity`,
+# 0..1 on the normalized base name). 0.8 catches one-letter swaps ("Bob Smith" / "Rob
+# Smith" 0.89) and a shared surname with a near first name ("John Smith" / "Jane Smith"
+# 0.80), and leaves a shared surname alone ("Bob Smith" / "Al Smith" 0.71).
+NAME_SIMILARITY_THRESHOLD = 0.8
 
 GM_VOTE_COST = {
     "fire_coach": 15,
