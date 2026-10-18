@@ -399,8 +399,14 @@ CONFIDENCE_DECAY_PER_GAME = 0.90
 MOMENTUM_CASCADE_STEP = 0.15           # Multiplier increase per consecutive streak event
 MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
-MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
-MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
+# Momentum's gameplay effect is a LEVEL: each player of the team with momentum holds
+# +AT_50 x momentum/50 confidence/determination, the other team the same negative, re-targeted
+# every play and removed before postgame (`Game._applyMomentumEffect`). Sized to keep the
+# average in-force effect of the old per-play nudge (0.039 / 0.023 per player per play,
+# mean |momentum| outside the neutral zone 15.6). At momentum 100 that is 0.24 on the ±5
+# confidence scale, a ~5% state move.
+MOMENTUM_CONFIDENCE_AT_50 = 0.12
+MOMENTUM_DETERMINATION_AT_50 = 0.07
 MOMENTUM_NEUTRAL_ZONE = 5              # Abs momentum below this = no gameplay effect
 MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
 MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight

@@ -61,7 +61,7 @@ from constants import (
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
     MOMENTUM_CASCADE_STEP, MOMENTUM_MAX_CASCADE, MOMENTUM_MAX_STREAK,
-    MOMENTUM_EFFECT_BASE, MOMENTUM_EFFECT_CAP, MOMENTUM_NEUTRAL_ZONE,
+    MOMENTUM_CONFIDENCE_AT_50, MOMENTUM_DETERMINATION_AT_50, MOMENTUM_NEUTRAL_ZONE,
     MOMENTUM_SHIFT_THRESHOLD, MOMENTUM_CROSS_ZERO_THRESHOLD, MOMENTUM_DISPLAY_THRESHOLD,
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
@@ -1153,6 +1153,7 @@ class Game:
         # Diagnostics (sampled in _applyMomentumEffect, dumped by _logPlayAnalytics)
         self._peakAbsMomentum = 0.0
         self._playsAbove30Mom = 0
+        self._momentumApplied = {}       # id(player) -> (player, confidence, determination) offset in force
 
         # Coaching gameplans (pre-game scouting, generated once per game)
         if GAMEPLAN_AVAILABLE:
@@ -9485,6 +9486,7 @@ class Game:
 
     def _processPlayerPostgame(self):
         """Process player stats after game: sync dicts, update confidence/ratings, compute derived stats"""
+        self._clearMomentumEffect()
         # Sync optimized stat_tracker data to legacy dicts for all players
         for player in self.homeTeam.rosterDict.values():
             if player:
@@ -9505,6 +9507,7 @@ class Game:
                 self._accumulatePostgameStats(player)
 
     def postgame(self):
+        self._clearMomentumEffect()
         if self.isRegularSeasonGame:
             self._accumulateOffenseStats(self.homeTeam, self.homeScore)
             self._accumulateOffenseStats(self.awayTeam, self.awayScore)
@@ -11742,17 +11745,7 @@ class Game:
         inOvertime = self.currentQuarter >= 5
         lateGameMultiplier = 1.3 if (inTwoMinute or inOvertime) else 1.0
 
-        # Comeback urgency: a team trailing by 10+ in Q3 or later plays
-        # with measurable desperation — momentum events for the trailing
-        # side hit 1.15x. Pairs with the asymmetric gap dampener to keep
-        # comeback narratives alive; underdogs were winning ~10pp below
-        # pre-game WP without this push.
-        benefitingScore = self.homeScore if benefitingTeam is self.homeTeam else self.awayScore
-        opposingScore = self.awayScore if benefitingTeam is self.homeTeam else self.homeScore
-        deficit = opposingScore - benefitingScore
-        comebackUrgency = 1.15 if (self.currentQuarter >= 3 and deficit >= self._oneScore() + self._fgValue()) else 1.0
-
-        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier * comebackUrgency
+        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier
 
         if benefitingTeam is self.homeTeam:
             self.momentum += finalDelta
@@ -11765,43 +11758,58 @@ class Game:
             self.play.isMomentumShift = True
 
     def _applyMomentumEffect(self):
-        """Apply small per-play confidence/determination nudges based on momentum."""
-        # Diagnostic sampling — once per play call, regardless of neutral zone
+        """Hold each player's momentum offset at the level CURRENT momentum calls for.
+
+        ⚠️ A LEVEL, NOT A RUNNING TOTAL (audited 2026-10-18). It used to ADD a nudge on
+        every play momentum was outside the neutral zone and never take it back, so
+        confidence gained while a team had momentum stayed after the momentum was gone,
+        and half of it carried into the next game through `postgameChanges`. The offset
+        is now `MOMENTUM_*_AT_50 x momentum / 50`, re-targeted every play (only the
+        difference from what is already applied is added), so it fades as momentum
+        decays and is removed before the game ends (`_clearMomentumEffect`).
+
+        ⚠️ SYMMETRIC: the team without momentum loses exactly what the team with it gains.
+        The drag used to be 0.3x the boost, a net confidence injection worth about 0.8
+        points a game league-wide that had nothing to do with momentum.
+
+        Sized to keep the effect as large as it was on an average play (0.039 confidence,
+        0.023 determination in force per player). Measured over 1,500 games a side: holding
+        one team at +50 for a whole game moved its win rate ~1.6 points, inside the noise,
+        and drive-to-drive streakiness matched the NFL (+0.010 beyond chance); the meter
+        mostly tracks who is winning. It is a narrative system with a light touch."""
         absMom = abs(self.momentum)
+        # Diagnostic sampling — once per play call, regardless of neutral zone
         if absMom > self._peakAbsMomentum:
             self._peakAbsMomentum = absMom
         if absMom >= 30.0:
             self._playsAbove30Mom += 1
 
-        if absMom < MOMENTUM_NEUTRAL_ZONE:
-            return
+        level = (self.momentum / 50.0) if absMom >= MOMENTUM_NEUTRAL_ZONE else 0.0
+        for team, sign in ((self.homeTeam, 1.0), (self.awayTeam, -1.0)):
+            confTarget = sign * level * MOMENTUM_CONFIDENCE_AT_50
+            detTarget = sign * level * MOMENTUM_DETERMINATION_AT_50
+            for player in team.rosterDict.values():
+                if player is not None:
+                    self._setMomentumOffset(player, confTarget, detTarget)
 
-        effectMagnitude = MOMENTUM_EFFECT_BASE * (abs(self.momentum) / 50.0)
-        effectMagnitude = min(effectMagnitude, MOMENTUM_EFFECT_CAP)
+    def _setMomentumOffset(self, player, confTarget, detTarget):
+        """Move a player's applied momentum offset to (confTarget, detTarget). No
+        `source`, so the confidence shock absorbers stay out of it and the offset can be
+        removed exactly."""
+        applied = self._momentumApplied.get(id(player))
+        conf0, det0 = (applied[1], applied[2]) if applied else (0.0, 0.0)
+        if abs(confTarget - conf0) > 1e-9:
+            player.updateInGameConfidence(confTarget - conf0)
+        if abs(detTarget - det0) > 1e-9:
+            player.updateInGameDetermination(detTarget - det0)
+        self._momentumApplied[id(player)] = (player, confTarget, detTarget)
 
-        if self.momentum > 0:
-            benefiting = self.homeTeam
-            suffering = self.awayTeam
-        else:
-            benefiting = self.awayTeam
-            suffering = self.homeTeam
-
-        # Boost benefiting team
-        for player in benefiting.rosterDict.values():
-            if player is not None:
-                player.updateInGameConfidence(effectMagnitude * 0.6)
-                player.updateInGameDetermination(effectMagnitude * 0.4)
-
-        # Slight drag on suffering team. Was 0.5x the benefiting team's
-        # boost, but post-instrumentation showed favorites winning at
-        # +13pp over pre-game WP and underdogs at -10pp — the drag was
-        # compounding the favorite's advantage into a death spiral. 0.3x
-        # leaves the drag detectable without crushing the trailing team.
-        dragMagnitude = effectMagnitude * 0.3
-        for player in suffering.rosterDict.values():
-            if player is not None:
-                player.updateInGameConfidence(-dragMagnitude * 0.6, source='scoreboard')
-                player.updateInGameDetermination(-dragMagnitude * 0.4)
+    def _clearMomentumEffect(self):
+        """Take every momentum offset back out before postgame folds in-game confidence
+        into the persistent value, so momentum never carries into the next game."""
+        for player, _, _ in list(self._momentumApplied.values()):
+            self._setMomentumOffset(player, 0.0, 0.0)
+        self._momentumApplied = {}
 
     # ─── End Momentum System ────────────────────────────────────────────────
 
