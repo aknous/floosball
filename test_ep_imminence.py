@@ -104,56 +104,54 @@ def _stub(yardsToEndzone, quarter=1, clock=900, home=0, away=0):
     # `format` is a cached property resolved from gameRules.gameFormat; standard is a
     # pure pass-through, so let it resolve rather than stubbing over it.
     g.gameRules = type('R', (), {'touchdownPoints': 6, 'extraPointPoints': 1,
-                                 'gameFormat': 'standard'})()
+                                 'gameFormat': 'standard', 'downsPerSeries': 4,
+                                 'fieldLength': 100, 'firstDownDistance': 10})()
     g._formatObj = None; g._formatKey = None
     return g
 
-# In field-goal range the two models must DISAGREE (that is the whole fix).
-# ⚠️ Probe at Q3, NOT at kickoff: the ELO prior carries the full blend at Q1 start, so
-# the score model -- which is where EP lives -- contributes nothing and both models
-# return an identical 50.0. That reads as "the split does not work" and is the stub
-# being wrong, not the code.
+# ── the hand-built core (target, darts, frames, innings fallback) ──────────
+# The floor lives in `_legacyCoreHomeWp`. Probe it directly at Q3 (at kickoff the ELO
+# prior owns that core's blend and both models return 50.0, which reads as "the split does
+# not work" and is the probe being wrong, not the code).
+def legacy(g, forAttribution):
+    total = g.gameClockSeconds + max(0, 4 - g.currentQuarter) * 900
+    progress = min(1.0, (3600 - total) / 3600)
+    return g._legacyCoreHomeWp(total, progress, max(0.05, 1.0 - progress * 0.95), 50.0,
+                               float(g.homeScore - g.awayScore), g.calculateExpectedPoints(),
+                               forAttribution)
+
 gIn = _stub(yardsToEndzone=15, quarter=3, clock=450)     # opponent's 15 -> field pos 85
-dispIn = gIn.calculateWinProbability()['home']
-credIn = gIn.calculateWinProbability(forAttribution=True)['home']
-expect("in FG range the credit model prices the drive above the display model",
+dispIn, credIn = legacy(gIn, False), legacy(gIn, True)
+expect("hand-built core: in FG range the credit model prices the drive above the display model",
        credIn > dispIn + 0.5)
-
-# Both ENDS of the game agree, for two different reasons, and both are correct:
-# at kickoff the ELO prior owns the blend; late, 1/possessions is already ~1 so the
-# max() floor adds nothing.
-kick = _stub(yardsToEndzone=15, quarter=1, clock=900)
-expect("at kickoff the two models agree (ELO prior owns the blend)",
-       abs(kick.calculateWinProbability(forAttribution=True)['home']
-           - kick.calculateWinProbability()['home']) < 1e-9)
-late = _stub(yardsToEndzone=15, quarter=4, clock=120)
-expect("late in Q4 the two models agree (1/possessions already dominates)",
-       abs(late.calculateWinProbability(forAttribution=True)['home']
-           - late.calculateWinProbability()['home']) < 1e-9)
-
-# ...and OUTSIDE field-goal range they agree everywhere.
 gOut = _stub(yardsToEndzone=75, quarter=3, clock=450)    # own 25 -> speculative
-dispOut = gOut.calculateWinProbability()['home']
-credOut = gOut.calculateWinProbability(forAttribution=True)['home']
-expect("outside FG range the two models are identical",
-       abs(credOut - dispOut) < 1e-9)
+expect("hand-built core: outside FG range the two models are identical",
+       abs(legacy(gOut, True) - legacy(gOut, False)) < 1e-9)
+late = _stub(yardsToEndzone=15, quarter=4, clock=120)
+expect("hand-built core: late in Q4 the two agree (1/possessions already dominates)",
+       abs(legacy(late, True) - legacy(late, False)) < 1e-9)
 
-# The display model must match pre-change behavior exactly. Reproduced by making the
-# imminence floor unreachable, which is what the pre-change code did by not existing.
-_saved = fg.EP_IMMINENCE_MIN_FIELD_POS
-try:
-    fg.EP_IMMINENCE_MIN_FIELD_POS = 999
-    preChange = _stub(yardsToEndzone=15, quarter=3,
-                      clock=450).calculateWinProbability()['home']
-finally:
-    fg.EP_IMMINENCE_MIN_FIELD_POS = _saved
-expect("the DISPLAYED win probability is byte-identical to pre-change behavior",
-       abs(dispIn - preChange) < 1e-9)
+# ── the fitted clock model (standard, play limit) ──────────────────────────
+# It counts the current possession's value in full, so there is nothing for a credit
+# floor to correct: one model answers both questions, and the drive is priced as it
+# advances rather than when the kick goes through.
+for yte in (15, 75):
+    g = _stub(yardsToEndzone=yte, quarter=3, clock=450)
+    expect(f"clock model: display and credit are the same number (yte {yte})",
+           abs(g.calculateWinProbability(forAttribution=True)['home']
+               - g.calculateWinProbability()['home']) < 1e-9)
 
-# Momentum keys off the display WPA, so the big-play threshold still sees the old scale.
-expect("the credit model never moves the display model's own baseline",
-       abs(_stub(yardsToEndzone=15, quarter=3,
-                 clock=450).calculateWinProbability()['home'] - dispIn) < 1e-9)
+own25 = _stub(yardsToEndzone=75, quarter=3, clock=450).calculateWinProbability()['home']
+fourthAt15 = _stub(yardsToEndzone=15, quarter=3, clock=450)
+fourthAt15.down, fourthAt15.yardsToFirstDown = 4, 5
+atThe15 = fourthAt15.calculateWinProbability()['home']
+afterKick = _stub(yardsToEndzone=80, quarter=3, clock=445, home=3)
+afterKick.offensiveTeam = afterKick.awayTeam                     # kickoff to the other side
+madeFg = afterKick.calculateWinProbability()['home']
+expect(f"clock model: the march to the 15 is where the value is ({own25:.1f} -> {atThe15:.1f})",
+       atThe15 - own25 > 5.0)
+expect(f"clock model: the kick itself moves WP little ({atThe15:.1f} -> {madeFg:.1f})",
+       abs(madeFg - atThe15) < 0.5 * (atThe15 - own25))
 
 if fails:
     print(f"{len(fails)} FAILED"); sys.exit(1)

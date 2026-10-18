@@ -21,7 +21,7 @@ sys.modules.setdefault('managers.timingManager', MagicMock())
 from constants import (
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
     MOMENTUM_CASCADE_STEP, MOMENTUM_MAX_CASCADE, MOMENTUM_MAX_STREAK,
-    MOMENTUM_EFFECT_BASE, MOMENTUM_EFFECT_CAP, MOMENTUM_NEUTRAL_ZONE,
+    MOMENTUM_CONFIDENCE_AT_50, MOMENTUM_DETERMINATION_AT_50, MOMENTUM_NEUTRAL_ZONE,
     MOMENTUM_SHIFT_THRESHOLD, MOMENTUM_CROSS_ZERO_THRESHOLD, MOMENTUM_DISPLAY_THRESHOLD,
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
@@ -84,6 +84,10 @@ def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, 
     game._isMomentumShift = types.MethodType(fg.Game._isMomentumShift, game)
     game._applyMomentumEvent = types.MethodType(fg.Game._applyMomentumEvent, game)
     game._applyMomentumEffect = types.MethodType(fg.Game._applyMomentumEffect, game)
+    game._setMomentumOffset = types.MethodType(fg.Game._setMomentumOffset, game)
+    game._clearMomentumEffect = types.MethodType(fg.Game._clearMomentumEffect, game)
+    game._momentumApplied = {}
+    game._playsAbove30Mom = 0
     # ⚠️ `_decayMomentum` measures the score gap in SCORES via `_oneScore()`, which reads
     # gameRules. On a bare MagicMock that returns a Mock and the comparison raises
     # TypeError, so bind the real method over real rules rather than let the mock
@@ -396,46 +400,21 @@ def testMomentumClamping():
     print("    PASSED")
 
 
-def testComebackUrgency():
-    """Verify the trailing team gets a 1.15x bump on momentum events when
-    down 10+ in Q3 or later. Leading team is unaffected; tied games and
-    early-quarter deficits are unaffected."""
-    print("  Comeback urgency (Q3+, trailing 10+)...")
-
+def testNoComebackUrgency():
+    """The trailing team's events are NOT inflated. A 1.15x "comeback urgency" bump
+    existed to lift underdogs' win rates, which momentum's effect is far too small to do
+    (audited 2026-10-18); it is gone. The asymmetric gap dampener is what keeps a
+    comeback's momentum at full value."""
+    print("  No comeback urgency (trailing team is not inflated)...")
     resist = 0.85  # mentalStats=80
-
-    # Trailing team down 14 in Q3 — comeback urgency fires (1.15x)
     game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=3, gameClockSeconds=600)
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)  # home trailing benefits
-    expected = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.15
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    expected = 20.0 * 1.0 * 1.0 * resist
     assert abs(game.momentum - expected) < 0.1, f"Trailing in Q3: expected ~{expected}, got {game.momentum}"
-    print(f"    Trailing TD in Q3: momentum={game.momentum:.2f} (expected ~{expected:.2f})")
-
-    # Leading team in same situation — NO comeback urgency
-    game = makeGame(homeScore=21, awayScore=7, mentalStats=80, quarter=3, gameClockSeconds=600)
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)  # home leading benefits
-    expectedLead = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.0
-    assert abs(game.momentum - expectedLead) < 0.1, f"Leading in Q3: expected ~{expectedLead}, got {game.momentum}"
-
-    # Q2 with same deficit — too early, no urgency
-    game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=2, gameClockSeconds=600)
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
-    expectedQ2 = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.0
-    assert abs(game.momentum - expectedQ2) < 0.1, f"Q2 trailing: expected ~{expectedQ2}, got {game.momentum}"
-
-    # Down only 7 in Q3 — below threshold, no urgency
-    game = makeGame(homeScore=14, awayScore=21, mentalStats=80, quarter=3, gameClockSeconds=600)
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
-    expectedSmallDef = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.0
-    assert abs(game.momentum - expectedSmallDef) < 0.1, f"Down 7 Q3: expected ~{expectedSmallDef}, got {game.momentum}"
-
-    # Q4 trailing 14+ — urgency stacks with late-game amplifier inside 2:00
     game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=4, gameClockSeconds=90)
     game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
-    expectedStack = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.3 * 1.15
-    assert abs(game.momentum - expectedStack) < 0.1, f"Q4<2:00 trailing: expected ~{expectedStack}, got {game.momentum}"
-    print(f"    Q4 <2:00 trailing TD (stack): momentum={game.momentum:.2f} (expected ~{expectedStack:.2f})")
-
+    expected = 20.0 * 1.0 * 1.0 * resist * 1.3          # only the late-game amplifier
+    assert abs(game.momentum - expected) < 0.1, f"Q4<2:00 trailing: expected ~{expected}, got {game.momentum}"
     print("    PASSED")
 
 
@@ -490,45 +469,39 @@ def testMomentumEffectNeutralZone():
 
 
 def testMomentumEffectActive():
-    """Verify gameplay effect applies when momentum is above neutral zone."""
+    """At momentum 40 the team with momentum holds +AT_50 x 0.8, the other team the same
+    amount negative (symmetric, so it adds no net confidence to the league)."""
     print("  Momentum effect - active (momentum=40)...")
-
     game = makeGame(momentum=40.0)
-
     game._applyMomentumEffect()
-
-    expectedMag = min(MOMENTUM_EFFECT_BASE * (40.0 / 50.0), MOMENTUM_EFFECT_CAP)
-
-    # Home team (benefiting) should get positive effects
-    homeQb = game.homeTeam.rosterDict['qb']
-    homeQb.updateInGameConfidence.assert_called_once()
-    confArg = homeQb.updateInGameConfidence.call_args[0][0]
-    assert confArg > 0, f"Expected positive confidence, got {confArg}"
-    assert abs(confArg - expectedMag * 0.6) < 0.001
-
-    # Away team (suffering) should get negative effects
-    awayQb = game.awayTeam.rosterDict['qb']
-    awayQb.updateInGameConfidence.assert_called_once()
-    confArg = awayQb.updateInGameConfidence.call_args[0][0]
-    assert confArg < 0, f"Expected negative confidence, got {confArg}"
-
-    print(f"    Effect magnitude: {expectedMag:.5f}, boost confidence: {expectedMag*0.6:.5f}, drag: {-expectedMag*0.5*0.6:.5f}")
+    homeQb = game.homeTeam.rosterDict['qb']; awayQb = game.awayTeam.rosterDict['qb']
+    conf = homeQb.updateInGameConfidence.call_args[0][0]
+    assert abs(conf - MOMENTUM_CONFIDENCE_AT_50 * 0.8) < 1e-9, conf
+    assert abs(homeQb.updateInGameDetermination.call_args[0][0] - MOMENTUM_DETERMINATION_AT_50 * 0.8) < 1e-9
+    assert abs(awayQb.updateInGameConfidence.call_args[0][0] + conf) < 1e-9, 'the drag mirrors the boost'
+    # no shock-absorber source, so the offset can be taken back out exactly
+    assert homeQb.updateInGameConfidence.call_args.kwargs.get('source') is None
     print("    PASSED")
 
 
-def testMomentumEffectCapped():
-    """Verify effect magnitude is capped at MOMENTUM_EFFECT_CAP."""
-    print("  Momentum effect - capped at high momentum...")
-
-    game = makeGame(momentum=100.0)  # Max momentum
-
+def testMomentumEffectIsALevel():
+    """Holding momentum does not keep adding; losing it takes the offset back; the game's
+    end removes it before postgame."""
+    print("  Momentum effect - a level, not a running total...")
+    game = makeGame(momentum=50.0)
+    qb = game.homeTeam.rosterDict['qb']
+    for _ in range(10):
+        game._applyMomentumEffect()
+    total = sum(c[0][0] for c in qb.updateInGameConfidence.call_args_list)
+    assert abs(total - MOMENTUM_CONFIDENCE_AT_50) < 1e-9, f'10 plays at 50 hold one level, got {total}'
+    game.momentum = 20.0
     game._applyMomentumEffect()
-
-    homeQb = game.homeTeam.rosterDict['qb']
-    confArg = homeQb.updateInGameConfidence.call_args[0][0]
-    # At momentum=100: raw = 0.005 * (100/50) = 0.01, capped at 0.01
-    assert abs(confArg - MOMENTUM_EFFECT_CAP * 0.6) < 0.001
-    print(f"    Capped effect: confidence boost = {confArg:.5f}")
+    total = sum(c[0][0] for c in qb.updateInGameConfidence.call_args_list)
+    assert abs(total - MOMENTUM_CONFIDENCE_AT_50 * 0.4) < 1e-9, f'fades with momentum, got {total}'
+    game._clearMomentumEffect()
+    total = sum(c[0][0] for c in qb.updateInGameConfidence.call_args_list)
+    det = sum(c[0][0] for c in qb.updateInGameDetermination.call_args_list)
+    assert abs(total) < 1e-9 and abs(det) < 1e-9, 'cleared before postgame'
     print("    PASSED")
 
 
@@ -749,28 +722,6 @@ def testBlowoutMomentumSuppression():
     print("    PASSED")
 
 
-def testGameplayEffectCompounding():
-    """Verify that sustained momentum has a noticeable compound effect."""
-    print("  Gameplay effect compounding over sustained momentum...")
-
-    game = makeGame(momentum=50.0)
-
-    # Apply effect for 10 consecutive plays
-    totalConfBoost = 0
-    for _ in range(10):
-        game._applyMomentumEffect()
-        # Count calls to home team QB's confidence
-        calls = game.homeTeam.rosterDict['qb'].updateInGameConfidence.call_count
-        if calls > 0:
-            lastCall = game.homeTeam.rosterDict['qb'].updateInGameConfidence.call_args[0][0]
-            totalConfBoost += lastCall
-
-    print(f"    After 10 plays at momentum=50: total confidence boost = {totalConfBoost:.4f}")
-    # Should be roughly 10 * 0.005 * (50/50) * 0.6 = 10 * 0.003 = 0.03
-    assert 0.02 < totalConfBoost < 0.04, f"Expected ~0.03, got {totalConfBoost:.4f}"
-    print("    PASSED")
-
-
 def testDisplayThresholds():
     """Verify the display threshold determines when momentumTeam would be shown."""
     print("  Display threshold check...")
@@ -826,11 +777,11 @@ def main():
     testCascadeMultiplier()
     testBlowoutDampening()
     testLateGameAmplifier()
-    testComebackUrgency()
+    testNoComebackUrgency()
     testMomentumClamping()
     testMomentumEffectNeutralZone()
     testMomentumEffectActive()
-    testMomentumEffectCapped()
+    testMomentumEffectIsALevel()
     testMomentumShiftOnEvent()
     testStreakResetOnTeamSwitch()
     print()
@@ -839,7 +790,6 @@ def main():
     testFullScenarioCloseGame()
     testFullGameSimulation()
     testBlowoutMomentumSuppression()
-    testGameplayEffectCompounding()
     testDisplayThresholds()
     print()
 

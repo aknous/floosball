@@ -62,7 +62,6 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
-    _returnLizardoToRaccoons()
     _backfillTradeMoves()
     _reconcileTeamTitles()
     _normalizeNamePool()
@@ -3961,113 +3960,6 @@ def _backfillProspectContracts():
     except Exception as e:
         session.rollback()
         logger.warning(f"Prospect-contract backfill failed: {e}")
-    finally:
-        session.close()
-
-
-_LIZARDO_MARKER = 'lizardo_returned_s10'
-LIZARDO_ID, BOOGUMS_ID = 272, 329
-RACCOONS_ID, BROADS_ID = 26, 3
-
-
-def _returnLizardoToRaccoons():
-    """ONE-SHOT (owner, 2026-10-17): put TE Dearie Lizardo back on the Raccoons, send
-    Melkey Boogums back to their pipeline, and sign the Broads a free-agent TE.
-
-    Lizardo was the Raccoons' season-7 prospect. His last chance under the old rules (the
-    season-9 FA kickoff) ran a day before the walk-year cut rule shipped; in season 10
-    Crunchtime McCown walked at step 3, and step 3.78 released Lizardo (86) with the TE
-    slot empty, because no promotion pass ran between the two. The Broads signed him in
-    the FA draft, and the Raccoons promoted Boogums (62) into the slot at the kickoff.
-    Under the step-3.78 last look he would have been promoted, so:
-      - Lizardo keeps the deal he signed and becomes a promoted prospect
-        (`on_prospect_contract`, so he cannot be cut until it expires);
-      - Boogums is a Raccoons prospect again (he keeps his pipeline seasons, so next
-        offseason's step 3.78 is his last look);
-      - the Broads sign the best free-agent TE on the sim's normal term (`_getPlayerTerm`).
-    The two recap rows that no longer happened (Lizardo's FA pick, Boogums' promotion)
-    are removed; nothing new is announced.
-
-    ⚠️ AT BOOT, NOT AGAINST THE LIVE DATABASE: the running sim writes rosters back from
-    memory, and `init_db` runs before players load. ⚠️ GUARDED on the state it was written
-    against (season 10's offseason done, no season-11 game played, both players where the
-    offseason left them); anything else records a skip. Remove once it has run on prod.
-    """
-    import types
-    from sqlalchemy import text
-    from database.models import AppSetting
-    session = SessionLocal()
-    try:
-        if session.query(AppSetting).filter(AppSetting.key == _LIZARDO_MARKER).first():
-            return
-        state = session.execute(text("SELECT current_season FROM simulation_state WHERE id = 1")).fetchone()
-        rows = {r[0]: r for r in session.execute(text(
-            "SELECT id, team_id, on_prospect_contract FROM players WHERE id IN (:l, :b)"),
-            {'l': LIZARDO_ID, 'b': BOOGUMS_ID})}
-        played = session.execute(text(
-            "SELECT COUNT(*) FROM games WHERE season >= 11 AND status = 'final'")).scalar() or 0
-        fa = session.execute(text(
-            "SELECT p.id, p.name, p.tier, p.seasons_played, a.longevity FROM players p "
-            "LEFT JOIN player_attributes a ON a.player_id = p.id "
-            "WHERE p.position = 4 AND p.team_id IS NULL AND COALESCE(p.is_prospect, 0) = 0 "
-            "AND COALESCE(p.is_upcoming_rookie, 0) = 0 AND p.drafting_team_id IS NULL "
-            "AND COALESCE(p.will_retire, 0) = 0 AND COALESCE(p.service_time, '') != 'Retired' "
-            "ORDER BY p.player_rating DESC, p.id LIMIT 1")).fetchone()
-        reason = None
-        if not state or state[0] not in (10, 11):
-            reason = f'season is {state[0] if state else None}, not 10/11'
-        elif played:
-            reason = f'{played} season-11 games already played'
-        elif LIZARDO_ID not in rows or rows[LIZARDO_ID][1] != BROADS_ID:
-            reason = 'Lizardo is not on the Broads'
-        elif BOOGUMS_ID not in rows or rows[BOOGUMS_ID][1] != RACCOONS_ID:
-            reason = 'Boogums is not on the Raccoons'
-        elif fa is None:
-            reason = 'no free-agent TE for the Broads'
-        if reason:
-            session.add(AppSetting(key=_LIZARDO_MARKER, value=f'skipped: {reason}'))
-            session.commit()
-            logger.warning(f"Lizardo return skipped: {reason}")
-            return
-
-        import floosball_player as FloosPlayer
-        from managers.playerManager import PlayerManager
-        faId, faName, tier, seasons, longevity = fa
-        shim = types.SimpleNamespace(
-            playerTier=FloosPlayer.PlayerTier[tier], seasonsPlayed=seasons or 0,
-            attributes=types.SimpleNamespace(longevity=longevity or 6))
-        faTerm = int(PlayerManager._getPlayerTerm(None, shim))
-
-        session.execute(text(
-            "UPDATE players SET team_id = :t, on_prospect_contract = 1 WHERE id = :p"),
-            {'t': RACCOONS_ID, 'p': LIZARDO_ID})
-        session.execute(text(
-            "UPDATE players SET team_id = NULL, is_prospect = 1, drafting_team_id = :t, "
-            "on_prospect_contract = 0 WHERE id = :p"),
-            {'t': RACCOONS_ID, 'p': BOOGUMS_ID})
-        session.execute(text(
-            "UPDATE players SET team_id = :t, term = :n, term_remaining = :n, "
-            "team_resign_count = 0, free_agent_years = 0 WHERE id = :p"),
-            {'t': BROADS_ID, 'n': faTerm, 'p': faId})
-        session.execute(text(
-            "DELETE FROM season_recap_events WHERE season = 10 AND "
-            "((player_id = :l AND event_type = 'fa_pick') OR "
-            "(player_id = :b AND event_type = 'promotion'))"),
-            {'l': LIZARDO_ID, 'b': BOOGUMS_ID})
-        # A card already minted for the coming season names the team it was minted under.
-        for pid, tid in ((LIZARDO_ID, RACCOONS_ID), (faId, BROADS_ID)):
-            session.execute(text(
-                "UPDATE card_templates SET team_id = :t WHERE player_id = :p "
-                "AND season_created >= 11"), {'t': tid, 'p': pid})
-        session.add(AppSetting(key=_LIZARDO_MARKER,
-                               value=f'done: Broads signed {faName} ({faId}) for {faTerm}'))
-        session.commit()
-        logger.info(f"Lizardo return: Dearie Lizardo -> Raccoons (prospect contract), "
-                    f"Melkey Boogums -> Raccoons pipeline, Broads sign {faName} "
-                    f"({faTerm} season(s))")
-    except Exception as e:
-        session.rollback()
-        logger.warning(f"Lizardo return failed: {e}")
     finally:
         session.close()
 

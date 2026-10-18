@@ -333,7 +333,7 @@ MENTAL_DIVE_K = 10          # catch-prob (pp) a confident receiver gains laying 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
 # season total that feeds the MVP + All-Pro defense value metrics.
-WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
+WPA_PASS_QB_SHARE = 0.6      # targeted pass (complete, incomplete or picked): QB share of the WPA, receiver the rest; drops and untargeted plays have their own rules
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
 # MVP + All-Pro value metric (flat z-score blend, pooled within position group):
@@ -399,8 +399,14 @@ CONFIDENCE_DECAY_PER_GAME = 0.90
 MOMENTUM_CASCADE_STEP = 0.15           # Multiplier increase per consecutive streak event
 MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
-MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
-MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
+# Momentum's gameplay effect is a LEVEL: each player of the team with momentum holds
+# +AT_50 x momentum/50 confidence/determination, the other team the same negative, re-targeted
+# every play and removed before postgame (`Game._applyMomentumEffect`). Sized to keep the
+# average in-force effect of the old per-play nudge (0.039 / 0.023 per player per play,
+# mean |momentum| outside the neutral zone 15.6). At momentum 100 that is 0.24 on the ±5
+# confidence scale, a ~5% state move.
+MOMENTUM_CONFIDENCE_AT_50 = 0.12
+MOMENTUM_DETERMINATION_AT_50 = 0.07
 MOMENTUM_NEUTRAL_ZONE = 5              # Abs momentum below this = no gameplay effect
 MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
 MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight
@@ -6073,3 +6079,73 @@ PUNT_FAIRCATCH_SIGHT_K = 0.45
 EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
 EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
 EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]
+
+# ── Win probability: the fitted clock model (`Game.clockModelWp`) ──
+# WP = Phi(margin / spread), from the home team's side:
+#   margin = lead + WP_FIELD_VALUE(yards to go) + WP_DOWN_PENALTY[downs left] x min(to go, 15)/10
+#            (both for the team with the ball) + WP_STRENGTH_PER_LOGIT x logit(ELO odds) x time left
+#   spread = WP_MARGIN_SIGMA x sqrt(time left + WP_TIME_FLOOR), time left as a fraction of 60:00
+# FITTED, not tuned: `wp_fit.py` plays seasons on real rosters with ELO updated the way the
+# league updates it (so the prior is as noisy as production's) and fits these by log loss
+# to who actually won. Re-fit whenever scoring, the clock or ELO moves; the harness prints a
+# replacement block. Used by standard and play limit (`GameFormat.clockWinProbability`).
+#
+# The hand-built core it replaced (`_legacyCoreHomeWp`, still used by target / darts /
+# frames / innings) was audited against 5,000 sim games and 416k NFL plays (2026-10-18):
+# underconfident (75% won 84%), field position nearly ignored (tied in the red zone read
+# 55%, won 68%), the ELO prior faded on a straight line to 5% (an 83% favorite tied at
+# the start of Q4 read 61%, won 80%), and the first quarter was inert (average WP move
+# per snap 0.27 against the NFL's 2.59; no big play in Q1 across 5,000 games).
+WP_FIELD_VALUE_YTE = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+WP_FIELD_VALUE = [5.11, 4.36, 3.99, 3.43, 2.92, 2.36, 1.68, 1.12, 0.67, -0.25, -0.52]
+WP_DOWN_PENALTY = [-2.98, -1.29, -0.41]   # by downs left in the series: last down, one left, two left
+WP_STRENGTH_PER_LOGIT = 12.7
+WP_MARGIN_SIGMA = 15.17
+WP_TIME_FLOOR = 0.0448
+
+# A play is a BIG PLAY (and fires MOMENTUM_BIG_PLAY_BONUS) when either side's WPA reaches
+# this. Set to hold the big-play RATE the hand-built model produced, because the fitted
+# model moves WP about twice as much and the bonus feeds back into play outcomes. Measured
+# on `wp_fit.py` seasons: the hand-built core tagged 3.42 big plays a game at 7.0; under
+# the fitted model 7.0 would tag 7.8, 10.5 tags 3.51 and 10.75 tags 3.26. Re-derive with
+# `wp_fit.py --hold-rate` whenever the WP constants are re-fit.
+BIG_PLAY_WPA_THRESHOLD = 10.6
+
+# ── Overtime win probability, tied (measured) ──
+# The offense's chance of winning a TIED overtime, by yards to the end zone. Measured,
+# not fitted: `ot_wp_check.py` plays games whose regulation is one second a quarter, so
+# nearly every one reaches a fresh 0-0 overtime, and counts how often the team with the
+# ball goes on to win (two seeds, ~9,700 overtimes, adjacent buckets pooled where a
+# farther spot read higher). Re-measure if OT rules, the kicking model or the offense
+# move.
+#
+# ⚠️ The formula these replaced squashed every first-possession spot into 43-57% and
+# put "next score wins" at ~70% from the opponent's 25, against a measured 95%. It also
+# rated a TIE at regulation's 0:00 off field position (31-79% observed) while the first
+# OT snap read 43%, so the WP chart jumped on the first play of overtime.
+#
+# FIRST POSSESSION: the first OT possession is in progress; the other team is still
+# guaranteed a possession. The receiving team wins ~46% of overtimes in this sim, so a
+# kickoff to the own 20 reads ~42%.
+OT_FIRST_POSS_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_FIRST_POSS_WP = [76.0, 73.5, 69.3, 66.0, 58.2, 55.2, 50.1, 42.1, 42.1, 42.1]
+# NEXT SCORE WINS: either sudden death, or the second team's guaranteed possession
+# after the first team failed to score (any score by the offense ends it).
+OT_NEXT_SCORE_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_NEXT_SCORE_WP = [96.7, 96.4, 95.3, 88.5, 77.0, 70.2, 60.8, 51.1, 48.1, 43.3]
+# ANSWERING: the first team scored on its possession and the second team is on its one
+# guaranteed possession, trailing; if it fails, it loses. Measured as DRIVE rates from the
+# answering team's spot (two seeds, ~8,100 answering possessions, adjacent buckets pooled
+# where a farther spot read higher), because what a score is WORTH follows from the rules
+# and is computed (`Game._overtimeAnswerWp`): a tie becomes sudden death with the other
+# team receiving (the next-score table above), a touchdown's conversion is valued off
+# the engine's own make rates. Two drive types, since a team that a field goal can tie or
+# beat kicks one where a team needing a touchdown goes for it on fourth down:
+#   FG drive (trailing by a field goal or less): touchdown rate, and any-score rate.
+#   TD drive (trailing by more): touchdown rate.
+# The formula these replaced read down 7 on the 5 at 14% (measured 32%) and down 3 on the
+# 25 at 41% (measured 63%).
+OT_ANSWER_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_ANSWER_FG_DRIVE_TD = [48.9, 43.2, 34.9, 24.7, 24.7, 23.3, 21.0, 18.5, 18.5, 18.5]
+OT_ANSWER_FG_DRIVE_SCORE = [95.0, 92.2, 91.8, 83.3, 69.5, 59.2, 52.9, 45.4, 45.4, 45.4]
+OT_ANSWER_TD_DRIVE_TD = [69.4, 58.6, 51.0, 44.5, 38.4, 34.3, 29.3, 24.5, 24.5, 24.5]
