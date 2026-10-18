@@ -42,6 +42,8 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from constants import (
+    OT_FIRST_POSS_WP_YTE, OT_FIRST_POSS_WP, OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP,
+    OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_TD, OT_ANSWER_FG_DRIVE_SCORE, OT_ANSWER_TD_DRIVE_TD,
     GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
     RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
@@ -8107,32 +8109,52 @@ class Game:
         self._drivesBy[id(team)] = self._drivesBy.get(id(team), 0) + 1
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
+        # The handoff is happening for real now, so any preview noted for it is spent.
+        self._wpNextPossession = None
         # OT possession tracking: detect when each team's possession ends
         # offense = team giving up ball, defense = team receiving ball
-        if self.currentQuarter >= 5 and self.otFirstPossTeam is not None:
-            if offense is self.otFirstPossTeam and not self.otFirstPossComplete:
-                # First team's possession just ended
-                self.otFirstPossComplete = True
-                self.firstOtPossessionComplete = False  # not complete until second team also done
-            elif self.otFirstPossComplete and offense is not self.otFirstPossTeam:
-                # Second team's possession just ended — both teams have had their turn
-                self.otSecondPossComplete = True
-                self.firstOtPossessionComplete = True
-        
+        (self.otFirstPossComplete, self.firstOtPossessionComplete,
+         self.otSecondPossComplete) = self._otFlagsAfterPossessionEnds(offense)
+
         # Possession gate: the format decides who gets the ball on a possession change
         # (chess_clock keeps it with the giver when the receiver is locked out; innings
         # keeps it with the batting team until 3 outs). Default returns the defense, so
-        # standard/other formats flip normally. `newDriveYardsToEndzone` lets a format
-        # spot EVERY new possession at a fixed place (innings: the batting team's own 20).
+        # standard/other formats flip normally.
         receiver = self.format.possessionReceiver(self, offense, defense)
+        self._placeNewPossession(offense, defense, receiver, yards)
+        # New drive → both sideline-hoop pairs are available again (Sideline Goals).
+        self._hoopPairResult = {}
+
+    def _otFlagsAfterPossessionEnds(self, giver):
+        """(otFirstPossComplete, firstOtPossessionComplete, otSecondPossComplete) once
+        `giver`'s possession ends. Pure: `turnover()` applies it, and the WP preview of
+        the next possession applies it temporarily."""
+        first = self.otFirstPossComplete
+        firstOt = self.firstOtPossessionComplete
+        second = self.otSecondPossComplete
+        if self.currentQuarter >= 5 and self.otFirstPossTeam is not None:
+            if giver is self.otFirstPossTeam and not first:
+                # First team's possession just ended
+                first = True
+                firstOt = False  # not complete until second team also done
+            elif first and giver is not self.otFirstPossTeam:
+                # Second team's possession just ended — both teams have had their turn
+                second = True
+                firstOt = True
+        return first, firstOt, second
+
+    def _placeNewPossession(self, giver, taker, receiver, yards):
+        """Put `receiver` on offense for a fresh series. `newDriveYardsToEndzone` lets a
+        format spot EVERY new possession at a fixed place (innings: the batting team's
+        own 20); a giver that keeps the ball restarts at its own 20."""
         fixedStart = self.format.newDriveYardsToEndzone(self)
-        if receiver is offense:
-            self.offensiveTeam = offense
-            self.defensiveTeam = defense
+        if receiver is giver:
+            self.offensiveTeam = giver
+            self.defensiveTeam = taker
             yards = fixedStart if fixedStart is not None else (self.gameRules.fieldLength - 20)
         else:
-            self.offensiveTeam = defense
-            self.defensiveTeam = offense
+            self.offensiveTeam = taker
+            self.defensiveTeam = giver
             if fixedStart is not None:
                 yards = fixedStart
         self.yardsToEndzone = yards
@@ -8142,8 +8164,54 @@ class Game:
         self.yardsToFirstDown = self._freshSeriesDistance()
         # New possession → fresh drive clock (no-op unless the mechanic is on).
         self._resetDriveClock()
-        # New drive → both sideline-hoop pairs are available again (Sideline Goals).
-        self._hoopPairResult = {}
+
+    # Everything `_placeNewPossession` and the OT flags touch, i.e. what the WP preview
+    # must put back.
+    _POSSESSION_STATE = ('offensiveTeam', 'defensiveTeam', 'yardsToEndzone', 'yardsToSafety',
+                         'down', 'yardsToFirstDown', 'otFirstPossComplete',
+                         'firstOtPossessionComplete', 'otSecondPossComplete',
+                         'driveClockRemaining', 'driveClockExpiredThisPlay')
+
+    def _priceAtNextPossession(self, giver, taker, yards):
+        """Note the possession change the play about to be broadcast has caused, so its
+        win probability is priced at the possession the NEXT snap will actually have.
+
+        ⚠️ EVERY TURNOVER BRANCH BROADCASTS THE PLAY BEFORE `turnover()` RUNS (the field
+        graphic needs the play drawn from the old offense's side), and the broadcast is
+        where WP is resolved. Without this note an interception, a fumble, a turnover on
+        downs, a missed field goal or a punt was priced as if the team that just lost the
+        ball still had it, showing ~0 WPA, and the whole swing landed on the other team's
+        next snap. Measured over 300 games: +1.75 WPA on the snap after a turnover on
+        downs against +0.02 on the play itself, and the snap after was tagged BIG PLAY 67
+        times, often a kneel. Interceptors and strip artists also got no WPA credit.
+
+        Call it with the same arguments the `turnover()` that follows will get. It is
+        consumed by the next play to resolve its WP, and cleared by `turnover()`.
+        """
+        self._wpNextPossession = (giver, taker, yards)
+
+    def _withNextPossession(self, compute):
+        """Run `compute()` with the noted next possession in place, then put the current
+        state back. The preview never calls `possessionReceiver` (innings changes state
+        there); a format that cannot preview its receiver without side effects returns
+        None from `previewPossessionReceiver` and the play is priced as it stands."""
+        pending = getattr(self, '_wpNextPossession', None)
+        self._wpNextPossession = None
+        if pending is None:
+            return compute()
+        giver, taker, yards = pending
+        receiver = self.format.previewPossessionReceiver(self, giver, taker)
+        if receiver is None:
+            return compute()
+        saved = {name: getattr(self, name, None) for name in self._POSSESSION_STATE}
+        try:
+            (self.otFirstPossComplete, self.firstOtPossessionComplete,
+             self.otSecondPossComplete) = self._otFlagsAfterPossessionEnds(giver)
+            self._placeNewPossession(giver, taker, receiver, yards)
+            return compute()
+        finally:
+            for name, value in saved.items():
+                setattr(self, name, value)
 
     def _handleTurnoverOnDowns(self, lastPlayFormatted: bool, driveClockExpired: bool = False,
                                resultOverride: 'PlayResult' = None) -> None:
@@ -8179,6 +8247,7 @@ class Game:
                 self.highlights.insert(0, {'play': self.play})
                 self.leagueHighlights.insert(0, {'play': self.play})
             self.gameFeed.insert(0, {'play': self.play})
+            self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
             self.broadcastGameState(includeLastPlay=True)
         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
         self._pendingPossessionChange = True
@@ -8393,10 +8462,14 @@ class Game:
                 self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                 self.broadcastGameState(includeLastPlay=True)
                 return
+            self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
             self.broadcastGameState(includeLastPlay=True)
+            self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
             self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
             self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
         else:
+            self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam,
+                                        self.yardsToSafety - returnYards)
             self.broadcastGameState(includeLastPlay=True)
             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety - returnYards)
 
@@ -9893,6 +9966,9 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+                    if self.play.isFumbleLost or self.play.isInterception:
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam,
+                                                    max(1, self.yardsToSafety + self.play.yardage))
                     self.broadcastGameState(includeLastPlay=True)
                     lastPlayFormatted = True
                     # The play was executed inside playCaller() but the
@@ -10026,6 +10102,7 @@ class Game:
                     self.otFirstPossTeam = coinFlipWinner
                     self.turnover(coinFlipLoser, coinFlipWinner, possReset)
                     self.down = 1
+                    self._rebaseWinProbability()
 
                 elif oldQuarter == 5 and self.currentQuarter == 5:
                     # Additional OT period (still tied)
@@ -10061,6 +10138,7 @@ class Game:
                     })
                     self.turnover(coinFlipLoser, coinFlipWinner, possReset)
                     self.down = 1
+                    self._rebaseWinProbability()
                 
                 # Quarter start messages
                 if self.currentQuarter == 2 and self.format.usesQuarterBreaks():
@@ -10542,6 +10620,7 @@ class Game:
                         self.gameFeed.insert(0, {'play': self.play})
                         
                         # Broadcast comprehensive game state
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         
                         # Check if OT should end after score
@@ -10559,6 +10638,7 @@ class Game:
                         self.clockRunning = False  # Clock stops after turnover
                         self.formatPlayText()
                         self.gameFeed.insert(0, {'play': self.play})
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                         self._pendingPossessionChange = True
@@ -10735,7 +10815,9 @@ class Game:
                             self.broadcastGameState(includeLastPlay=True)
                             lastPlayFormatted = True
                             break
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
                         self.broadcastGameState(includeLastPlay=True)
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
                         self._attemptConversion(self.defensiveTeam, self.offensiveTeam,
                                                 trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
@@ -10771,6 +10853,7 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+                    self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, newYards)
                     self.broadcastGameState(includeLastPlay=True)
                     self.turnover(self.offensiveTeam, self.defensiveTeam, newYards)
                     self._pendingPossessionChange = True
@@ -10858,6 +10941,7 @@ class Game:
                     self.gameFeed.insert(0, {'play': self.play})
 
                     if self.play.yardage >= self.yardsToEndzone:
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
@@ -10881,11 +10965,15 @@ class Game:
                             self.broadcastGameState(includeLastPlay=True)
                             break
 
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         await self._pauseBetweenBeats()
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, possReset)
                         self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                     else:
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam,
+                                                    self.yardsToSafety + self.play.yardage)
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, (self.yardsToSafety + self.play.yardage))
                     self._pendingPossessionChange = True
@@ -10923,6 +11011,7 @@ class Game:
                                 if self.checkOvertimeEnd():
                                     break
                                 await self._pauseBetweenBeats()
+                                self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                                 self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
                                 self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                                 self._pendingPossessionChange = True
@@ -10980,11 +11069,13 @@ class Game:
                             self.highlights.insert(0, {'play': self.play})
                             self.leagueHighlights.insert(0, {'play': self.play})
                         self.gameFeed.insert(0, {'play': self.play})
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         if self.checkOvertimeEnd():
                             break
 
                         await self._pauseBetweenBeats()
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
 
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
@@ -11060,6 +11151,7 @@ class Game:
                                 break
 
                             await self._pauseBetweenBeats()
+                            self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, possReset)
                             self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
 
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
@@ -11086,6 +11178,7 @@ class Game:
                                 self.gameFeed.insert(0, {'play': self.play})
                             self.highlights.insert(0, {'play': self.play})
                             self.leagueHighlights.insert(0, {'play': self.play})
+                            self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                             self.broadcastGameState(includeLastPlay=True)
 
                             # Broadcast score update
@@ -13024,6 +13117,44 @@ class Game:
         self._sidelineCutawaysFired += 1
         return eventDict
 
+    def _rebaseWinProbability(self):
+        """Move the WP baseline to the current state without charging the move to any
+        play. For swings that are nobody's doing: the overtime coin toss and kickoff
+        (the receiving team wins ~46% of overtimes, so a tied 50 becomes ~42 for the
+        team receiving at its own 20). Without this the first OT snap carried it as WPA
+        and was tagged BIG PLAY. The last play is set aside while pricing, since its
+        flags (a score, an extra point) describe the previous possession."""
+        savedPlay = getattr(self, 'play', None)
+        self.play = None
+        try:
+            wp = self.calculateWinProbability()
+            credit = self.calculateWinProbability(forAttribution=True)
+        finally:
+            self.play = savedPlay
+        self.homeTeamWinProbability = self.previousHomeWinProbability = wp['home']
+        self.awayTeamWinProbability = self.previousAwayWinProbability = wp['away']
+        self.previousHomeWpCredit = credit['home']
+        self.previousAwayWpCredit = credit['away']
+
+    def _isBigPlay(self, homeWpa, awayWpa):
+        """Does the just-resolved play earn the BIG PLAY tag (|WPA| >= 7.0 either side)?
+
+        ⚠️ A KNEEL OR A SPIKE NEVER DOES. Neither moves the ball or changes the score;
+        all either one does is run or stop the clock. Two things still give them large
+        swings late in Q4. First, the leader-with-the-ball pull in
+        `calculateWinProbability` ramps toward 99 as the clock drains, so every kneel
+        under 2:00 banks a slice of it. Second, the bigger one: turnover branches
+        broadcast BEFORE `turnover()` switches possession, so a trailing team's failed
+        last drive (turnover on downs, a punt, a kickoff after a late score) is priced
+        on the leader's NEXT snap, which is usually the first kneel. Measured over 150
+        games: a kneel was tagged big in 10% of games, with swings up to 55 WP points.
+        The WP chart still moves on those snaps; only the tag (and the momentum bonus
+        the tag fires) is withheld, since a kneel cannot create momentum anyway.
+        """
+        if getattr(self.play, 'playType', None) in (PlayType.Kneel, PlayType.Spike):
+            return False
+        return bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+
     def _resolvePlayWpa(self):
         """Compute win-probability + WPA for the just-resolved play, store it on the
         play, fire the WPA-derived momentum/clutch effects, attribute the WPA to the
@@ -13035,7 +13166,9 @@ class Game:
             return (self.homeTeamWinProbability, self.awayTeamWinProbability,
                     getattr(self.play, 'homeWpa', 0.0), getattr(self.play, 'awayWpa', 0.0))
 
-        winProb = self.calculateWinProbability()
+        winProb, attribWp = self._withNextPossession(lambda: (
+            self.calculateWinProbability(),
+            self.calculateWinProbability(forAttribution=True)))
         newHomeWp = winProb['home']
         newAwayWp = winProb['away']
         homeWpa = float(newHomeWp - self.previousHomeWinProbability)
@@ -13047,7 +13180,6 @@ class Game:
         # inflated season WPA (measured 9.8x a QB per snap, 5.3x after) without touching
         # the WP the fans see or the momentum/clutch effects below, which are the only
         # path from WP back into play outcomes.
-        attribWp = self.calculateWinProbability(forAttribution=True)
         _prevHomeCredit = getattr(self, 'previousHomeWpCredit', self.previousHomeWinProbability)
         _prevAwayCredit = getattr(self, 'previousAwayWpCredit', self.previousAwayWinProbability)
         homeWpaCredit = float(attribWp['home'] - _prevHomeCredit)
@@ -13058,7 +13190,7 @@ class Game:
         self.play.awayWinProbability = newAwayWp
         self.play.homeWpa = round(homeWpa, 2)
         self.play.awayWpa = round(awayWpa, 2)
-        self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+        self.play.isBigPlay = self._isBigPlay(homeWpa, awayWpa)
 
         # Momentum: big-play bonus to the team that benefited from the swing
         if self.play.isBigPlay:
@@ -13734,7 +13866,7 @@ class Game:
             if 'homeWpa' not in self.gameFeed[0]:
                 self.gameFeed[0]['homeWpa'] = round(homeWpa, 2)
                 self.gameFeed[0]['awayWpa'] = round(awayWpa, 2)
-                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+                self.gameFeed[0]['isBigPlay'] = self._isBigPlay(homeWpa, awayWpa)
                 self.gameFeed[0]['isClutchPlay'] = getattr(self.play, 'isClutchPlay', False)
                 self.gameFeed[0]['isChokePlay'] = getattr(self.play, 'isChokePlay', False)
                 self.gameFeed[0]['isMomentumShift'] = getattr(self.play, 'isMomentumShift', False)
@@ -15975,69 +16107,35 @@ class Game:
         homeWinProb, awayWinProb = self.format.adjustWinProbability(
             self, homeWinProb, awayWinProb, expectedPoints)
 
-        # Overtime win probability — replaces generic formula above
+        # ⚠️ REGULATION HAS ENDED TIED: overtime is next and nobody has the ball yet, so
+        # the honest number is the coin flip (the ELO prior at its end-of-regulation
+        # floor), not whatever field position the final snap left behind. It used to
+        # read 31-79% here and then snap to the overtime model on the first OT play,
+        # which tagged that play BIG PLAY in 3 of 4 overtimes. `scoreDiff` carries the
+        # expected PAT, so a tying touchdown with its try still to come is not caught.
+        if (self.currentQuarter == 4 and self.gameClockSeconds <= 0
+                and scoreDiff == 0 and not self.isGameOver()):
+            homeWinProb = 50.0 + eloWeight * (eloHomeWp - 50.0)
+            awayWinProb = 100 - homeWinProb
+
+        # Overtime win probability — replaces generic formula above. The measured model
+        # covers every overtime state the sim reaches; anything it does not recognize
+        # keeps the generic number.
         if self.currentQuarter >= 5:
-            # Match checkOvertimeEnd: 2nd+ OT is sudden death outright; 1st OT becomes
-            # sudden death once both guaranteed possessions are done.
-            isSuddenDeath = self.otPeriod >= 2 or self.otSecondPossComplete
-            homeHasBall = self.offensiveTeam == self.homeTeam
-
-            if isSuddenDeath and scoreDiff != 0:
-                # Sudden death + someone is leading → game ends on next score or turnover on downs.
-                # Leading team is overwhelmingly likely to win (they can kneel it out or score).
-                leadBonus = min(40, abs(scoreDiff) * 10)  # wider lead = more certain
-                if scoreDiff > 0:
-                    # Home leads
-                    homeWinProb = 85 + leadBonus * 0.3
-                    if homeHasBall:
-                        homeWinProb += 5  # has possession too
-                else:
-                    # Away leads
-                    homeWinProb = 15 - leadBonus * 0.3
-                    if not homeHasBall:
-                        homeWinProb -= 5  # away has possession too
-            elif scoreDiff == 0:
-                # Tied in OT — next score wins (or will win after both possess).
-                # In FG range, WP should reflect the near-certainty of a made kick.
-                yte = self.yardsToEndzone
-                fgDist = yte + 17
-                # Shared with the kick the engine will actually roll — see
-                # Game.fgMakeProbability. These used to carry their own copy of the
-                # curve and silently drifted when the model changed.
-                kicker = self.offensiveTeam.rosterDict.get('k')
-                fgProb = self.fgMakeProbability(kicker, fgDist)
-                # Continuous scoring probability: union of two paths —
-                # FG probability (viable when in range, drops smoothly to
-                # ~0 outside of kicker range) and drive-TD probability
-                # (declines exponentially with yards-to-endzone). Using a
-                # smooth function here avoids large WP swings when the
-                # offense gains a few yards across an arbitrary threshold.
-                tdDriveProb = max(0.02, 0.25 * math.exp(-yte / 40.0))
-                scoringProb = (1 - (1 - fgProb) * (1 - tdDriveProb)) * 100
-
-                if isSuddenDeath:
-                    # Next score wins outright — scoring prob maps directly to WP
-                    offenseWp = max(52, scoringProb)
-                else:
-                    # First/second possession — both teams will get a drive, so
-                    # the current offense's drive position alone shouldn't swing
-                    # WP much. Keep the swing tight (~±8% off 50) so the first
-                    # OT play doesn't create a massive discontinuous jump from
-                    # end-of-regulation 50/50.
-                    offenseWp = 50 + (scoringProb - 50) * 0.15
-
-                if homeHasBall:
-                    homeWinProb = offenseWp
-                else:
-                    homeWinProb = 100 - offenseWp
-            # else: non-sudden-death with score diff — first possession scored,
-            # second team still gets a chance. Use the generic formula from above.
-
+            otHomeWp = self._overtimeHomeWp()
+            if otHomeWp is not None:
+                # Team strength tilts it by the ELO prior at its end-of-regulation floor
+                # weight, the same tilt the tied 0:00 handoff carries, so the move into
+                # overtime is continuous and equally rated teams read the measured rate.
+                homeWinProb = otHomeWp + eloWeight * (eloHomeWp - 50.0)
             homeWinProb = max(0.1, min(99.9, homeWinProb))
             awayWinProb = 100 - homeWinProb
 
-        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over)
-        if not self.isGameOver():
+        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over).
+        # ⚠️ A TOUCHDOWN WITH ITS TRY STILL OWED IS NOT FINAL, whatever `isGameOver()` says
+        # about the scores in between: down 7 at 0:00 (or in overtime's answering
+        # possession), the touchdown leaves the scorer down 1 and the try decides it.
+        if not self.isGameOver() or self._tryStillOwed():
             homeWinProb = max(0.1, min(99.9, homeWinProb))
             awayWinProb = max(0.1, min(99.9, awayWinProb))
         else:
@@ -16056,6 +16154,126 @@ class Game:
             'away': round(awayWinProb, 1)
         }
     
+    def _otTieValue(self) -> float:
+        """Chance (0-1) that a team which has just TIED an overtime goes on to win: it
+        kicks off, and the other team starts sudden death at its own 20."""
+        fresh = self.gameRules.fieldLength - 20
+        return 1.0 - float(np.interp(fresh, OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP)) / 100.0
+
+    def _otConversionValue(self, team, margin: float) -> float:
+        """Chance (0-1) that `team` wins after a touchdown that leaves it `margin` points
+        behind (negative = ahead) on a possession whose result is final once the try is
+        taken, unless it ties. The best of the tries the rules allow, at the engine's own
+        make rates; a tie is worth `_otTieValue`."""
+        if margin < 0:
+            return 1.0
+        tie = self._otTieValue()
+
+        def result(m):
+            return 1.0 if m < 0 else (tie if m == 0 else 0.0)
+
+        rungs = self._conversionRungs()
+        kick = next(r for r in rungs if r['kind'] == 'kick')
+        goRungs = [r for r in rungs if r['kind'] == 'go']
+        ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
+        best = result(margin)
+        for _, points, make in self._conversionOptions(team, kickAllowed, goRungs, kick):
+            best = max(best, make * result(margin - points) + (1 - make) * result(margin))
+        return best
+
+    def _overtimeAnswerWp(self, team, deficit: float, yte: float) -> float:
+        """Chance (0-100) that `team`, on its one guaranteed overtime possession and
+        trailing by `deficit`, wins from `yte` yards out. If the possession fails it loses.
+
+        The drive rates are measured (`OT_ANSWER_*`); what each score is worth follows
+        from the rules. Trailing by a field goal or less, the team kicks when it can: a
+        touchdown is valued through the try, a field goal wins outright or ties (then
+        sudden death with the other team receiving). Trailing by more, only a touchdown
+        keeps it alive. Measured over ~8,100 answering possessions; the model it replaced
+        read down 7 on the 5 at 14% against a measured 32%."""
+        tdPoints = float(getattr(self.gameRules, 'touchdownPoints', 6))
+        fg = self._fgValue()
+        touchdownValue = self._otConversionValue(team, deficit - tdPoints)
+        if deficit <= fg:
+            pTd = float(np.interp(yte, OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_TD))
+            pScore = float(np.interp(yte, OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_SCORE))
+            fgValue = 1.0 if deficit < fg else self._otTieValue()
+            return pTd * touchdownValue + max(0.0, pScore - pTd) * fgValue
+        return float(np.interp(yte, OT_ANSWER_WP_YTE, OT_ANSWER_TD_DRIVE_TD)) * touchdownValue
+
+    def _overtimeStateHomeWp(self, offenseIsHome: bool, yte: float, homeScore: float,
+                             awayScore: float, firstComplete: bool, secondComplete: bool):
+        """Home win chance (0-100) for an overtime state with no try pending, or None for
+        one the measured model does not cover."""
+        diff = homeScore - awayScore
+        suddenDeath = self.otPeriod >= 2 or secondComplete
+        if diff != 0 and suddenDeath:
+            # Both guaranteed possessions are done (or it is sudden death) and someone
+            # leads: that is the result.
+            return 100.0 if diff > 0 else 0.0
+        if diff == 0:
+            # "Next score wins" once the first team's possession has ended without a
+            # score (the second team's guaranteed possession, then sudden death); before
+            # that the other team is still owed a possession.
+            nextScoreWins = suddenDeath or firstComplete
+            xs, ys = ((OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP) if nextScoreWins
+                      else (OT_FIRST_POSS_WP_YTE, OT_FIRST_POSS_WP))
+            offenseWp = float(np.interp(yte, xs, ys))
+            return offenseWp if offenseIsHome else 100.0 - offenseWp
+        offenseTrails = (diff < 0) == offenseIsHome
+        if firstComplete and offenseTrails:
+            team = self.homeTeam if offenseIsHome else self.awayTeam
+            offenseWp = self._overtimeAnswerWp(team, abs(diff), yte)
+            return offenseWp if offenseIsHome else 100.0 - offenseWp
+        return None
+
+    def _overtimeHomeWp(self):
+        """Home win chance (0-100) in overtime before the team-strength tilt, or None to
+        keep the generic formula.
+
+        A touchdown whose try is still owed is valued as the scorer's best try over the
+        states it leads to: the other team receiving at its own 20, the scorer's
+        possession over. Without this the answering team's touchdown, still a point down
+        with the try to come, read as a finished game: both guaranteed possessions look
+        done and the scores differ."""
+        if not self._tryStillOwed():
+            return self._overtimeStateHomeWp(self.offensiveTeam is self.homeTeam,
+                                             self.yardsToEndzone, self.homeScore,
+                                             self.awayScore, self.otFirstPossComplete,
+                                             self.otSecondPossComplete)
+        scorer = self.play.scoringTeam
+        other = self.awayTeam if scorer is self.homeTeam else self.homeTeam
+        if self.offensiveTeam is scorer:
+            first, _, second = self._otFlagsAfterPossessionEnds(scorer)
+        else:
+            # Already priced at the next possession (`_priceAtNextPossession`).
+            first, second = self.otFirstPossComplete, self.otSecondPossComplete
+        fresh = self.gameRules.fieldLength - 20
+
+        def scorerWpAfter(points):
+            hs = self.homeScore + (points if scorer is self.homeTeam else 0)
+            aw = self.awayScore + (points if scorer is self.awayTeam else 0)
+            homeWp = self._overtimeStateHomeWp(other is self.homeTeam, fresh, hs, aw, first, second)
+            if homeWp is None:
+                return None
+            return homeWp if scorer is self.homeTeam else 100.0 - homeWp
+
+        noTry = scorerWpAfter(0)
+        if noTry is None:
+            return None
+        rungs = self._conversionRungs()
+        kick = next(r for r in rungs if r['kind'] == 'kick')
+        goRungs = [r for r in rungs if r['kind'] == 'go']
+        ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
+        best = noTry
+        for _, points, make in self._conversionOptions(scorer, kickAllowed, goRungs, kick):
+            made = scorerWpAfter(points)
+            if made is not None:
+                best = max(best, make * made + (1 - make) * noTry)
+        return best if scorer is self.homeTeam else 100.0 - best
+
     def calculateExpectedPoints(self) -> float:
         """
         Calculate expected points from current field position and down/distance.

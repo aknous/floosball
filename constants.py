@@ -6073,3 +6073,42 @@ PUNT_FAIRCATCH_SIGHT_K = 0.45
 EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
 EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
 EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]
+
+# ── Overtime win probability, tied (measured) ──
+# The offense's chance of winning a TIED overtime, by yards to the end zone. Measured,
+# not fitted: `ot_wp_check.py` plays games whose regulation is one second a quarter, so
+# nearly every one reaches a fresh 0-0 overtime, and counts how often the team with the
+# ball goes on to win (two seeds, ~9,700 overtimes, adjacent buckets pooled where a
+# farther spot read higher). Re-measure if OT rules, the kicking model or the offense
+# move.
+#
+# ⚠️ The formula these replaced squashed every first-possession spot into 43-57% and
+# put "next score wins" at ~70% from the opponent's 25, against a measured 95%. It also
+# rated a TIE at regulation's 0:00 off field position (31-79% observed) while the first
+# OT snap read 43%, so the WP chart jumped on the first play of overtime.
+#
+# FIRST POSSESSION: the first OT possession is in progress; the other team is still
+# guaranteed a possession. The receiving team wins ~46% of overtimes in this sim, so a
+# kickoff to the own 20 reads ~42%.
+OT_FIRST_POSS_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_FIRST_POSS_WP = [76.0, 73.5, 69.3, 66.0, 58.2, 55.2, 50.1, 42.1, 42.1, 42.1]
+# NEXT SCORE WINS: either sudden death, or the second team's guaranteed possession
+# after the first team failed to score (any score by the offense ends it).
+OT_NEXT_SCORE_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_NEXT_SCORE_WP = [96.7, 96.4, 95.3, 88.5, 77.0, 70.2, 60.8, 51.1, 48.1, 43.3]
+# ANSWERING: the first team scored on its possession and the second team is on its one
+# guaranteed possession, trailing; if it fails, it loses. Measured as DRIVE rates from the
+# answering team's spot (two seeds, ~8,100 answering possessions, adjacent buckets pooled
+# where a farther spot read higher), because what a score is WORTH follows from the rules
+# and is computed (`Game._overtimeAnswerWp`): a tie becomes sudden death with the other
+# team receiving (the next-score table above), a touchdown's conversion is valued off
+# the engine's own make rates. Two drive types, since a team that a field goal can tie or
+# beat kicks one where a team needing a touchdown goes for it on fourth down:
+#   FG drive (trailing by a field goal or less): touchdown rate, and any-score rate.
+#   TD drive (trailing by more): touchdown rate.
+# The formula these replaced read down 7 on the 5 at 14% (measured 32%) and down 3 on the
+# 25 at 41% (measured 63%).
+OT_ANSWER_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_ANSWER_FG_DRIVE_TD = [48.9, 43.2, 34.9, 24.7, 24.7, 23.3, 21.0, 18.5, 18.5, 18.5]
+OT_ANSWER_FG_DRIVE_SCORE = [95.0, 92.2, 91.8, 83.3, 69.5, 59.2, 52.9, 45.4, 45.4, 45.4]
+OT_ANSWER_TD_DRIVE_TD = [69.4, 58.6, 51.0, 44.5, 38.4, 34.3, 29.3, 24.5, 24.5, 24.5]

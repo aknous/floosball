@@ -169,6 +169,15 @@ class GameFormat:
         locked out (offense budget spent)."""
         return receiver
 
+    def previewPossessionReceiver(self, game, giver, receiver):
+        """Who WOULD get the ball on this possession change, without changing anything.
+        Used to price a turnover play's win probability at the next possession before
+        `Game.turnover()` runs. The default is `possessionReceiver`, which is pure for
+        every format that does not override it with side effects. A format whose
+        receiver cannot be read without changing state returns None, and the play is
+        priced as it stands."""
+        return self.possessionReceiver(game, giver, receiver)
+
     def suppressPunt(self, game) -> bool:
         """True → the offense should go for it on 4th down instead of punting. chess_clock
         returns this when the DEFENSE is locked out: a failed 4th down just hands the ball
@@ -639,6 +648,12 @@ class InningsFormat(GameFormat):
             game._inningsTries = 0
             game._inningsContinue = False
             game._inningsContinues = 0
+
+    def previewPossessionReceiver(self, game, giver, receiver):
+        # possessionReceiver spends tries, flips the half, writes feed markers and re-runs
+        # both gameplans, so it cannot be asked "what if". No preview: innings prices a
+        # possession-ending play as it stands.
+        return None
 
     def possessionReceiver(self, game, giver, receiver):
         # ⚠️ THE `giver` IS NOT ALWAYS THE BATTING TEAM, AND EVERYTHING BELOW ASSUMED IT WAS.
