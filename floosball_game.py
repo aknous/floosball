@@ -44,6 +44,8 @@ import matplotlib.pyplot as plt
 from constants import (
     OT_FIRST_POSS_WP_YTE, OT_FIRST_POSS_WP, OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP,
     OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_TD, OT_ANSWER_FG_DRIVE_SCORE, OT_ANSWER_TD_DRIVE_TD,
+    WP_FIELD_VALUE_YTE, WP_FIELD_VALUE, WP_DOWN_PENALTY, WP_STRENGTH_PER_LOGIT,
+    WP_MARGIN_SIGMA, WP_TIME_FLOOR, BIG_PLAY_WPA_THRESHOLD,
     GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
     RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
@@ -13153,7 +13155,7 @@ class Game:
         """
         if getattr(self.play, 'playType', None) in (PlayType.Kneel, PlayType.Spike):
             return False
-        return bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+        return bool(abs(homeWpa) >= BIG_PLAY_WPA_THRESHOLD or abs(awayWpa) >= BIG_PLAY_WPA_THRESHOLD)
 
     def _resolvePlayWpa(self):
         """Compute win-probability + WPA for the just-resolved play, store it on the
@@ -13260,8 +13262,18 @@ class Game:
                 creditOff(play.receiver, offenseWpa * WPA_DROP_RECEIVER_SHARE)
                 creditOff(getattr(play, 'passer', None),
                           offenseWpa * (1.0 - WPA_DROP_RECEIVER_SHARE))
+            elif getattr(play, 'receiver', None) is not None and not getattr(play, 'isSack', False):
+                # ⚠️ A TARGETED INCOMPLETION OR INTERCEPTION SPLITS LIKE A COMPLETION. It used to
+                # go all on the QB while a completion gave him only WPA_PASS_QB_SHARE, so he took
+                # 100% of a failed throw and 60% of a good one. While WP barely charged for a
+                # lost down that was invisible; once the fitted model priced an incompletion
+                # (-1.86) and a pick (-8.36) at what they cost, QBs averaged -7.4 WPA a game
+                # while passing as a whole netted +8.3 and their receivers sat well positive.
+                # The ball went to this receiver, so he shares the result either way.
+                creditOff(getattr(play, 'passer', None), offenseWpa * WPA_PASS_QB_SHARE)
+                creditOff(play.receiver, offenseWpa * (1.0 - WPA_PASS_QB_SHARE))
             else:
-                # incompletion / sack / throwaway → all on the QB
+                # sack / throwaway: no target, all on the QB
                 creditOff(getattr(play, 'passer', None), offenseWpa)
         elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint):
             creditOff(getattr(play, 'kicker', None), offenseWpa)
@@ -15982,6 +15994,78 @@ class Game:
         if currentPlay is not None and getattr(currentPlay, 'playType', None) == PlayType.ExtraPoint:
             expectedPoints = 0
 
+        # The clock formats (standard, play limit) use the model fitted to the
+        # sim's own outcomes; formats where the score ends the game, and overtime, keep
+        # the earlier hand-built core (overtime then replaces it with its measured model).
+        if getattr(self.format, 'clockWinProbability', False) and self.currentQuarter <= 4:
+            homeWinProb = self._clockModelHomeWp(scoreDiff, total_seconds, eloHomeWp)
+        else:
+            homeWinProb = self._legacyCoreHomeWp(total_seconds, gameProgress, eloWeight, eloHomeWp,
+                                                 scoreDiff, expectedPoints, forAttribution)
+        awayWinProb = 100 - homeWinProb
+
+        # Format-specific win-condition possession pull (e.g. target's match point: a
+        # team on offense that can reach X this possession is pulled toward winning,
+        # ramped by how reachable X is). Regulation only; OT below handles the tie.
+        homeWinProb, awayWinProb = self.format.adjustWinProbability(
+            self, homeWinProb, awayWinProb, expectedPoints)
+
+        # ⚠️ REGULATION HAS ENDED TIED: overtime is next and nobody has the ball yet, so
+        # the honest number is the coin flip (the ELO prior at its end-of-regulation
+        # floor), not whatever field position the final snap left behind. It used to
+        # read 31-79% here and then snap to the overtime model on the first OT play,
+        # which tagged that play BIG PLAY in 3 of 4 overtimes. `scoreDiff` carries the
+        # expected PAT, so a tying touchdown with its try still to come is not caught.
+        if (self.currentQuarter == 4 and self.gameClockSeconds <= 0
+                and scoreDiff == 0 and not self.isGameOver()):
+            homeWinProb = 50.0 + eloWeight * (eloHomeWp - 50.0)
+            awayWinProb = 100 - homeWinProb
+
+        # Overtime win probability — replaces generic formula above. The measured model
+        # covers every overtime state the sim reaches; anything it does not recognize
+        # keeps the generic number.
+        if self.currentQuarter >= 5:
+            otHomeWp = self._overtimeHomeWp()
+            if otHomeWp is not None:
+                # Team strength tilts it by the ELO prior at its end-of-regulation floor
+                # weight, the same tilt the tied 0:00 handoff carries, so the move into
+                # overtime is continuous and equally rated teams read the measured rate.
+                homeWinProb = otHomeWp + eloWeight * (eloHomeWp - 50.0)
+            homeWinProb = max(0.1, min(99.9, homeWinProb))
+            awayWinProb = 100 - homeWinProb
+
+        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over).
+        # ⚠️ A TOUCHDOWN WITH ITS TRY STILL OWED IS NOT FINAL, whatever `isGameOver()` says
+        # about the scores in between: down 7 at 0:00 (or in overtime's answering
+        # possession), the touchdown leaves the scorer down 1 and the try decides it.
+        if not self.isGameOver() or self._tryStillOwed():
+            homeWinProb = max(0.1, min(99.9, homeWinProb))
+            awayWinProb = max(0.1, min(99.9, awayWinProb))
+        else:
+            if self.homeScore > self.awayScore:
+                homeWinProb = 100
+                awayWinProb = 0
+            elif self.awayScore > self.homeScore:
+                homeWinProb = 0
+                awayWinProb = 100
+            else:
+                homeWinProb = 50
+                awayWinProb = 50
+
+        return {
+            'home': round(homeWinProb, 1),
+            'away': round(awayWinProb, 1)
+        }
+    
+    def _legacyCoreHomeWp(self, total_seconds, gameProgress, eloWeight, eloHomeWp,
+                          scoreDiff, expectedPoints, forAttribution):
+        """The hand-built WP core: a logistic in (score + damped expected points) whose
+        steepness grows with game progress, blended with the ELO prior on a linear
+        schedule, plus a late-game possession pull. Kept for the formats where the
+        score ends the game (target, darts, frames' blend, innings' fallback) and as
+        overtime's fallback. Audited 2026-10-18 for the clock formats and replaced
+        there by `_clockModelHomeWp`: underconfident (75% won 84%), field position
+        nearly ignored, the ELO prior faded too fast, the first quarter inert."""
         # Adjust expected points based on who has possession
         if self.offensiveTeam == self.homeTeam:
             homeExpected = expectedPoints
@@ -16100,60 +16184,72 @@ class Game:
                 targetWp = 99 if homeLeading else 1
                 homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
                 awayWinProb = 100 - homeWinProb
+        return homeWinProb
 
-        # Format-specific win-condition possession pull (e.g. target's match point: a
-        # team on offense that can reach X this possession is pulled toward winning,
-        # ramped by how reachable X is). Regulation only; OT below handles the tie.
-        homeWinProb, awayWinProb = self.format.adjustWinProbability(
-            self, homeWinProb, awayWinProb, expectedPoints)
+    def _wpClockFeatures(self, scoreDiff, total_seconds, eloHomeWp) -> dict:
+        """The state the fitted clock model reads, from the home team's side. `wp_fit.py`
+        records exactly this, so the fit and the engine cannot read the game differently.
 
-        # ⚠️ REGULATION HAS ENDED TIED: overtime is next and nobody has the ball yet, so
-        # the honest number is the coin flip (the ELO prior at its end-of-regulation
-        # floor), not whatever field position the final snap left behind. It used to
-        # read 31-79% here and then snap to the overtime model on the first OT play,
-        # which tagged that play BIG PLAY in 3 of 4 overtimes. `scoreDiff` carries the
-        # expected PAT, so a tying touchdown with its try still to come is not caught.
-        if (self.currentQuarter == 4 and self.gameClockSeconds <= 0
-                and scoreDiff == 0 and not self.isGameOver()):
-            homeWinProb = 50.0 + eloWeight * (eloHomeWp - 50.0)
-            awayWinProb = 100 - homeWinProb
-
-        # Overtime win probability — replaces generic formula above. The measured model
-        # covers every overtime state the sim reaches; anything it does not recognize
-        # keeps the generic number.
-        if self.currentQuarter >= 5:
-            otHomeWp = self._overtimeHomeWp()
-            if otHomeWp is not None:
-                # Team strength tilts it by the ELO prior at its end-of-regulation floor
-                # weight, the same tilt the tied 0:00 handoff carries, so the move into
-                # overtime is continuous and equally rated teams read the measured rate.
-                homeWinProb = otHomeWp + eloWeight * (eloHomeWp - 50.0)
-            homeWinProb = max(0.1, min(99.9, homeWinProb))
-            awayWinProb = 100 - homeWinProb
-
-        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over).
-        # ⚠️ A TOUCHDOWN WITH ITS TRY STILL OWED IS NOT FINAL, whatever `isGameOver()` says
-        # about the scores in between: down 7 at 0:00 (or in overtime's answering
-        # possession), the touchdown leaves the scorer down 1 and the try decides it.
-        if not self.isGameOver() or self._tryStillOwed():
-            homeWinProb = max(0.1, min(99.9, homeWinProb))
-            awayWinProb = max(0.1, min(99.9, awayWinProb))
-        else:
-            if self.homeScore > self.awayScore:
-                homeWinProb = 100
-                awayWinProb = 0
-            elif self.awayScore > self.homeScore:
-                homeWinProb = 0
-                awayWinProb = 100
-            else:
-                homeWinProb = 50
-                awayWinProb = 50
-
+        ⚠️ A play that has just SCORED is priced for the possession after it. Every
+        scoring site notes the kickoff with `_priceAtNextPossession`, so the offense is
+        normally the receiving team already; if it is still the scorer (a path that did
+        not note it), the receiver is placed at its own 20 here. After a safety the team
+        that scored receives the free kick."""
+        offense = self.offensiveTeam
+        yte = float(self.yardsToEndzone)
+        down = int(self.down or 1)
+        ytg = float(self.yardsToFirstDown or 10)
+        play = getattr(self, 'play', None)
+        if play is not None and getattr(play, 'scoreChange', False):
+            scorer = getattr(play, 'scoringTeam', None)
+            if scorer is not None:
+                receiver = (scorer if getattr(play, 'isSafety', False)
+                            else (self.awayTeam if scorer is self.homeTeam else self.homeTeam))
+                if receiver is not offense:
+                    offense = receiver
+                    yte = float(self.gameRules.fieldLength - 20)
+                    down = 1
+                    ytg = float(min(self.gameRules.firstDownDistance, yte))
+        p = min(99.5, max(0.5, float(eloHomeWp)))
         return {
-            'home': round(homeWinProb, 1),
-            'away': round(awayWinProb, 1)
+            'homeLead': float(scoreDiff),
+            'offenseIsHome': offense is self.homeTeam,
+            'yte': yte,
+            'downsLeft': max(0, int(self.gameRules.downsPerSeries) - down),
+            'ytg': ytg,
+            'timeLeft': max(0.0, float(total_seconds)) / 3600.0,
+            'strengthLogit': math.log(p / (100.0 - p)),
         }
-    
+
+    @staticmethod
+    def clockModelWp(features: dict) -> float:
+        """Home win chance (0-100) from `_wpClockFeatures`: the expected final margin
+        (lead + what the current possession is worth + team strength over the time
+        left) over a spread that shrinks with the square root of the time left. The
+        constants are fitted by `wp_fit.py` to the sim's own outcomes."""
+        value = float(np.interp(features['yte'], WP_FIELD_VALUE_YTE, WP_FIELD_VALUE))
+        left = features['downsLeft']
+        if left < len(WP_DOWN_PENALTY):
+            value += WP_DOWN_PENALTY[left] * min(features['ytg'], 15.0) / 10.0
+        margin = (features['homeLead'] + (value if features['offenseIsHome'] else -value)
+                  + WP_STRENGTH_PER_LOGIT * features['strengthLogit'] * features['timeLeft'])
+        spread = WP_MARGIN_SIGMA * math.sqrt(features['timeLeft'] + WP_TIME_FLOOR)
+        return 50.0 * (1.0 + math.erf(margin / (spread * math.sqrt(2.0))))
+
+    def _clockModelHomeWp(self, scoreDiff, total_seconds, eloHomeWp) -> float:
+        """The fitted model, plus the one state it cannot see: a leader who can kneel the
+        clock out has already won (`_kneelOutDetail`, the same test the play caller uses
+        to take the kneel)."""
+        play = getattr(self, 'play', None)
+        if not (play is not None and getattr(play, 'scoreChange', False)):
+            offenseIsHome = self.offensiveTeam is self.homeTeam
+            try:
+                if self._kneelOutDetail(offenseIsHome) is not None:
+                    return 99.9 if offenseIsHome else 0.1
+            except Exception:
+                pass
+        return self.clockModelWp(self._wpClockFeatures(scoreDiff, total_seconds, eloHomeWp))
+
     def _otTieValue(self) -> float:
         """Chance (0-1) that a team which has just TIED an overtime goes on to win: it
         kicks off, and the other team starts sudden death at its own 20."""

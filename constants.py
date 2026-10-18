@@ -333,7 +333,7 @@ MENTAL_DIVE_K = 10          # catch-prob (pp) a confident receiver gains laying 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
 # season total that feeds the MVP + All-Pro defense value metrics.
-WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
+WPA_PASS_QB_SHARE = 0.6      # targeted pass (complete, incomplete or picked): QB share of the WPA, receiver the rest; drops and untargeted plays have their own rules
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
 # MVP + All-Pro value metric (flat z-score blend, pooled within position group):
@@ -6073,6 +6073,37 @@ PUNT_FAIRCATCH_SIGHT_K = 0.45
 EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
 EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
 EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]
+
+# ── Win probability: the fitted clock model (`Game.clockModelWp`) ──
+# WP = Phi(margin / spread), from the home team's side:
+#   margin = lead + WP_FIELD_VALUE(yards to go) + WP_DOWN_PENALTY[downs left] x min(to go, 15)/10
+#            (both for the team with the ball) + WP_STRENGTH_PER_LOGIT x logit(ELO odds) x time left
+#   spread = WP_MARGIN_SIGMA x sqrt(time left + WP_TIME_FLOOR), time left as a fraction of 60:00
+# FITTED, not tuned: `wp_fit.py` plays seasons on real rosters with ELO updated the way the
+# league updates it (so the prior is as noisy as production's) and fits these by log loss
+# to who actually won. Re-fit whenever scoring, the clock or ELO moves; the harness prints a
+# replacement block. Used by standard and play limit (`GameFormat.clockWinProbability`).
+#
+# The hand-built core it replaced (`_legacyCoreHomeWp`, still used by target / darts /
+# frames / innings) was audited against 5,000 sim games and 416k NFL plays (2026-10-18):
+# underconfident (75% won 84%), field position nearly ignored (tied in the red zone read
+# 55%, won 68%), the ELO prior faded on a straight line to 5% (an 83% favorite tied at
+# the start of Q4 read 61%, won 80%), and the first quarter was inert (average WP move
+# per snap 0.27 against the NFL's 2.59; no big play in Q1 across 5,000 games).
+WP_FIELD_VALUE_YTE = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+WP_FIELD_VALUE = [5.11, 4.36, 3.99, 3.43, 2.92, 2.36, 1.68, 1.12, 0.67, -0.25, -0.52]
+WP_DOWN_PENALTY = [-2.98, -1.29, -0.41]   # by downs left in the series: last down, one left, two left
+WP_STRENGTH_PER_LOGIT = 12.7
+WP_MARGIN_SIGMA = 15.17
+WP_TIME_FLOOR = 0.0448
+
+# A play is a BIG PLAY (and fires MOMENTUM_BIG_PLAY_BONUS) when either side's WPA reaches
+# this. Set to hold the big-play RATE the hand-built model produced, because the fitted
+# model moves WP about twice as much and the bonus feeds back into play outcomes. Measured
+# on `wp_fit.py` seasons: the hand-built core tagged 3.42 big plays a game at 7.0; under
+# the fitted model 7.0 would tag 7.8, 10.5 tags 3.51 and 10.75 tags 3.26. Re-derive with
+# `wp_fit.py --hold-rate` whenever the WP constants are re-fit.
+BIG_PLAY_WPA_THRESHOLD = 10.6
 
 # ── Overtime win probability, tied (measured) ──
 # The offense's chance of winning a TIED overtime, by yards to the end zone. Measured,

@@ -18,6 +18,7 @@ os.environ.setdefault('TIMING_MODE', 'fast')
 
 from scenario import Scenario                     # noqa: E402
 import floosball_game as FG                       # noqa: E402
+from constants import BIG_PLAY_WPA_THRESHOLD      # noqa: E402
 
 
 def _resolve(playType, homeWpBefore):
@@ -36,20 +37,20 @@ def _resolve(playType, homeWpBefore):
 
 def test_kneel_with_a_big_swing_is_not_a_big_play():
     g = _resolve(FG.PlayType.Kneel, 50.0)
-    assert g.play.homeWpa >= 7.0, f'fixture must produce a big swing, got {g.play.homeWpa}'
+    assert g.play.homeWpa >= BIG_PLAY_WPA_THRESHOLD, f'fixture must produce a big swing, got {g.play.homeWpa}'
     assert g.play.isBigPlay is False
     assert not getattr(g, '_momentumFired', False), 'a kneel must not fire the big-play momentum bonus'
 
 
 def test_spike_with_a_big_swing_is_not_a_big_play():
     g = _resolve(FG.PlayType.Spike, 50.0)
-    assert g.play.homeWpa >= 7.0
+    assert g.play.homeWpa >= BIG_PLAY_WPA_THRESHOLD
     assert g.play.isBigPlay is False
 
 
 def test_the_same_swing_on_a_run_is_still_a_big_play():
     g = _resolve(FG.PlayType.Run, 50.0)
-    assert g.play.homeWpa >= 7.0
+    assert g.play.homeWpa >= BIG_PLAY_WPA_THRESHOLD
     assert g.play.isBigPlay is True
     assert getattr(g, '_momentumFired', False)
 

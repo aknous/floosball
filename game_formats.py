@@ -137,6 +137,12 @@ class GameFormat:
         return game.currentQuarter, game.gameClockSeconds
 
     # ── Win probability ───────────────────────────────────────────────────────
+    # Win probability from the fitted clock model (`Game.clockModelWp`): the clock decides
+    # the game. False for formats the score ends (target, darts), that run their own model
+    # on top of the core (frames blends it, innings replaces it), or where the fit read
+    # worse than the hand-built core (chess clock); those keep the hand-built core.
+    clockWinProbability = True
+
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         """Map elapsed-fraction (0 kickoff → 1 end of regulation). Formats where the
         score itself advances the game (target) push this higher as X nears."""
@@ -313,6 +319,7 @@ class TargetFormat(GameFormat):
     """First to X points wins — a walk-off the instant a team reaches the target, any
     quarter. If nobody reaches X the clock still bounds it and the higher score wins."""
     key = 'target'
+    clockWinProbability = False
     label = 'Target'
 
     def _target(self, game) -> int:
@@ -442,6 +449,9 @@ class ChessClockFormat(GameFormat):
     budget faster and hands the trailer uncontested late possessions — the strategic
     axis. Budgets are ignored in OT (a fresh sudden-death period on the synthetic clock)."""
     key = 'chess_clock'
+    # The game clock here is driven by each team's budget, and the fitted clock model read it
+    # as overconfident (a 91% state won 79%) where the hand-built core was calibrated.
+    clockWinProbability = False
     label = 'Chess Clock'
 
     def _budget(self, game) -> int:
@@ -585,6 +595,7 @@ class InningsFormat(GameFormat):
 
     fpScale = 1.32   # measured 46.0 points a game against standard's 33.2 -- the bar RISES so the gate stays the same gamble
     key = 'innings'
+    clockWinProbability = False
     label = 'Innings'
     EXTRA_INNINGS_CAP = 5   # accept a tie after this many extra innings (anti-stalemate)
 
@@ -891,6 +902,7 @@ class FramesFormat(GameFormat):
     NORMALLY; frames are a time-based OVERLAY, and only the WINNER is decided differently.
     """
     key = 'frames'
+    clockWinProbability = False
     label = 'Frames'
 
     def _frames(self, game) -> int:
@@ -1147,6 +1159,7 @@ class BustFormat(GameFormat):
     change. The decision tree inverts: near X, don't kick a busting FG or chase a busting
     TD — dink the exact remainder with a FG / hoop."""
     key = 'bust'
+    clockWinProbability = False
     label = 'Darts'
 
     def bundledRules(self) -> dict:

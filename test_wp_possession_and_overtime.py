@@ -28,6 +28,7 @@ from constants import (OT_FIRST_POSS_WP, OT_FIRST_POSS_WP_YTE, OT_NEXT_SCORE_WP,
                        OT_NEXT_SCORE_WP_YTE, OT_ANSWER_WP_YTE, OT_ANSWER_TD_DRIVE_TD,
                        OT_ANSWER_FG_DRIVE_TD, OT_ANSWER_FG_DRIVE_SCORE)
 import numpy as np                                # noqa: E402
+from constants import BIG_PLAY_WPA_THRESHOLD      # noqa: E402
 
 STATE = FG.Game._POSSESSION_STATE
 
@@ -61,7 +62,7 @@ def test_a_turnover_play_is_priced_at_the_next_possession():
     g.play = FG.Play(g)
     g.turnover(g.offensiveTeam, g.defensiveTeam, 60)
     assert abs(g.calculateWinProbability()['home'] - homeWp) < 0.05
-    assert homeWpa <= -7.0, f'losing the ball while leading late is a big swing, got {homeWpa}'
+    assert homeWpa <= -BIG_PLAY_WPA_THRESHOLD, f'losing the ball while leading late is a big swing, got {homeWpa}'
 
 
 def test_without_a_note_the_play_is_priced_as_it_stands():
@@ -129,7 +130,7 @@ def test_the_coin_toss_is_not_charged_to_the_first_overtime_snap():
     g.play.playType = FG.PlayType.Run
     g.yardsToEndzone = 76
     _, _, homeWpa, _ = g._resolvePlayWpa()
-    assert abs(homeWpa) < 7.0 and not g.play.isBigPlay
+    assert abs(homeWpa) < BIG_PLAY_WPA_THRESHOLD and not g.play.isBigPlay
 
 
 def _answering(sc, deficit, ballOn):
