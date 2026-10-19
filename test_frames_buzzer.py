@@ -201,12 +201,22 @@ class TiedFrameLastSnapTests(unittest.TestCase):
         self.assertNotIn(FG.PlayType.Punt, kinds, kinds)
 
     def testInTheFinalFrameATieThatWinsTheMatchIsKept(self):
+        # The final frame reads the match standing, so a tied frame that wins the match is
+        # a lead and one that loses it is a deficit; the tie helper is for earlier frames.
         _s, g = framesGame(frame=6, secsLeft=2, framesOff=3.0, framesDef=2.0)
-        self.assertFalse(g._frameTieIsShort())
+        self.assertGreater(g._frameDecisionDiff(), 0)
         _s, g = framesGame(frame=6, secsLeft=2, framesOff=2.0, framesDef=3.0)
-        self.assertTrue(g._frameTieIsShort())
+        self.assertLess(g._frameDecisionDiff(), 0)
+        self.assertFalse(g._frameTieIsShort())
         _s, g = framesGame(frame=2, secsLeft=2)
         self.assertTrue(g._frameTieIsShort())
+
+    def testTheReportedFinalFrameReadsTheMatch(self):
+        # Prod game 4722: a frame behind, frame tied 7-7, down 26-19 overall, 3:12 left.
+        _s, g = framesGame(frame=6, secsLeft=192, frameMargin=0, totalMargin=-7,
+                           framesOff=2.0, framesDef=3.0)
+        self.assertEqual(g._frameDecisionDiff(), -7.0)      # a touchdown and kick ties it
+        self.assertEqual(g._classifyTempoIntent()[0], 'hurryUp')
 
 
 class FinalFrameConversionTests(unittest.TestCase):
