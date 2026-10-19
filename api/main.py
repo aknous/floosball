@@ -14,6 +14,9 @@ import json
 from datetime import datetime, timezone
 
 import os
+import secrets
+import threading
+import time
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
 from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent, PlayerOffDayEvent
@@ -15246,9 +15249,15 @@ def _checkBotAuth(x_bot_key: str = Header(...)):
         raise HTTPException(status_code=403, detail="Invalid bot key")
 
 
+class _BotLinkRequestBody(BaseModel):
+    discordId: str
+    username: str
+    discordName: Optional[str] = None   # shown in the notification so the owner knows who asked
+
 class _BotLinkBody(BaseModel):
     discordId: str
     username: str
+    code: str
 
 class _BotUnlinkBody(BaseModel):
     discordId: str
@@ -15258,17 +15267,99 @@ class _BotRemindersBody(BaseModel):
     enabled: bool
 
 
+# Pending /link codes, keyed (userId, discordId). Linking used to trust any username, so
+# anyone could claim anyone's account. Now the code goes to the account's in-app
+# notifications, which only the real owner can read. Kept in memory on purpose: codes
+# live 10 minutes and a restart just means asking for a new one (single API process).
+# Keyed per requester so a stranger asking for a code can't invalidate the owner's.
+_LINK_CODE_TTL = 600
+_LINK_CODE_COOLDOWN = 60          # per account, so the bell can't be spammed
+_LINK_CODE_MAX_ATTEMPTS = 5
+_LINK_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'   # no 0/O or 1/I/L
+_pendingLinkCodes: Dict[Tuple[int, str], Dict[str, Any]] = {}
+_linkCodeLastIssued: Dict[int, float] = {}
+_linkCodeLock = threading.Lock()
+
+
+def _pruneLinkCodes(now: float) -> None:
+    for key in [k for k, v in _pendingLinkCodes.items() if v['expires'] <= now]:
+        del _pendingLinkCodes[key]
+    for uid in [u for u, t in _linkCodeLastIssued.items() if now - t >= _LINK_CODE_COOLDOWN]:
+        del _linkCodeLastIssued[uid]
+
+
+def _findUserByUsername(session, username: str):
+    """Case-insensitive exact match. Not ilike(): that treats % and _ as wildcards, so
+    `/link %` would match whichever account came back first."""
+    from database.models import User
+    from sqlalchemy import func
+    return session.query(User).filter(
+        func.lower(User.username) == (username or '').strip().lower()).first()
+
+
+@app.post("/api/bot/link/request")
+def bot_link_request(body: _BotLinkRequestBody, _auth: None = Depends(_checkBotAuth)):
+    """Step 1 of linking: send a one-time code to the account's in-app notifications."""
+    from database.connection import get_session
+    from database.repositories.notification_repository import NotificationRepository
+    session = get_session()
+    try:
+        user = _findUserByUsername(session, body.username)
+        if not user:
+            raise HTTPException(404, "Username not found")
+        if user.discord_id == body.discordId:
+            raise HTTPException(409, f"You're already linked to {user.username}")
+
+        now = time.time()
+        with _linkCodeLock:
+            _pruneLinkCodes(now)
+            if user.id in _linkCodeLastIssued:
+                raise HTTPException(429, "A code was just sent to that account. "
+                                         "Wait a minute before asking for another.")
+            code = ''.join(secrets.choice(_LINK_CODE_ALPHABET) for _ in range(6))
+            _pendingLinkCodes[(user.id, body.discordId)] = {
+                'code': code, 'expires': now + _LINK_CODE_TTL, 'attempts': 0}
+            _linkCodeLastIssued[user.id] = now
+
+        who = f"Discord user {body.discordName[:40]}" if body.discordName else "A Discord user"
+        NotificationRepository(session).create(
+            user.id, 'discord_link', f"Discord link code: {code}",
+            f"{who} asked to link to your account. If that was you, run "
+            f"/link username:{user.username} code:{code} in Discord within 10 minutes. "
+            f"If it wasn't you, ignore this.")
+        session.commit()
+        return build_success_response({"username": user.username})
+    finally:
+        session.close()
+
+
 @app.post("/api/bot/link")
 def bot_link_user(body: _BotLinkBody, _auth: None = Depends(_checkBotAuth)):
-    """Link a Discord user to a Floosball account by username."""
+    """Step 2 of linking: check the code from /api/bot/link/request, then link."""
     from database.connection import get_session
     from database.models import User
     session = get_session()
     try:
-        # Find user by username (case-insensitive)
-        user = session.query(User).filter(User.username.ilike(body.username)).first()
+        user = _findUserByUsername(session, body.username)
         if not user:
             raise HTTPException(404, "Username not found")
+
+        key = (user.id, body.discordId)
+        with _linkCodeLock:
+            _pruneLinkCodes(time.time())
+            pending = _pendingLinkCodes.get(key)
+            if not pending:
+                raise HTTPException(400, "No code pending (or it expired). "
+                                         "Run /link without a code to get a new one.")
+            given = (body.code or '').strip().upper().encode()
+            if not secrets.compare_digest(given, pending['code'].encode()):
+                pending['attempts'] += 1
+                if pending['attempts'] >= _LINK_CODE_MAX_ATTEMPTS:
+                    del _pendingLinkCodes[key]
+                    raise HTTPException(400, "Too many wrong codes. "
+                                             "Run /link without a code to get a new one.")
+                raise HTTPException(400, "That code doesn't match. Check your notifications and try again.")
+            del _pendingLinkCodes[key]
 
         # Clear discord_id from any other user that has it (re-link)
         existing = session.query(User).filter(User.discord_id == body.discordId).first()
