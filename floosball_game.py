@@ -1691,6 +1691,49 @@ class Game:
             return False
         return self.down <= 2
 
+    def _isFgSecuredDrain(self) -> bool:
+        """True when an offense already in comfortable field-goal range, tied or within a
+        field goal at the end of the game or of a frame, should run the clock rather than
+        stop it, with 1:00 to `FG_SECURE_DRAIN_SECS` left (`_isFgDrainMode` owns the last
+        minute). When True the offense does not hurry, call clock-stopping timeouts, spike
+        or throw to the sideline, so it scores last instead of handing the opponent time.
+
+        ⚠️ A COACH CALL, DECIDED ONCE PER DRIVE (owner, 2026-10-19: "tied to coach clock
+        management"): a sharp clock manager reads it, a poor one keeps stopping the clock.
+        The read is cached on the drive so the offense does not flip between draining and
+        stopping the clock from one snap to the next. Off in chess clock (the budget, not
+        the game clock, is what runs out) and under the Drive Clock (its own clock forces
+        the pace). See constants FG_SECURE_*."""
+        from constants import FG_SECURE_DRAIN_SECS, FG_SECURE_MIN_PROB, FG_SECURE_READ_BASE
+        if getattr(self.format, 'key', '') == 'chess_clock' or self._driveClockActive():
+            return False
+        kind, secs = self._periodEnd()
+        if kind != 'game' or not (60 < secs <= FG_SECURE_DRAIN_SECS):
+            return False
+        margin = self._clockMargin()
+        if not (-self._fgValue() <= margin <= 0) or self._isGarbageTime(margin):
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is None:
+            return False
+        if self.yardsToEndzone > kicker.maxFgDistance - self.gameRules.fgSnapDistance:
+            return False
+        try:
+            if self._estimateFgProbability() < FG_SECURE_MIN_PROB:
+                return False
+        except Exception:
+            return False
+        driveKey = (id(self.offensiveTeam), getattr(self, '_drivesBy', {}).get(id(self.offensiveTeam), 0),
+                    self.currentQuarter, getattr(self, '_frameIndex', 0))
+        cached = getattr(self, '_fgSecureRead', None)
+        if cached is not None and cached[0] == driveKey:
+            return cached[1]
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        read = _random.random() < (FG_SECURE_READ_BASE
+                                   + (1.0 - FG_SECURE_READ_BASE) * self._coachClockIQ(coach))
+        self._fgSecureRead = (driveKey, read)
+        return read
+
     def _isFgDrainMode(self) -> bool:
         """True when the offense should drain clock to set up an end-of-game FG.
         Late Q2/Q4, scoring within 3 (trailing or tied), in chip-shot FG range.
@@ -2597,7 +2640,7 @@ class Game:
         # we WANT the clock running so the FG ends the game with no time left.
         # Same for a go-ahead TD being held back: an out-of-bounds catch stops the clock,
         # which is exactly what the drain is trying to avoid.
-        if self._isFgDrainMode() or self._isTdDrainMode():
+        if self._isFgDrainMode() or self._isTdDrainMode() or self._isFgSecuredDrain():
             return False
 
         clockIQ = self._coachClockIQ(coach)
@@ -7810,7 +7853,8 @@ class Game:
                     # throwing to the sideline under a running clock, and measured at
                     # 1.43 wasted downs a game before this gate.
                     and self._deadBallStopsClock()
-                    and not self._isGarbageTime(decisionDiff)):
+                    and not self._isGarbageTime(decisionDiff)
+                    and not self._isFgSecuredDrain()):   # in range: run the clock, don't stop it
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
                 else:
@@ -7849,7 +7893,9 @@ class Game:
             if (isLateGame and (decisionDiff <= 0 or endOfHalfDrive) and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(decisionDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
-                    and secs <= toWindow):
+                    and secs <= toWindow
+                    # Already in comfortable range, tied or within a kick: score LAST.
+                    and not self._isFgSecuredDrain()):
                 if secs <= self.gameRules.timeoutClockThreshold:
                     # Inside 2:00 — high urgency. In FG range with a one-score/tied
                     # deficit, a competent coach stops the clock near-deterministically.
@@ -13990,6 +14036,11 @@ class Game:
             # _offenseEffectiveSecs <= 60, so this drain is bounded to the current deadline.
             return ('setupFG', max(8, self._offenseEffectiveSecs() - target))
 
+        # In field-goal range, tied or within a kick, with 1:00-3:00 left: score LAST. A
+        # tied team bleeds the clock, a trailing one stops hurrying (`_isFgSecuredDrain`).
+        if self._isFgSecuredDrain():
+            return ('burnClock', 40) if self._clockMargin() == 0 else ('neutral', DEFAULT_BASE)
+
         # Target format: a score this possession WINS — push to finish (fast huddle)
         # instead of draining, UNLESS a conservative coach is protecting a comfortable
         # lead (then fall through to the burn-clock branches below). Aggressive coaches
@@ -14055,6 +14106,15 @@ class Game:
                 return ('burnClock', 40)              # ahead in the frame → run the frame out
             if not self._isGarbageTime(_fdiff):
                 return ('hurryUp', 12)                # behind/tied → race to win the frame
+        # ⚠️ BEHIND WITH 2:00-5:00 OF A FRAME LEFT, PICK UP THE PACE (fixed 2026-10-19), the
+        # standard Q4 "mid-late deficit" rule on the frame clock. The standard rule below is
+        # skipped in Frames, so nothing hurried a trailing team until 2:00: prod game 4691,
+        # Raccoons down 3 on total in the last frame (frames level), let 1:39 run off from
+        # 3:14 at a normal huddle. Not for a frame the side behind can no longer win (a
+        # 'half' ending) and not for the side ahead (the frame-leader rule).
+        if (_fdiff is not None and _fdiff < 0 and self._periodEnd()[0] == 'game'
+                and not self._isGarbageTime(_fdiff)):
+            return ('hurryUp', 15 if _fdiff <= -self._maxPossession() else 25)
 
         # About to score a go-ahead TD from the goal line: bleed the clock first so the
         # opponent has no time to answer. Must precede the trailing hurry-up below, which

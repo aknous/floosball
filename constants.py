@@ -5700,6 +5700,19 @@ FRAMES_TIMEOUTS_PER_FRAME = 2
 # decisions' own thresholds (2:00, 3:00, 5:00) sit inside it, as they sit inside a quarter.
 FRAMES_END_WINDOW_SECS = 300
 
+# ⚠️ A TEAM ALREADY IN FIELD-GOAL RANGE RUNS THE CLOCK, NOT STOPS IT (2026-10-19). Tied or
+# within a field goal at the end of the game (or of a frame), inside a kick this kicker
+# makes at least FG_SECURE_MIN_PROB, with between 1:00 and FG_SECURE_DRAIN_SECS left: the
+# offense plays slowly (no hurry-up, no clock-stopping timeouts, spikes or sideline throws)
+# so it scores last, and the existing FG drain (`_isFgDrainMode`) takes over inside 1:00.
+# It used to stop the clock: prod game 4688, tied on the 12 with 1:39 left, used both
+# timeouts, kicked with 1:22 left and conceded the tying kick at 0:00; a standard Q4 in
+# the same spot called a timeout 87% of the time. Recognising the spot is a coach call:
+# FG_SECURE_READ_BASE + (1 - base) x clock IQ, decided once per drive.
+FG_SECURE_DRAIN_SECS = 180
+FG_SECURE_MIN_PROB = 0.75
+FG_SECURE_READ_BASE = 0.4
+
 GLITCH_CARDS_ENABLED = True
 
 # Trigger base, by the on-card player's position on the attention ladder. Chosen over an
