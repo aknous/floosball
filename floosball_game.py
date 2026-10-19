@@ -14701,7 +14701,8 @@ class Game:
         return 0
 
     def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list,
-                                 drives: int = None) -> dict:
+                                 drives: int = None, margin: float = None,
+                                 secsLeft: float = None) -> dict:
         """Pick the conversion that leaves the best chance of winning.
 
         ⚠️ THE OLD CHART ONLY EVER LET A TRAILING TEAM GO, AND LET IT GO ALMOST
@@ -14725,16 +14726,23 @@ class Game:
         reaches for.
 
         The safest option is the default; another is taken only for a real edge, nearly
-        always for a clear one, with coach aggressiveness deciding the marginal ones."""
+        always for a clear one, with coach aggressiveness deciding the marginal ones.
+
+        `margin` / `secsLeft` override the scoreboard and the game clock: Frames passes the
+        margin that decides the frame or the match and the frame's own clock
+        (`_chooseFramesConversion`)."""
         from constants import (CONVERSION_SECS_PER_DRIVE, CONVERSION_VALUE_MIN_GAIN,
                                CONVERSION_VALUE_BASE, CONVERSION_VALUE_GAIN_SCALE)
         import random
         q = self.currentQuarter
-        quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
-        secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
-        mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
-        theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
-        margin = float(mine - theirs)
+        if secsLeft is None:
+            quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
+            secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
+        if margin is None:
+            mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+            theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+            margin = float(mine - theirs)
+        margin = float(margin)
         # `drives` given (overtime) is the exact count. Otherwise read it off the clock.
         # ⚠️ A TRY WITH NO TIME LEFT IS THE LAST PLAY OF REGULATION. The clock split floors
         # at one drive and the trailing branch at two, so a touchdown at 0:00 used to be
@@ -14841,7 +14849,8 @@ class Game:
         # tiebreak, so in the final frame the exact points margin is the whole game.
         # Returns None to defer to the standard policy whenever points aren't decisive.
         if goRungs and getattr(self.format, 'key', '') == 'frames':
-            _framesPick = self._chooseFramesConversion(scoringTeam, goRungs, fallback)
+            _framesPick = self._chooseFramesConversion(
+                scoringTeam, self._conversionOptions(scoringTeam, kickAllowed, goRungs, kick), fallback)
             if _framesPick is not None:
                 return _framesPick
         # Darts: a rung that lands on the target wins outright, and one that overshoots
@@ -15000,63 +15009,96 @@ class Game:
         floor = DARTS_LAND_MAKE_FLOOR - aggressNorm * DARTS_LAND_AGGR_SWING + jitter
         return None if pLand >= floor else bank
 
-    def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
+    def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, options: list, fallback: dict):
         """Frames post-TD decision, or None to defer to the standard policy.
 
-        Frames is decided by FRAMES WON; total points only matter as the tiebreak when
-        the frames finish LEVEL (`FramesFormat.winnerSide`). So in the final frame, a
-        team that has just levelled the frames is playing a pure points game — and the
-        standard "you're within one score, take the kick" chart is exactly wrong there,
-        because there is no future possession to make the points up. It cost a real match:
-        a team levelled the frames 3-3 with a touchdown and lost the tiebreak by 1.8,
-        when the 4-point rung would have won it.
+        ⚠️ DECIDED ON WIN VALUE OVER THE MARGIN THAT DECIDES THE FRAME OR THE MATCH (fixed
+        2026-10-19). Reported from prod game 4675 (Midnights 48, Raccoons 47): last frame,
+        Raccoons a frame behind, a touchdown with 1:08 left put them ahead IN the frame, so
+        the frames would finish level and the total decide it, where they trailed 48-46.
+        This picked the try with the most EXPECTED POINTS (kick 0.95, two-pointer 0.94),
+        kicked, and lost by one, when only the two-pointer could tie. A tiebreak is a
+        threshold, not a points race. And when the frames would NOT finish level it
+        deferred to the comeback chart below, which reads the TOTAL: a team a frame behind,
+        down 1 in the last frame after its touchdown but ahead on aggregate, kicked to tie
+        the frame and lost the match.
 
-        Only decisive when the frames actually finish level. If either side is ahead on
-        frames the points are irrelevant (defer), and if the scoring team is already
-        ahead on the tiebreak the safe points are the right call (defer)."""
+        Now the standard engine's win-value model (`_chooseConversionByValue`) decides, fed
+        the margin that matters:
+          * the FINAL frame, any time left: the match standing as a points margin
+            (`_framesMatchMargin`), on the game clock;
+          * an earlier frame in its last `FRAMES_END_WINDOW_SECS` (`_periodEnd` 'game'): the
+            frame margin, on the frame clock (a tied frame is worth half, like overtime);
+          * the rest of a frame, and a frame the side behind can no longer win: the default
+            try, as a standard game kicks before Q4. Points there only matter as a distant
+            tiebreak."""
         fmt = self.format
         try:
             n = fmt._frames(self)
         except Exception:
             return None
-        # Only the LAST frame settles the tiebreak — earlier frames still have frames
-        # to win, and points there can be made up later.
-        if int(getattr(self, '_frameIndex', 0)) < n - 1:
-            return None
-
-        fh = float(getattr(self, '_framesWonHome', 0.0))
-        fa = float(getattr(self, '_framesWonAway', 0.0))
+        if self.currentQuarter >= 5:
+            return None          # overtime is past all frames: the standard policy
+        if int(getattr(self, '_frameIndex', 0)) >= n - 1:
+            margin = self._framesMatchMargin(scoringTeam)
+            if margin is None:   # decided whatever the try does
+                return fallback
+            return self._chooseConversionByValue(scoringTeam, options, margin=margin)
+        kind, frameSecs = self._periodEnd()
+        if kind != 'game':
+            return fallback
         from game_formats import framePoints
         curH, curA = framePoints(self)
-        if curH > curA:
-            fh += 1
-        elif curA > curH:
-            fa += 1
-        else:
-            fh += 0.5
-            fa += 0.5
-        if fh != fa:
-            return None      # frames decide the match — points don't come into it
+        frameMargin = (curH - curA) if scoringTeam is self.homeTeam else (curA - curH)
+        return self._chooseConversionByValue(scoringTeam, options, margin=frameMargin,
+                                             secsLeft=frameSecs)
 
-        # Frames finish LEVEL, so the match is decided by a RAW POINTS COMPARISON.
-        # Every point carries equal weight toward that total and there is no "safe
-        # enough" margin, so the right objective is EXPECTED POINTS rather than the
-        # standard chart's "am I behind, do I need to catch up". That chart returns the
-        # safe kick whenever the team is level or ahead — which is how a side that
-        # levelled the frames 3-3 settled for 1 point and lost the tiebreak by 1.8.
-        cands = list(goRungs) + ([fallback] if fallback not in goRungs else [])
+    def _framesMatchMargin(self, scoringTeam: FloosTeam.Team):
+        """FINAL frame: the scoring team's match standing, as a points margin the win-value
+        model can read (positive = winning, 0 = tied and headed to overtime, negative =
+        losing), or None when no score can change the result.
 
-        def prob(r):
-            if r.get('kind') == 'kick':
-                return self._estimateKickConversionProb(scoringTeam)
-            return self._estimateConversionProb(scoringTeam, r.get('distance', 2))
+        The final frame and the total move together (every point counts in both), and the
+        result is a step function of the total: frames won decide it, and with the frames
+        level the total does, a dead-level total going to overtime. So the standing is the
+        distance from the point where it flips. With a tie point (always total 0, frames
+        level) the margin IS the total margin; without one it sits half a point on the
+        losing side of the first winning total, so 0 is never reached and a make that
+        crosses it wins outright."""
+        from game_formats import framePoints
+        isHome = scoringTeam is self.homeTeam
+        mine = self.homeScore if isHome else self.awayScore
+        theirs = self.awayScore if isHome else self.homeScore
+        total = mine - theirs
+        curH, curA = framePoints(self)
+        offset = ((curH - curA) if isHome else (curA - curH)) - total   # frame = total + offset
+        fh = float(getattr(self, '_framesWonHome', 0.0))
+        fa = float(getattr(self, '_framesWonAway', 0.0))
+        usFrames, themFrames = (fh, fa) if isHome else (fa, fh)
 
-        def expected(r):
-            return float(r.get('points', 0)) * prob(r)
+        def outcome(t):
+            fm = t + offset
+            us = usFrames + (1.0 if fm > 0 else 0.5 if fm == 0 else 0.0)
+            them = themFrames + (1.0 if fm < 0 else 0.5 if fm == 0 else 0.0)
+            if us != them:
+                return 1 if us > them else -1
+            return 1 if t > 0 else 0 if t == 0 else -1
 
-        # Tie-break toward the SAFER (more makeable) option so a coin-flip between two
-        # equal-EV rungs doesn't reach for the long one.
-        return max(cands, key=lambda r: (round(expected(r), 3), prob(r)))
+        # The result can only change where the frame lean or the total crosses zero, so
+        # those two totals (and either side of them) are all that need testing. Scores
+        # are not always whole numbers (voted scoring rules), so nothing here assumes it.
+        eps = 1e-3
+        crit = sorted({0.0, float(-offset)})
+        probes = [crit[0] - 1000.0, crit[-1] + 1000.0]
+        for c in crit:
+            probes += [c - eps, c, c + eps]
+        if len({outcome(t) for t in probes}) == 1:
+            return None
+        if outcome(0.0) == 0:
+            return float(total)
+        winStart = min(c for c in crit if outcome(c + eps) == 1)
+        # Winning AT the threshold reads just above 0; winning only past it, just below.
+        return float(total - winStart) + (eps if outcome(winStart) == 1 else -eps)
 
     def _forcedGoRung(self, scoringTeam: FloosTeam.Team, goRungs: list) -> dict:
         """No-kick mode, NON-comeback pick: with the safe kick gone, a team going for it

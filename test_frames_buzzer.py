@@ -209,5 +209,55 @@ class TiedFrameLastSnapTests(unittest.TestCase):
         self.assertTrue(g._frameTieIsShort())
 
 
+class FinalFrameConversionTests(unittest.TestCase):
+    """Prod game 4675: Raccoons a frame behind entering the last frame, a touchdown with
+    1:08 left puts them 9-7 up IN the frame (frames would finish 3-3) but 48-46 down on
+    the total. The kick loses by one; only the two-point try ties (overtime). It kicked,
+    because the chooser maximised expected points (0.95 vs 0.94)."""
+
+    def _choice(self, *, framesOff, framesDef, frameOff, frameDef, totalOff, totalDef,
+                clock=68, trials=60):
+        random.seed(9)
+        picks = {}
+        for _ in range(trials):
+            s, g = framesGame(frame=6, secsLeft=clock)
+            g._framesWonHome, g._framesWonAway = framesOff, framesDef
+            g._frameStartHome, g._frameStartAway = totalOff - frameOff, totalDef - frameDef
+            g.homeScore, g.awayScore = totalOff, totalDef
+            r = g._chooseConversion(g.homeTeam)
+            picks[r['kind']] = picks.get(r['kind'], 0) + 1
+        return picks
+
+    def testTheReportedGameGoesForTwo(self):
+        picks = self._choice(framesOff=2.0, framesDef=3.0, frameOff=9, frameDef=7,
+                             totalOff=46, totalDef=48)
+        self.assertEqual(picks, {'go': 60}, picks)
+
+    def testAFrameBehindAndAheadOnTotalStillGoesToWinTheFrame(self):
+        # Down 1 in the frame after the touchdown, ahead by 5 overall: a kick ties the
+        # frame and loses the match 2.5-3.5 on frames.
+        picks = self._choice(framesOff=2.0, framesDef=3.0, frameOff=6, frameDef=7,
+                             totalOff=40, totalDef=35)
+        self.assertEqual(picks, {'go': 60}, picks)
+
+    def testATieThatWinsTheMatchTakesTheKick(self):
+        # Ahead on frames entering the last one and down 1 in it: the kick ties the frame,
+        # which wins the match outright; the two-pointer only adds risk.
+        picks = self._choice(framesOff=3.0, framesDef=2.0, frameOff=6, frameDef=7,
+                             totalOff=30, totalDef=40)
+        self.assertEqual(picks, {'kick': 60}, picks)
+
+    def testTheMatchStandingAsAMargin(self):
+        _s, g = framesGame(frame=6, secsLeft=68)
+        g._framesWonHome, g._framesWonAway = 2.0, 3.0
+        g._frameStartHome, g._frameStartAway = 37, 41
+        g.homeScore, g.awayScore = 46, 48
+        self.assertEqual(g._framesMatchMargin(g.homeTeam), -2.0)   # tie point exists
+        g.homeScore, g._frameStartHome = 40, 34                    # frame 6-7, total +5
+        g.awayScore, g._frameStartAway = 35, 28
+        self.assertLess(g._framesMatchMargin(g.homeTeam), 0)       # kick (1) still loses
+        self.assertGreater(g._framesMatchMargin(g.homeTeam) + 2, 0)  # two (2) wins
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)

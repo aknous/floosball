@@ -10,8 +10,9 @@ Frames is decided by FRAMES WON; total points only break a frames TIE
 margin IS the match, and the ordinary "you're within one score, kick and stay
 close" chart is wrong — there is no later possession to make the points up.
 
-The policy only engages when points are genuinely decisive: final frame, frames
-finishing level, and the scoring team behind on points. Anything else defers.
+Since 2026-10-19 the final frame decides on WIN VALUE over the match standing
+(`_framesMatchMargin` + `_chooseConversionByValue`), not on expected points: a
+tiebreak is a threshold (see test_frames_buzzer.py for the reported game 4675).
 
 Run: .venv/bin/python test_frames_conversion.py
 """
@@ -130,7 +131,9 @@ print("5. Away offense works the same")
 pts, _ = pick(framesHome=3, framesAway=2,
               homeScore=42.0, awayScore=40.2,
               frameStartHome=42.0, frameStartAway=34.2, offense='away')
-expect(f"away levels the frames, trails 1.8 → maximises points (got {pts})", pts > 2)
+# Win value, not expected points (2026-10-19): the 2 already overturns 1.8, and the
+# longer rungs only add risk, so the try just has to overturn the deficit.
+expect(f"away levels the frames, trails 1.8 → takes a try that overturns it (got {pts})", pts > 1.8)
 
 print()
 if failures:
