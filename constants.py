@@ -4089,6 +4089,7 @@ CONVERSION_GO_Q3_DAMPEN      = 0.55
 # why the chart comes out more aggressive than the NFL's (owner, 2026-09-14).
 CONVERSION_DRIVE_ODDS = (0.64, 0.12, 0.22, 0.02)
 CONVERSION_SECS_PER_DRIVE = 165.0     # regulation seconds per drive, both teams combined
+CONVERSION_MIN_DRIVE_SECS = 15.0      # less time than this left: no opponent drive to value
 CONVERSION_TRAIL_SECS_PER_DRIVE = 150.0   # a trailing team's hurry-up drive, for counting the drives it can still get
 # How the coach reads the team's own defense (Game._opponentDriveOdds). The opponent's points per
 # drive this game is shrunk toward the league rate by this many drives of prior: about a third

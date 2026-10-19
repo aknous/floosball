@@ -259,5 +259,58 @@ class FinalFrameConversionTests(unittest.TestCase):
         self.assertGreater(g._framesMatchMargin(g.homeTeam) + 2, 0)  # two (2) wins
 
 
+class FrameTieConversionTests(unittest.TestCase):
+    """A tied FRAME is worth exactly half a frame. The value model priced it as
+    sudden-death overtime, which shrinks as the opponent's scoring rate grows, so a team
+    down 1 in a frame after its touchdown went for two 56% of the time against a hot
+    offense (NFL, down 1 in Q4: 16%). Prod season 11 weeks 4-5."""
+
+    def _downOne(self, *, secsLeft=80, oppPoints=28, oppDrives=4, aggr=95, trials=60):
+        random.seed(12)
+        goes = 0
+        for _ in range(trials):
+            s, g = framesGame(frame=2, secsLeft=secsLeft, frameMargin=-1)
+            g._drivesBy = {id(g.awayTeam): oppDrives}
+            g._offensePointsBy = {id(g.awayTeam): oppPoints}
+            g.homeTeam.coach.aggressiveness = aggr
+            goes += g._chooseConversion(g.homeTeam)['kind'] == 'go'
+        return goes / trials
+
+    def testATiedFrameIsHalfAFrameNotOvertime(self):
+        _s, g = framesGame(frame=2, secsLeft=80)
+        opts = [({'kind': 'kick'}, 1.0, 1.0)]
+        self.assertEqual(g._conversionWinChance(0, 0, opts, tieWorth=0.5), 0.5)
+        # Against a hot offense, still half.
+        self.assertEqual(g._conversionWinChance(0, 0, opts, oppOdds=(0.2, 0.3, 0.5),
+                                                tieWorth=0.5), 0.5)
+
+    def testDownOneAgainstAHotOffenseMostlyKicks(self):
+        self.assertLess(self._downOne(), 0.2)
+
+    def testSecondsLeftIsNotAnOpponentDrive(self):
+        # Up 2 in the frame with 0:01 left: kick or try, the frame is won; take the kick.
+        # Prod game 4697 (Slippers, F5 0:01). Against a hot offense and with an aggressive
+        # coach, which is when guarding against a phantom field goal looked worth it.
+        random.seed(3)
+        for _ in range(20):
+            _s, g = framesGame(frame=2, secsLeft=1, frameMargin=2)
+            g._drivesBy = {id(g.awayTeam): 4}
+            g._offensePointsBy = {id(g.awayTeam): 28}
+            g.homeTeam.coach.aggressiveness = 95
+            self.assertEqual(g._chooseConversion(g.homeTeam)['kind'], 'kick')
+
+    def testANewFrameIsANewDrive(self):
+        _s, g = framesGame(frame=2, secsLeft=0)
+        g._coinFlipWinner, g._coinFlipLoser = g.homeTeam, g.awayTeam   # frame 3 -> toss winner (home)
+        g._driveTeam = g.homeTeam
+        g._drivesBy = {id(g.homeTeam): 5}
+        g._frameIndex = 2
+        g._frameBoundaryPending = True
+        self.assertTrue(g._frameBoundaryReset())
+        self.assertIs(g.offensiveTeam, g.homeTeam)
+        g._noteDriveStart()
+        self.assertEqual(g._drivesBy[id(g.homeTeam)], 6)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)
