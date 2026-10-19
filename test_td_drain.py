@@ -51,6 +51,7 @@ class StubGame:
         self.format = GameFormat()
 
     def _offenseEffectiveSecs(self): return self.gameClockSeconds
+    def _isFgSecuredDrain(self): return False   # no kicker on the stub: never in range
     def _frameDecisionDiff(self): return None
     def _frameEndSoon(self, *a): return False
     def _driveClockActive(self): return False
