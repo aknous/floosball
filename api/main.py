@@ -15410,9 +15410,10 @@ def bot_set_reminders(body: _BotRemindersBody, _auth: None = Depends(_checkBotAu
 
 @app.get("/api/bot/unsubmitted")
 def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
-    """Get Discord IDs of users who opted into reminders but haven't submitted roster/picks."""
+    """Get Discord IDs of users who opted into reminders but haven't submitted roster/picks
+    or haven't featured any cards in this season's Showcase."""
     from database.connection import get_session
-    from database.models import User, FantasyRoster, PickEmPick
+    from database.models import User, FantasyRoster, PickEmPick, ShowcaseSlot
     from sqlalchemy import func
 
     if floosball_app is None:
@@ -15421,7 +15422,8 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
     sm = floosball_app.seasonManager
     currentSeason = sm.currentSeason
     if currentSeason is None:
-        return build_success_response({"rosterMissing": [], "picksMissing": [], "week": 0, "nextGameStart": None})
+        return build_success_response({"rosterMissing": [], "picksMissing": [], "showcaseMissing": [],
+                                       "week": 0, "nextGameStart": None})
 
     seasonNum = currentSeason.seasonNumber
     pickemWeek = sm._getPickemWeek()
@@ -15435,7 +15437,8 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         ).all()
 
         if not reminderUsers:
-            return build_success_response({"rosterMissing": [], "picksMissing": [], "week": pickemWeek, "nextGameStart": None})
+            return build_success_response({"rosterMissing": [], "picksMissing": [], "showcaseMissing": [],
+                                           "week": pickemWeek, "nextGameStart": None})
 
         userIds = [u.id for u in reminderUsers]
         discordMap = {u.id: u.discord_id for u in reminderUsers}
@@ -15460,6 +15463,16 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         )
         picksMissing = [discordMap[uid] for uid in userIds if uid not in pickedUserIds]
 
+        # Users with nothing featured in this season's Showcase. It starts empty every
+        # season, so this includes users with no vaulted cards yet (they'd need to vault one).
+        showcasedUserIds = set(
+            uid for (uid,) in session.query(func.distinct(ShowcaseSlot.user_id)).filter(
+                ShowcaseSlot.season == seasonNum,
+                ShowcaseSlot.user_id.in_(userIds),
+            ).all()
+        )
+        showcaseMissing = [discordMap[uid] for uid in userIds if uid not in showcasedUserIds]
+
         # Next game start time
         nextGameStart = None
         schedule = currentSeason.schedule
@@ -15475,6 +15488,7 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         return build_success_response({
             "rosterMissing": rosterMissing,
             "picksMissing": picksMissing,
+            "showcaseMissing": showcaseMissing,
             "week": pickemWeek,
             "nextGameStart": nextGameStart,
         })

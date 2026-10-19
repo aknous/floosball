@@ -169,6 +169,11 @@ class GameFormat:
         if seconds > 0:
             game.gameClockSeconds = max(0, game.gameClockSeconds - seconds)
 
+    def clampConsumption(self, game, seconds: int) -> int:
+        """The part of `seconds` the clock may actually spend right now. Identity except
+        in Frames, where no time crosses the current frame's buzzer."""
+        return seconds
+
     def possessionReceiver(self, game, giver, receiver):
         """Which team gets the ball on a possession change. Default: the defense
         (`receiver`). chess_clock keeps it with the `giver` when the `receiver` is
@@ -976,6 +981,43 @@ class FramesFormat(GameFormat):
     def latchFinalMidPlay(self) -> bool:
         return False   # the final frame's winner can shift on the last play's score
 
+    def secsToFrameEnd(self, game):
+        """Seconds until the buzzer of the frame now being played, or None in overtime.
+        Measured from the frame the game is IN (`_frameIndex`, which `awardFrames` advances
+        between plays), not from the elapsed time, so a play that ends exactly on the buzzer
+        reads 0 until the frame is committed rather than a fresh 10:00. Rounded UP: with a
+        frame length that is not a whole number of seconds (7 frames is 514.3s), rounding
+        down would leave the clock short of the boundary with nothing allowed to reach it."""
+        if game.currentQuarter >= 5:
+            return None
+        import math
+        N = self._frames(game)
+        frameLen = self._regSeconds(game) / N if N else 0
+        if not frameLen:
+            return None
+        idx = min(N - 1, int(getattr(game, '_frameIndex', 0)))
+        return max(0, int(math.ceil((idx + 1) * frameLen - self._elapsed(game) - 1e-9)))
+
+    def clampConsumption(self, game, seconds: int) -> int:
+        """⚠️ NO CLOCK TIME CROSSES A FRAME'S BUZZER (fixed 2026-10-19). Frames 1, 2, 4 and
+        5 end in the middle of a quarter, so the quarter clock never stopped a huddle or a
+        play at their buzzer: the pre-snap huddle ran past 0:00, the snap still counted in
+        the old frame (the award waits for a settled between-plays board), and every second
+        of the overrun came out of the NEXT frame. Measured on prod season 11 week 1: 50 of
+        73 frame endings overran, 39s a game, up to 46s; 18 snaps came after the buzzer and
+        three field goals were kicked there (a leader at 0:06 taking a 40s clock-killing
+        huddle). Now a frame ends the way a quarter does: the huddle stops one second short
+        so the snap gets off with time on it (the standard pre-snap guarantee), and a play
+        in progress stops spending clock at the buzzer."""
+        if seconds <= 0:
+            return seconds
+        toEnd = self.secsToFrameEnd(game)
+        if toEnd is None:
+            return seconds
+        if getattr(game, '_inPreSnap', False):
+            toEnd = max(0, toEnd - 1)
+        return min(seconds, toEnd)
+
     def consumeTime(self, game, seconds: int) -> None:
         super().consumeTime(game, seconds)   # normal game-clock drain ONLY.
         # Frame AWARDS are NOT done here anymore. This drain runs mid-play, BEFORE
@@ -1109,7 +1151,9 @@ class FramesFormat(GameFormat):
         N = self._frames(game)
         # Time remaining in the current 10-min frame (the mini-game clock).
         frameLen = self._regSeconds(game) / N if N else 0
-        frameRem = max(0, int(round(frameLen - (self._elapsed(game) % frameLen)))) if frameLen else 0
+        frameRem = self.secsToFrameEnd(game)
+        if frameRem is None:   # overtime: past all frames (the UI shows the OT clock)
+            frameRem = int(round(frameLen)) if frameLen else 0
         # Frames + points BOTH tied at the end of regulation -> the match goes to standard,
         # points-decided OVERTIME (checkEarlyEnd defers to OT; winnerSide breaks the still-
         # level frames on points), NOT a 7th frame. Flag it so the UI shows the OT clock
