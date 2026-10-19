@@ -8470,6 +8470,9 @@ class Game:
         # possession change: a fumble later in the frame printed "<team> kicks off"
         # (prod game 4073, frame 2).
         self._pendingKickoff = False
+        # A new frame is a new drive even when the same team starts it, or the per-drive
+        # scoring rate the try decisions read (`_opponentDriveOdds`) is inflated.
+        self._driveTeam = None
         # eventMessage so the frame marker goes out live over the WebSocket (else it only
         # shows on a REST re-fetch — same bug as the chess out-of-time turnover).
         self.broadcastGameState(includeLastPlay=False, eventMessage=frameEvent, isPossessionChange=True)
@@ -14689,7 +14692,8 @@ class Game:
         return (1.0 - scaled, pFg * f, pTd * f)
 
     def _conversionWinChance(self, margin: float, drives: int, options: list,
-                             oppOdds: tuple = None, overtime: bool = False) -> float:
+                             oppOdds: tuple = None, overtime: bool = False,
+                             tieWorth: float = None) -> float:
         """Chance the scoring team wins from `margin` (negative = behind) with `drives`
         possessions left in regulation, the OPPONENT receiving first and the ball
         alternating after that.
@@ -14725,6 +14729,13 @@ class Game:
         sdThemFirst = (1.0 - pThem) * sdUsFirst
 
         def tieValue(oursNext):
+            # ⚠️ A TIED FRAME IS HALF A FRAME, NOT OVERTIME. The sudden-death value below
+            # shrinks as the opponent's scoring rate grows, which is right for overtime and
+            # wrong for an earlier frame, where a tie is worth exactly half: valued as sudden
+            # death it read ~0.29 against a hot offense and a team down 1 in a frame went for
+            # two 56% of the time (NFL down 1 in Q4: 16%). Frames passes `tieWorth=0.5`.
+            if tieWorth is not None:
+                return tieWorth
             if overtime:
                 return sdUsFirst if oursNext else sdThemFirst
             return 0.5 * (sdUsFirst + sdThemFirst)
@@ -14762,7 +14773,7 @@ class Game:
 
     def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list,
                                  drives: int = None, margin: float = None,
-                                 secsLeft: float = None) -> dict:
+                                 secsLeft: float = None, tieWorth: float = None) -> dict:
         """Pick the conversion that leaves the best chance of winning.
 
         ⚠️ THE OLD CHART ONLY EVER LET A TRAILING TEAM GO, AND LET IT GO ALMOST
@@ -14808,7 +14819,12 @@ class Game:
         # at one drive and the trailing branch at two, so a touchdown at 0:00 used to be
         # valued as if the game went on, and a team that had just tied it took the 3 about
         # half the time over the likelier 2.
-        if drives is None and secsLeft <= 0:
+        # ⚠️ AND A FEW SECONDS IS NOT A DRIVE EITHER (2026-10-19). The split floored any time
+        # left at one full opponent drive (~36% to score), so a team up 2 with 0:01 left in
+        # a frame went for two to guard against a field goal that could not happen. Below
+        # CONVERSION_MIN_DRIVE_SECS the try is valued as the last word.
+        from constants import CONVERSION_MIN_DRIVE_SECS
+        if drives is None and secsLeft < CONVERSION_MIN_DRIVE_SECS:
             drives = 0
         fixedDrives = drives is not None
         if not fixedDrives:
@@ -14827,7 +14843,8 @@ class Game:
         oppOdds = self._opponentDriveOdds(scoringTeam)
         overtime = self.currentQuarter >= 5
         winChance = lambda m: self._conversionWinChance(m, drives, options,
-                                                        oppOdds=oppOdds, overtime=overtime)
+                                                        oppOdds=oppOdds, overtime=overtime,
+                                                        tieWorth=tieWorth)
         stand = winChance(margin)
         valued = []
         for rung, pts, p in options:
@@ -15111,7 +15128,7 @@ class Game:
         curH, curA = framePoints(self)
         frameMargin = (curH - curA) if scoringTeam is self.homeTeam else (curA - curH)
         return self._chooseConversionByValue(scoringTeam, options, margin=frameMargin,
-                                             secsLeft=frameSecs)
+                                             secsLeft=frameSecs, tieWorth=0.5)
 
     def _framesMatchMargin(self, scoringTeam: FloosTeam.Team):
         """FINAL frame: the scoring team's match standing, as a points margin the win-value
