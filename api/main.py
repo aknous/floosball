@@ -15410,10 +15410,10 @@ def bot_set_reminders(body: _BotRemindersBody, _auth: None = Depends(_checkBotAu
 
 @app.get("/api/bot/unsubmitted")
 def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
-    """Get Discord IDs of users who opted into reminders but haven't submitted roster/picks
-    or haven't featured any cards in this season's Showcase."""
+    """Get Discord IDs of users who opted into reminders but haven't equipped a lineup,
+    made picks, or featured any cards in this season's Showcase."""
     from database.connection import get_session
-    from database.models import User, FantasyRoster, PickEmPick, ShowcaseSlot
+    from database.models import User, PickEmPick, ShowcaseSlot, EquippedCard, UserCard, CardTemplate
     from sqlalchemy import func
 
     if floosball_app is None:
@@ -15443,15 +15443,31 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         userIds = [u.id for u in reminderUsers]
         discordMap = {u.id: u.discord_id for u in reminderUsers}
 
-        # Users missing locked roster for this season
-        lockedUserIds = set(
-            uid for (uid,) in session.query(FantasyRoster.user_id).filter(
-                FantasyRoster.season == seasonNum,
-                FantasyRoster.is_locked == True,
-                FantasyRoster.user_id.in_(userIds),
-            ).all()
-        )
-        rosterMissing = [discordMap[uid] for uid in userIds if uid not in lockedUserIds]
+        # Users without a lineup this week. Fusion: the lineup IS the equipped cards, and
+        # the game-start lock needs them to fill ROSTER_MIN_PLAYERS slots. This week's rows
+        # often don't exist yet (the lock carries the latest earlier week forward), so a
+        # user with none is judged on that week instead, minus the cards the carry skips.
+        from constants import ROSTER_MIN_PLAYERS
+        equipWeek = currentSeason.currentWeek if isinstance(currentSeason.currentWeek, int) else 0
+        latestWeek, slotsByUser = {}, {}
+        rows = session.query(
+            EquippedCard.user_id, EquippedCard.week, EquippedCard.slot_number,
+            UserCard.vaulted, CardTemplate.season_created,
+        ).join(UserCard, EquippedCard.user_card_id == UserCard.id
+        ).join(CardTemplate, UserCard.card_template_id == CardTemplate.id
+        ).filter(
+            EquippedCard.season == seasonNum,
+            EquippedCard.week <= equipWeek,
+            EquippedCard.user_id.in_(userIds),
+        ).order_by(EquippedCard.week.desc()).all()
+        for uid, week, slotNum, vaulted, cardSeason in rows:
+            if latestWeek.setdefault(uid, week) != week:
+                continue
+            if week < equipWeek and (vaulted or cardSeason != seasonNum):
+                continue
+            slotsByUser.setdefault(uid, set()).add(slotNum)
+        rosterMissing = [discordMap[uid] for uid in userIds
+                         if len(slotsByUser.get(uid, ())) < ROSTER_MIN_PLAYERS]
 
         # Users missing picks for this week
         pickedUserIds = set(
