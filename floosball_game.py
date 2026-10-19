@@ -3203,12 +3203,7 @@ class Game:
         if getattr(fmt, 'key', '') != 'frames' or self.currentQuarter >= 5:
             return None
         try:
-            n = fmt._frames(self)
-            frameLen = fmt._regSeconds(self) / n if n else 0
-            if not frameLen:
-                return None
-            elapsed = fmt._elapsed(self)
-            return max(0, int(round(frameLen - (elapsed % frameLen))))
+            return fmt.secsToFrameEnd(self)
         except Exception:
             return None
 
@@ -3460,6 +3455,28 @@ class Game:
         if self.homeScore != self.awayScore:   # frames level → total points break it
             return (self.homeScore > self.awayScore) if isHome else (self.awayScore > self.homeScore)
         return False   # dead level — not leading, so don't drain the match out
+
+    def _frameTieIsShort(self) -> bool:
+        """Frames: True when TYING the current frame is worth less to the offense than
+        winning it, so a tied offense on the frame's last snap still has something to play
+        for. Always before the final frame (a won frame is a full point, a tie half of one,
+        and the next frame restarts at the 20, so field position at the buzzer is worth
+        nothing). In the final frame only when the offense is behind on frames won: a tie
+        then loses the match, while ahead it wins it, and with the frames level the total
+        already decides (`_frameDecisionDiff` hands that margin to every decision, and a
+        dead-level total goes to overtime as in a standard game). False off frames / OT."""
+        if getattr(self.format, 'key', '') != 'frames' or self.currentQuarter >= 5:
+            return False
+        try:
+            n = self.format._frames(self)
+        except Exception:
+            return False
+        if int(getattr(self, '_frameIndex', 0)) < n - 1:
+            return True
+        fh = float(getattr(self, '_framesWonHome', 0.0))
+        fa = float(getattr(self, '_framesWonAway', 0.0))
+        isHome = self.offensiveTeam is self.homeTeam
+        return (fh < fa) if isHome else (fa < fh)
 
     def _frameEndSoon(self, threshold: int = 120) -> bool:
         """True when the current frame is winding down (frames only) — teams should manage
@@ -3989,7 +4006,12 @@ class Game:
         # pull the trigger earlier; even the most conservative coach
         # stops punting once the clock dips under 15s.
         # (Frames: a frame out of reach either way ends like a half — `_periodEnd`.)
-        if _periodKind == 'half' and self.yardsToSafety > 35:
+        # ⚠️ FRAMES: A TIED FRAME'S LAST SNAPS ARE THE SAME CASE (fixed 2026-10-19). The next
+        # frame restarts at the 20 with the ball alternating, so a punt at the buzzer buys
+        # no field position, and a tie is worth half of a win (`_frameTieIsShort`). Prod
+        # season 11 week 1 had tied teams punting with 0:02, 0:07 and 0:14 left.
+        _tiedFrameEnd = (_periodKind == 'game' and scoreDiff == 0 and self._frameTieIsShort())
+        if (_periodKind == 'half' or _tiedFrameEnd) and self.yardsToSafety > 35:
             shotTimeThreshold = max(15, round(25 + aggrNorm * 10))
             if _periodSecs <= shotTimeThreshold:
                 if inFieldGoalRange:
@@ -4594,7 +4616,9 @@ class Game:
         # late). When close or ahead, the quick game applies.
         isHome = self.offensiveTeam is self.homeTeam
         deficit = (self.awayScore - self.homeScore) if isHome else (self.homeScore - self.awayScore)
-        q = self.currentQuarter
+        q, _secs, sitMargin = self._situationalClock()
+        if sitMargin is not None:
+            deficit = -sitMargin        # Frames: chasing the frame, not the total
         catchUp = (q >= 3 and deficit >= QUICKGAME_SUPPRESS_DEFICIT) or (q >= 4 and deficit >= QUICKGAME_LATE_DEFICIT)
         if catchUp:
             return weights
@@ -4627,6 +4651,36 @@ class Game:
         leadScale = float(np.interp(scoreDiff, LEAD_PROTECT_LEAD_POINTS, LEAD_PROTECT_LEAD_SCALE))
         return LEAD_PROTECT_SHIFT_MAX * math.exp(-max(0.0, secs) / LEAD_PROTECT_TAU_SECS) * leadScale
 
+    def _situationalClock(self):
+        """(quarter, secs, margin) that the late-game PLAY-CALLING shifts read: the trailing
+        desperation, the deficit and lead archetypes, the lead-protection floor, the Q2
+        drill and the quick-game catch-up check. Standard: the real quarter and game clock,
+        margin None (the caller's score margin stands).
+
+        ⚠️ FRAMES: THE FRAME, NOT THE QUARTER AND THE TOTAL (fixed 2026-10-19). These
+        shifts were the one end-of-period layer the 2026-10-09 frame conversion missed, so
+        "trailing in the last 2:00 → stop running" only fired at the end of frame 6, and
+        the lead and deficit shifts read the aggregate all through frames 4-6. Measured on
+        prod season 11 week 1: teams behind in a frame with under a minute left ran 24% of
+        the time (NFL, trailing by 1-8 in the last minute, 2021-23: 11%), including a team
+        down 7 at the 25 with 0:09 handing off. Now a frame ending reads as the end of Q4
+        on the frame clock with the frame-aware margin (`_clockMargin`); a frame the side
+        behind can no longer win reads as the end of a half (`FramesFormat.periodEnd`);
+        the rest of a frame reads as an early quarter, with no late-game shift at all.
+        Overtime is past all frames and reads as standard."""
+        q, secs = self.currentQuarter, self.gameClockSeconds
+        if q >= 5:
+            return q, secs, None
+        margin = self._frameDecisionDiff()
+        if margin is None:
+            return q, secs, None
+        kind, frameSecs = self._periodEnd()
+        if kind == 'game':
+            return 4, frameSecs, margin
+        if kind == 'half':
+            return 2, frameSecs, margin
+        return 1, frameSecs, margin
+
     def _leadProtectKeep(self, scoreDiff: int = None, coach=None) -> float:
         """The factor a leading team's pass options are multiplied by late in Q4, 0-1.
 
@@ -4636,16 +4690,19 @@ class Game:
         passes back in. Coach-scaled on a narrower band than `sit`: inside two minutes
         every NFL staff runs the clock, and averaging a poor clock manager's pass rate
         in at 40% strength dragged the whole league's late-lead rate up."""
-        if self.currentQuarter < 4:
+        q, secs, sitMargin = self._situationalClock()
+        if q < 4:
             return 1.0
-        if scoreDiff is None:
+        if sitMargin is not None:
+            scoreDiff = sitMargin       # Frames: protect a FRAME lead, not the total
+        elif scoreDiff is None:
             isHome = self.offensiveTeam is self.homeTeam
             scoreDiff = (self.homeScore - self.awayScore) * (1 if isHome else -1)
         if scoreDiff <= 0:
             return 1.0
         if coach is None:
             coach = getattr(self.offensiveTeam, 'coach', None)
-        shift = (self._protectLeadShift(scoreDiff, self.gameClockSeconds)
+        shift = (self._protectLeadShift(scoreDiff, secs)
                  * (0.7 + 0.3 * self._coachClockIQ(coach)))
         return math.exp(-shift)
 
@@ -4656,8 +4713,9 @@ class Game:
         A bad clock-management coach (clockIQ~0) applies only ~40% of the optimal
         situational shift; a great coach (clockIQ~1) applies the full adjustment.
         """
-        q = self.currentQuarter
-        secs = self.gameClockSeconds
+        q, secs, sitMargin = self._situationalClock()
+        if sitMargin is not None:
+            scoreDiff = sitMargin       # Frames: the frame (or, last frame, the match)
         # Scale factor: how much of the situational adjustment applies
         # clockIQ 0.0 → 0.4 (bad coach barely adjusts), 1.0 → 1.0 (full adjustment)
         clockIQ = self._coachClockIQ(coach)
@@ -7944,7 +8002,9 @@ class Game:
         _hmDiff = decisionDiff
         # The last play of Q4, or of a frame the offense is losing (`_periodEnd`): the
         # drive ends with the frame.
-        _gameHailMary = (_periodKind == 'game' and _hmDiff < 0
+        # Frames: a tied offense heaves too when a tie is worth less than a win.
+        _gameHailMary = (_periodKind == 'game'
+                         and (_hmDiff < 0 or (_hmDiff == 0 and self._frameTieIsShort()))
                          and _periodSecs <= 12)
         # Trailing or tied, and NOT from the offense's own half: the possession is lost
         # either way, so a heave from there trades a punt's field position for a throw
@@ -10528,14 +10588,16 @@ class Game:
                     # no flag to explain it, which reads as a bug. Spread thin it is
                     # invisible and sums to the same clock.
                     if DEAD_BALL_ADMIN_SECONDS:
+                        self._inPreSnap = True
                         self.consumeGameTime(DEAD_BALL_ADMIN_SECONDS)
+                        self._inPreSnap = False
                         if self.gameClockSeconds <= 0:
                             break
                     preSnapTime = self.calculatePreSnapTime()
-                    # Frames: don't AWARD a frame while the pre-snap huddle drains the clock
-                    # (the snap hasn't happened yet). Deferring the award to the play's own
-                    # clock burn keeps a play — and its score — in the frame its drive was
-                    # in, instead of leaking into the next frame.
+                    # Frames: the pre-snap window may not reach the frame's buzzer — it stops
+                    # one second short, so the snap gets off inside the frame and the next
+                    # frame keeps its full length (FramesFormat.clampConsumption). The award
+                    # still waits for the settled board after the play.
                     self._inPreSnap = True
                     self.consumeGameTime(preSnapTime)
                     self._inPreSnap = False
@@ -14070,6 +14132,15 @@ class Game:
             'coachClockIQ': round(self._coachClockIQ(coach), 2),
         }
 
+    def _clampToFrameBuzzer(self, preSnapSecs: int) -> int:
+        """Frames: a huddle never runs into the frame's buzzer; the snap goes off with one
+        second left, whatever the play (the clock drain enforces the same cap, this keeps
+        the reported pre-snap time honest). Identity in every other format."""
+        toEnd = self._frameSecsRemaining()
+        if toEnd is not None and 0 < toEnd <= preSnapSecs:
+            return max(0, toEnd - 1)
+        return preSnapSecs
+
     def calculatePreSnapTime(self) -> int:
         """
         Calculate time consumed before snap (huddle, line up, snap count).
@@ -14091,6 +14162,7 @@ class Game:
             finalTime = self._noHuddlePreSnapSecs()
             if 0 < self.gameClockSeconds <= finalTime:
                 finalTime = max(0, self.gameClockSeconds - 1)
+            finalTime = self._clampToFrameBuzzer(finalTime)
             if hasattr(self, 'play') and self.play is not None and 'tempo' in self.play.insights:
                 self.play.insights['tempo']['noHuddle'] = True
                 self.play.insights['tempo']['finalSeconds'] = finalTime
@@ -14145,6 +14217,7 @@ class Game:
         if (self.play is not None and 0 < self.gameClockSeconds <= finalTime
                 and self.play.playType in (PlayType.FieldGoal, PlayType.Pass, PlayType.Run)):
             finalTime = max(0, self.gameClockSeconds - 1)
+        finalTime = self._clampToFrameBuzzer(finalTime)
 
         # Augment the tempo insight with the time math (recordTempoIntent
         # already set intent / baseTime / coachClockIQ).
@@ -15713,6 +15786,8 @@ class Game:
         """Consume game time. The game-clock effect is format-owned: standard drains
         the clock; play_limit no-ops (its clock is play-count driven); chess_clock
         drains the possessing team's budget and recomputes its synthetic clock."""
+        # Frames: nothing crosses the current frame's buzzer (FramesFormat.clampConsumption).
+        seconds = self.format.clampConsumption(self, seconds)
         self.format.consumeTime(self, seconds)
         # Drive Clock (seconds unit): the possession budget drains with the game clock,
         # so it naturally pauses whenever the game clock is stopped. Only for formats
@@ -17009,13 +17084,16 @@ class Play():
                 n = fmt._frames(game)
                 frameLen = fmt._regSeconds(game) / n if n else 0
                 elapsed = fmt._elapsed(game)
-                self.frame = min(n, int(elapsed / frameLen) + 1) if frameLen else 1
+                # The frame the game is IN (`_frameIndex`), not the one elapsed time points
+                # at: a conversion after a touchdown on the frame's buzzer belongs to the
+                # frame that touchdown ended, and read "Frame 2 · 10:00" by elapsed time.
+                self.frame = min(n, int(getattr(game, '_frameIndex', 0)) + 1) if frameLen else 1
                 # Elapsed at which THIS frame ends — lets stampFrameClock recompute the time
                 # LEFT in the frame the play occurred in after the play burns the clock, so the
                 # feed's frame time is post-play like timeRemaining (a play that runs the frame
                 # out reads 0:00; the frame NUMBER stays the one the play happened in).
                 self._frameEndElapsed = self.frame * frameLen if frameLen else None
-                self.frameClock = game.formatTime(int(max(0, frameLen - (elapsed % frameLen)))) if frameLen else '0:00'
+                self.frameClock = game.formatTime(int(max(0, self._frameEndElapsed - elapsed))) if frameLen else '0:00'
             except Exception:
                 self.frame = None
                 self.frameClock = None
