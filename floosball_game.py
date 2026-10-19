@@ -3280,6 +3280,18 @@ class Game:
         # frames left to bank, and a decided match ends early (checkEarlyEnd).
         if int(getattr(self, '_frameIndex', 0)) < n - 1:
             return frameDiff
+        # ⚠️ THE FINAL FRAME READS THE MATCH STANDING, NOT THE FRAME'S CURRENT LEAN (fixed
+        # 2026-10-19). The projection below assumes the frame ends as it stands, so a tied
+        # frame read as "tied" even when a tie loses the match and winning it only levels the
+        # frames for a total the offense trails. Prod game 4722: Tuesdays a frame behind,
+        # frame tied 7-7, down 26-19 on total with 3:12 left, played at a normal pace and
+        # kicked a 56-yard field goal that won the frame and lost the match; they needed 8.
+        # `_framesMatchMargin` is the distance to where the match result flips (0 = headed
+        # to overtime), the same reading the try decision uses. The projection is kept only
+        # for the rare state no score can change.
+        _match = self._framesMatchMargin(self.offensiveTeam)
+        if _match is not None:
+            return _match
         # Project the frames-won with the current frame's lean (mirrors awardFrames).
         fh = float(getattr(self, '_framesWonHome', 0.0))
         fa = float(getattr(self, '_framesWonAway', 0.0))
@@ -3514,12 +3526,9 @@ class Game:
             n = self.format._frames(self)
         except Exception:
             return False
-        if int(getattr(self, '_frameIndex', 0)) < n - 1:
-            return True
-        fh = float(getattr(self, '_framesWonHome', 0.0))
-        fa = float(getattr(self, '_framesWonAway', 0.0))
-        isHome = self.offensiveTeam is self.homeTeam
-        return (fh < fa) if isHome else (fa < fh)
+        # The final frame's margin is already the match standing (`_frameDecisionDiff` ->
+        # `_framesMatchMargin`), where 0 means overtime, as in a standard game.
+        return int(getattr(self, '_frameIndex', 0)) < n - 1
 
     def _frameEndSoon(self, threshold: int = 120) -> bool:
         """True when the current frame is winding down (frames only) — teams should manage
