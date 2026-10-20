@@ -100,5 +100,18 @@ class BackupSpaceTests(unittest.TestCase):
         self.assertFalse([f for f in os.listdir(self.backups) if 'partial' in f])
 
 
+    def testDiskStatusUsesTheSameFitTestAsTheBackup(self):
+        self._seedAutos(2)
+        need = backup_manager._bytesNeeded(self.db)
+        with mock.patch.object(backup_manager.shutil, 'disk_usage',
+                               return_value=_Usage(10_000_000, 9_000_000, need - 1)):
+            st = backup_manager.diskStatus()
+        self.assertFalse(st['nextBackupFits'])
+        self.assertEqual(st['backupCount'], 2)
+        self.assertGreater(st['dbMb'], 0)
+        with mock.patch.object(backup_manager.shutil, 'disk_usage',
+                               return_value=_Usage(10_000_000, 9_000_000, need)):
+            self.assertTrue(backup_manager.diskStatus()['nextBackupFits'])
+
 if __name__ == '__main__':
     unittest.main()

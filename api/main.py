@@ -7183,9 +7183,21 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
             "totalPlaysInMemory": totalPlays,
             "pid": os.getpid(),
         },
+        "disk": _adminDiskStatus(),
         "websockets": ws_manager.get_stats(),
         "personality": personality,
     })
+
+
+def _adminDiskStatus():
+    """The DB volume for the admin monitor. None if it cannot be read, so a disk
+    hiccup never takes the dashboard down with it."""
+    try:
+        from backup_manager import diskStatus
+        return diskStatus()
+    except Exception as e:
+        logger.warning(f"admin monitor: disk status unavailable: {e}")
+        return None
 
 
 @app.get("/api/admin/analytics")

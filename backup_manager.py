@@ -158,3 +158,39 @@ async def runBackupLoop():
         except Exception as e:
             logger.error(f"DB backup failed: {e}", exc_info=True)
         await asyncio.sleep(intervalS)
+
+
+def diskStatus():
+    """The DB volume as the admin dashboard shows it: size, free space, what the DB and
+    the backups take, and whether the next backup will fit (the same test
+    `runBackupOnce` applies before it writes)."""
+    dbPath, dbDir = _resolveDbPath()
+    backupDir = os.environ.get('BACKUP_DIR') or os.path.join(dbDir, 'backups')
+    usage = shutil.disk_usage(dbDir)
+    dbBytes = 0
+    for suffix in ('', '-wal', '-shm'):
+        p = dbPath + suffix
+        if os.path.exists(p):
+            dbBytes += os.path.getsize(p)
+    backupBytes, backupCount = 0, 0
+    if os.path.isdir(backupDir):
+        for name in os.listdir(backupDir):
+            p = os.path.join(backupDir, name)
+            if os.path.isfile(p):
+                backupBytes += os.path.getsize(p)
+                if _AUTO_BACKUP_RE.match(name):
+                    backupCount += 1
+    needed = _bytesNeeded(dbPath) if os.path.exists(dbPath) else 0
+    mb = lambda b: round(b / 1e6, 1)
+    return {
+        "path": dbDir,
+        "totalMb": mb(usage.total),
+        "usedMb": mb(usage.used),
+        "freeMb": mb(usage.free),
+        "dbMb": mb(dbBytes),
+        "backupsMb": mb(backupBytes),
+        "backupCount": backupCount,
+        "backupKeep": max(1, int(os.environ.get('BACKUP_KEEP', '3'))),
+        "nextBackupNeedsMb": mb(needed),
+        "nextBackupFits": usage.free >= needed,
+    }
