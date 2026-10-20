@@ -11405,16 +11405,17 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         _rosterForMarker = session.query(FantasyRoster).filter_by(
             user_id=user.id, season=currentSeason,
         ).first()
-        _explicitlySetThisWeek = bool(
-            _rosterForMarker and _rosterForMarker.last_equipped_set_week == currentWeek
-        )
+        _lastSetWeek = _rosterForMarker.last_equipped_set_week if _rosterForMarker else None
+        _explicitlySetThisWeek = _lastSetWeek == currentWeek
 
         # Auto-carry forward: if no cards equipped this week, find the most recent week that has them
         if not equipped and currentWeek > 1 and not _explicitlySetThisWeek:
             # If games are active, lockWeek() already ran — auto-carried cards must also be locked
             gamesActive = _areGamesStarted()
             prevEquipped = []
-            for lookback in range(currentWeek - 1, 0, -1):
+            # Never look back past the user's last explicit set: an empty week there was
+            # emptied on purpose (between weeks, edits land on the week just played).
+            for lookback in range(currentWeek - 1, max(_lastSetWeek or 1, 1) - 1, -1):
                 prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, lookback)
                 if prevEquipped:
                     break
@@ -15468,7 +15469,7 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
     """Get Discord IDs of users who opted into reminders but haven't equipped a lineup,
     made picks, or featured any cards in this season's Showcase."""
     from database.connection import get_session
-    from database.models import User, PickEmPick, ShowcaseSlot, EquippedCard, UserCard, CardTemplate
+    from database.models import User, PickEmPick, ShowcaseSlot, EquippedCard, UserCard, CardTemplate, FantasyRoster
     from sqlalchemy import func
 
     if floosball_app is None:
@@ -15515,7 +15516,12 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
             EquippedCard.week <= equipWeek,
             EquippedCard.user_id.in_(userIds),
         ).order_by(EquippedCard.week.desc()).all()
+        # Weeks before a user's last explicit lineup set don't carry (they emptied it).
+        lastSetWeek = dict(session.query(FantasyRoster.user_id, FantasyRoster.last_equipped_set_week).filter(
+            FantasyRoster.season == seasonNum, FantasyRoster.user_id.in_(userIds)).all())
         for uid, week, slotNum, vaulted, cardSeason in rows:
+            if week < (lastSetWeek.get(uid) or 0):
+                continue
             if latestWeek.setdefault(uid, week) != week:
                 continue
             if week < equipWeek and (vaulted or cardSeason != seasonNum):
@@ -15670,9 +15676,11 @@ def bot_get_lineup(discordId: str = Query(...), _auth: None = Depends(_checkBotA
 
         carried = week is not None and latest.week < week
         if carried:
+            # Emptied on purpose at or after the week we'd carry from: nothing is carried.
             roster = session.query(FantasyRoster).filter_by(user_id=user.id, season=season).first()
-            if roster and roster.last_equipped_set_week == week:
-                return build_success_response(empty)  # emptied on purpose this week
+            lastSet = roster.last_equipped_set_week if roster else None
+            if lastSet is not None and latest.week < lastSet <= week:
+                return build_success_response(empty)
 
         rows = q.filter(EquippedCard.week == latest.week).all()
         slots = []

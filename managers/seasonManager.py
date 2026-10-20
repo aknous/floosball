@@ -1783,7 +1783,7 @@ class SeasonManager:
 
     def _carryForwardEquippedCards(self, session, equippedRepo, season: int, currentWeek: int) -> None:
         """Carry forward equipped cards from the most recent week for users who don't have any yet."""
-        from database.models import EquippedCard, UserCard, CardTemplate
+        from database.models import EquippedCard, UserCard, CardTemplate, FantasyRoster
         from sqlalchemy import func
 
         # Find users who already have rows for this week — skip them
@@ -1808,10 +1808,20 @@ class SeasonManager:
         if not needsCarry:
             return
 
+        # A user's last explicit lineup set bounds the lookback: if that week is empty,
+        # they emptied it on purpose (between weeks, edits land on the week just played),
+        # and carrying an older lineup past it would undo that. Set this week → no carry.
+        lastSetWeek = dict(
+            session.query(FantasyRoster.user_id, FantasyRoster.last_equipped_set_week)
+            .filter(FantasyRoster.season == season, FantasyRoster.user_id.in_(needsCarry))
+            .all()
+        )
+
         carried = 0
         for userId in needsCarry:
+            floor = lastSetWeek.get(userId) or 1
             # Find the most recent week with equipped cards
-            for lookback in range(currentWeek - 1, 0, -1):
+            for lookback in range(currentWeek - 1, floor - 1, -1):
                 prevEquipped = equippedRepo.getByUserWeek(userId, season, lookback)
                 if prevEquipped:
                     for prev in prevEquipped:
@@ -6086,6 +6096,7 @@ class SeasonManager:
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
+                        weekText=self.currentWeekText,
                         results=playoffResults,
                         nextGameStartTime=nextStartIso,
                     )
@@ -6105,6 +6116,7 @@ class SeasonManager:
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
+                        weekText=self.currentWeekText,
                         results=finalResults,
                         nextGameStartTime=None,
                     )
