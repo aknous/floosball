@@ -2867,8 +2867,21 @@ class Game:
             # 2-3 min, multi-score only — urgency builds toward the 2-min mark
             urgency = max(0.0, (180 - secs) / 60)
             toChance = (0.25 + 0.45 * defGameIQ) * urgency
-        if _random.random() >= toChance:
+        # ⚠️ A DEFENSE THAT HAS STOPPED THE CLOCK ON THIS DRIVE KEEPS STOPPING IT (fixed
+        # 2026-10-20). The roll above runs once per snap and nothing asks again during the
+        # huddle, so a coach who called a timeout one snap could "forget" the next and let
+        # a whole clock-burning huddle run. Prod game 4759, final frame: the Beans, a point
+        # behind in the match, called a timeout at 1:26 and then sat on their last one at
+        # 1:20 while the Strangers drained 48 seconds. The coach's clock IQ still decides
+        # whether he reads the situation at all; once he has, the read holds for the drive
+        # (the same once-per-drive shape as `_isFgSecuredDrain`). Every gate above still
+        # applies on every snap.
+        driveKey = (id(self.offensiveTeam),
+                    getattr(self, '_drivesBy', {}).get(id(self.offensiveTeam), 0),
+                    self.currentQuarter, getattr(self, '_frameIndex', 0))
+        if getattr(self, '_defTimeoutDrive', None) != driveKey and _random.random() >= toChance:
             return
+        self._defTimeoutDrive = driveKey
         # Call timeout
         if defIsHome:
             self.homeTimeoutsRemaining = max(0, self.homeTimeoutsRemaining - 1)
@@ -6930,9 +6943,11 @@ class Game:
         defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
         if GAMEPLAN_AVAILABLE and defGameplan is not None:
             sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            # Frames: the frame's ending and margin, like the per-play scheme this pre-rolls.
+            _sq, _ss, _sm = self._situationalClock()
             scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
-                                        100 - self.yardsToEndzone, sd,
-                                        self.currentQuarter, self.gameClockSeconds)
+                                        100 - self.yardsToEndzone, sd if _sm is None else _sm,
+                                        _sq, _ss)
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
@@ -7092,9 +7107,11 @@ class Game:
         defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
         if GAMEPLAN_AVAILABLE and defGameplan is not None:
             sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            # Frames: the frame's ending and margin, like the per-play scheme this pre-rolls.
+            _sq, _ss, _sm = self._situationalClock()
             scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
-                                        100 - self.yardsToEndzone, sd,
-                                        self.currentQuarter, self.gameClockSeconds)
+                                        100 - self.yardsToEndzone, sd if _sm is None else _sm,
+                                        _sq, _ss)
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
@@ -17868,10 +17885,13 @@ class Play():
         elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
+            # Frames: the defense reads the frame's ending and margin, as the play caller
+            # does (`_situationalClock`; the real quarter, clock and score elsewhere).
+            _sq, _ss, _sm = self.game._situationalClock()
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
-                100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds,
+                100 - self.game.yardsToEndzone, offScoreDiff if _sm is None else _sm,
+                _sq, _ss,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
@@ -19089,11 +19109,15 @@ class Play():
         risk a tackle in bounds (which leaves the clock running). Outside a
         late-game clock situation, it's the original play-type chance."""
         g = self.game
-        late = (g.currentQuarter >= 4) and g.gameClockSeconds <= 120
+        # Frames: a frame's ending and the frame margin (`_situationalClock`).
+        _sq, _ss, _sm = g._situationalClock()
+        late = (_sq >= 4) and _ss <= 120
         if not late or carrier is None:
             return (batched_randint(1, 100) > baseOobChance, None, 0)
         offHome = self.offense is g.homeTeam
         scoreDiff = (g.homeScore - g.awayScore) if offHome else (g.awayScore - g.homeScore)
+        if _sm is not None:
+            scoreDiff = _sm
         nearSideline = batched_randint(1, 100) <= baseOobChance  # could the play reach the sideline?
         iq = max(0.0, min(1.0, (getattr(carrier.gameAttributes, 'instinct', 80) - 60) / 40.0))
         aware = batched_randint(1, 100) <= 40 + iq * 60          # IQ gates situational awareness
@@ -19716,10 +19740,13 @@ class Play():
         elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
+            # Frames: the defense reads the frame's ending and margin, as the play caller
+            # does (`_situationalClock`; the real quarter, clock and score elsewhere).
+            _sq, _ss, _sm = self.game._situationalClock()
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
-                100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds,
+                100 - self.game.yardsToEndzone, offScoreDiff if _sm is None else _sm,
+                _sq, _ss,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
@@ -20056,12 +20083,20 @@ class Play():
             # STAGE 2: QB selects target based on vision and discipline
             # Desperation: QB must force a throw when throwing away would end the drive
             # or the game unfavorably (4th down while trailing, time expiring while trailing)
-            isTrailing = (self.offense == self.game.homeTeam and self.game.homeScore < self.game.awayScore) or \
-                         (self.offense == self.game.awayTeam and self.game.awayScore < self.game.homeScore)
-            isTied = self.game.homeScore == self.game.awayScore
+            # ⚠️ FRAMES: TRAILING MEANS IN THE FRAME, AND LATE MEANS THE FRAME'S END (fixed
+            # 2026-10-20). This read the TOTAL score and the Q4 clock, so a team behind in
+            # the frame but ahead overall threw it away on fourth down. Prod game 4759: the
+            # Beans, down 4-8 in frame 3 with 0:43 left but up 19-17 overall, went for it
+            # on 4th & 9 and the QB threw it away. `_situationalClock` is the real quarter,
+            # clock and score in every other format.
+            _sq, _ss, _sm = self.game._situationalClock()
+            if _sm is None:
+                _sm = (self.game.homeScore - self.game.awayScore) * (1 if self.offense == self.game.homeTeam else -1)
+            isTrailing = _sm < 0
+            isTied = _sm == 0
             isFourthDown = self.game.down == self.game.gameRules.downsPerSeries
-            isTimeExpiring = self.game.gameClockSeconds <= 30
-            isLateGame = self.game.currentQuarter >= 4
+            isTimeExpiring = _ss <= 30
+            isLateGame = _sq >= 4
             mustThrow = isFourthDown and (isTrailing or (isTied and self.game.currentQuarter >= 5))
             if not mustThrow and isLateGame and isTimeExpiring and isTrailing:
                 mustThrow = True
