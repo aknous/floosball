@@ -11172,45 +11172,60 @@ class SetShowcaseRequest(BaseModel):
     slots: List[ShowcaseSlotInput]
 
 
+def _showcaseStandings(session, season: int) -> list:
+    """Everyone with a featured Showcase this season, ranked by score (best first):
+    [{userId, rank, grade, weeklyDividend, cardCount, activeSets}]. The score itself
+    stays private (the site shows the grade it drives)."""
+    from database.models import ShowcaseSlot
+    from managers import showcaseManager
+    userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
+        ShowcaseSlot.season == season).distinct().all()]
+    rows = []
+    for uid in userIds:
+        infos = showcaseManager.loadShowcaseCardInfos(session, uid, season)
+        if not infos:
+            continue
+        ev = showcaseManager.evaluate(infos, season, showcaseManager.buildLegacyLookup(session, infos))
+        rows.append({
+            "userId": uid,
+            "grade": ev["grade"],
+            "weeklyDividend": ev["weeklyDividend"],
+            "cardCount": len(infos),
+            "activeSets": ev["activeSets"],
+            "_score": ev["score"],
+        })
+    rows.sort(key=lambda r: r["_score"], reverse=True)
+    for rank, r in enumerate(rows, start=1):
+        r.pop("_score")
+        r["rank"] = rank
+    return rows
+
+
 @app.get("/api/cards/showcase/leaderboard")
 def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
     """Ranked list of everyone with a featured Showcase this season. Ranked by the
     score (which drives the grade); grade / weekly dividend / card count exposed."""
     from database.connection import get_session
-    from database.models import ShowcaseSlot, User as _UserModel
-    from managers import showcaseManager
+    from database.models import User as _UserModel
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
 
     session = get_session()
     try:
-        userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
-            ShowcaseSlot.season == currentSeason).distinct().all()]
-        rows = []
-        for uid in userIds:
-            infos = showcaseManager.loadShowcaseCardInfos(session, uid, currentSeason)
-            if not infos:
-                continue
-            ev = showcaseManager.evaluate(infos, currentSeason,
-                                          showcaseManager.buildLegacyLookup(session, infos))
-            u = session.get(_UserModel, uid)
-            rows.append({
-                "userId": uid,
-                "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
-                "grade": ev["grade"],
-                "weeklyDividend": ev["weeklyDividend"],
-                "cardCount": len(infos),
-                "activeSets": ev["activeSets"],
-                "_score": ev["score"],  # for ranking only; stripped below
-                "isCurrentUser": uid == user.id,
-            })
-        rows.sort(key=lambda r: r["_score"], reverse=True)
         leaderboard = []
-        for rank, r in enumerate(rows, start=1):
-            r.pop("_score", None)
-            r["rank"] = rank
-            leaderboard.append(r)
+        for r in _showcaseStandings(session, currentSeason):
+            u = session.get(_UserModel, r["userId"])
+            leaderboard.append({
+                "userId": r["userId"],
+                "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
+                "grade": r["grade"],
+                "weeklyDividend": r["weeklyDividend"],
+                "cardCount": r["cardCount"],
+                "activeSets": r["activeSets"],
+                "isCurrentUser": r["userId"] == user.id,
+                "rank": r["rank"],
+            })
         return build_success_response({"leaderboard": leaderboard, "season": currentSeason})
     finally:
         session.close()
@@ -15078,6 +15093,17 @@ def get_fantasy_modifier_schedule(response: Response):
     return build_success_response({"season": currentSeason.seasonNumber, **sched})
 
 
+def _pickemActiveUserIds(session) -> set:
+    """Users who count on the LIVE (current-season) pick'em board: logged in within
+    SUPPORTER_ACTIVITY_WINDOW_DAYS, so long-departed accounts don't clutter it."""
+    from datetime import datetime as _dt, timedelta as _td
+    from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+    from database.models import User
+    cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+    return {r[0] for r in session.query(User.id).filter(
+        User.last_login_at.isnot(None), User.last_login_at >= cutoff).all()}
+
+
 @app.get("/api/pickem/leaderboard")
 def get_pickem_leaderboard(season: Optional[int] = None):
     """Get pick-em leaderboard (season + current week)."""
@@ -15140,14 +15166,7 @@ def get_pickem_leaderboard(season: Optional[int] = None):
         # gated) don't clutter the standings. Past-season boards are left intact — historical
         # standings shouldn't be rewritten by who happens to be active now.
         if seasonNum == currentSeason.seasonNumber:
-            from datetime import datetime as _dt, timedelta as _td
-            from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
-            _cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
-            _activeIds = {
-                r[0] for r in session.query(User.id).filter(
-                    User.last_login_at.isnot(None), User.last_login_at >= _cutoff
-                ).all()
-            }
+            _activeIds = _pickemActiveUserIds(session)
             seasonRows = [r for r in seasonRows if r[0] in _activeIds]
             weekRows = [r for r in weekRows if r[0] in _activeIds]
 
@@ -15536,6 +15555,66 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         session.close()
 
 
+@app.get("/api/bot/unvoted")
+def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
+    """Open votes and, for users with DM reminders on, which of them each hasn't cast.
+
+    Covers the rule vote (one window per game day, closing at that day's kickoff), the
+    MVP ballot and the Hall of Fame ballot. HoF is approval voting, so approving any one
+    player counts as voted. Returns {votes: [{key, kind, label, closesAt}],
+    missing: {discordId: [key, ...]}}; a vote's key changes with each window, so the
+    bot can tell a new vote from one it already announced."""
+    from database.connection import get_session
+    from database.models import User, RuleVote, AwardVote
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from database.repositories.award_repository import HofBallotRepository
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    season, mvpOpen, hofOpen = _awardWindows()
+
+    session = get_session()
+    try:
+        reminderUsers = session.query(User).filter(
+            User.discord_dm_reminders == True,
+            User.discord_id.isnot(None),
+        ).all()
+        userIds = [u.id for u in reminderUsers]
+        discordMap = {u.id: u.discord_id for u in reminderUsers}
+
+        votes, voters = [], {}
+        window = RuleVoteRepository(session).getOpenWindow(season) if season else None
+        if _isVotingOpen(window):
+            key = f"rule:{window.id}"
+            core = _coreDisplayName(window.core)
+            label = "the rule revert vote" if window.kind == "revert" else "the rule change vote"
+            votes.append({"key": key, "kind": "rule",
+                          "label": f"{label} ({core})" if core else label,
+                          "closesAt": window.closes_at.isoformat() + "Z" if window.closes_at else None})
+            voters[key] = {uid for (uid,) in session.query(RuleVote.user_id).filter(
+                RuleVote.window_id == window.id, RuleVote.user_id.in_(userIds)).distinct()}
+        if hofOpen and not HofBallotRepository(session).getActive():
+            hofOpen = False  # nobody qualified this year: nothing to vote on
+        for awardType, isOpen, label in (("mvp", mvpOpen, "the MVP ballot"),
+                                         ("hof", hofOpen, "the Hall of Fame ballot")):
+            if not isOpen:
+                continue
+            key = f"{awardType}:{season}"
+            votes.append({"key": key, "kind": awardType, "label": label, "closesAt": None})
+            voters[key] = {uid for (uid,) in session.query(AwardVote.user_id).filter(
+                AwardVote.season == season, AwardVote.award_type == awardType,
+                AwardVote.user_id.in_(userIds)).distinct()}
+
+        missing = {}
+        for uid in userIds:
+            keys = [v["key"] for v in votes if uid not in voters[v["key"]]]
+            if keys:
+                missing[discordMap[uid]] = keys
+        return build_success_response({"votes": votes, "missing": missing})
+    finally:
+        session.close()
+
+
 _SLOT_BY_ORDINAL = {1: "QB", 2: "RB", 3: "WR1", 4: "WR2", 5: "TE", 6: "K", 7: "FLEX"}
 
 
@@ -15615,6 +15694,93 @@ def bot_get_lineup(discordId: str = Query(...), _auth: None = Depends(_checkBotA
             "locked": not carried and any(eq.locked for eq in rows),
             "slots": slots,
         })
+    finally:
+        session.close()
+
+
+@app.get("/api/bot/profile")
+def bot_get_profile(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
+    """A linked Discord user's season at a glance, for /me: favorite team, Floobits,
+    fantasy and pick'em rank, Showcase, cards, Supporter tier, achievements.
+
+    Ranks match the site's boards (the fantasy snapshot, the pick'em board's activity
+    filter, the Showcase leaderboard). A section is null when the user isn't on that
+    board (yet). Read-only: nothing here writes (unlike GET /api/achievements)."""
+    from database.connection import get_session
+    from database.models import User, UserCurrency, UserCard
+    from database.repositories.pickem_repository import PickEmRepository
+    from managers import achievementManager
+    from managers.supporterManager import loyaltyTier
+    from constants import SHOWCASE_SLOTS
+    from sqlalchemy import func
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    season = _getCurrentSeasonNumber()
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.discord_id == discordId).first()
+        if not user:
+            raise HTTPException(404, "Account not linked — use /link first")
+
+        def teamInfo(teamId):
+            team = session.get(_Team, teamId) if teamId else None
+            return {"name": team.name, "abbr": team.abbr} if team else None
+
+        currency = session.query(UserCurrency).filter_by(user_id=user.id).first()
+        owned = session.query(func.count(UserCard.id)).filter(UserCard.user_id == user.id).scalar() or 0
+        vaulted = session.query(func.count(UserCard.id)).filter(
+            UserCard.user_id == user.id, UserCard.vaulted == True).scalar() or 0
+        _, tierLabel = loyaltyTier(int(user.supporter_weeks or 0))
+        achievements = achievementManager.getUserAchievements(session, user.id, season or 0)
+
+        profile = {
+            "username": user.username,
+            "memberSince": user.created_at.isoformat() + "Z" if user.created_at else None,
+            "season": season,
+            "favoriteTeam": teamInfo(user.favorite_team_id),
+            "pendingTeam": teamInfo(user.pending_favorite_team_id),
+            "floobits": int(currency.balance) if currency else 0,
+            "cards": {"owned": owned, "vaulted": vaulted},
+            "supporter": {"tier": tierLabel, "weeks": int(user.supporter_weeks or 0),
+                          "unclaimed": int(user.supporter_unclaimed or 0)},
+            "achievements": {"completed": sum(1 for a in achievements if a.get("completedAt")),
+                             "total": len(achievements)},
+            "fantasy": None, "pickem": None, "showcase": None,
+        }
+        if season is None:
+            return build_success_response(profile)
+
+        # Fantasy: the same snapshot the site's leaderboard and header ticker read.
+        entries = floosball_app.fantasyTracker.getSnapshot().get("entries", [])
+        mine = next((e for e in entries if e.get("userId") == user.id), None)
+        if mine:
+            profile["fantasy"] = {
+                "rank": mine.get("rank"), "of": len(entries),
+                "seasonPoints": round(mine.get("seasonTotal", 0), 1),
+                "weekPoints": round(mine.get("weekTotal", 0), 1) if _isRegularSeason() else None,
+            }
+
+        # Pick'em: the live board, with its activity filter, so the rank matches the site.
+        active = _pickemActiveUserIds(session)
+        board = [r for r in PickEmRepository(session).getSeasonLeaderboard(season) if r[0] in active]
+        for rank, (uid, correct, total, points) in enumerate(board, start=1):
+            if uid == user.id:
+                profile["pickem"] = {"rank": rank, "of": len(board), "points": points,
+                                     "correct": correct, "total": total,
+                                     "accuracy": round(correct / total * 100, 1) if total else 0}
+                break
+
+        standings = _showcaseStandings(session, season)
+        mineSc = next((r for r in standings if r["userId"] == user.id), None)
+        profile["showcase"] = {
+            "featured": mineSc["cardCount"] if mineSc else 0, "slots": SHOWCASE_SLOTS,
+            "grade": mineSc["grade"] if mineSc else None,
+            "weeklyDividend": mineSc["weeklyDividend"] if mineSc else 0,
+            "rank": mineSc["rank"] if mineSc else None, "of": len(standings),
+        }
+        return build_success_response(profile)
     finally:
         session.close()
 
