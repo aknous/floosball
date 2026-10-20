@@ -15536,18 +15536,28 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         session.close()
 
 
-@app.get("/api/bot/cards")
-def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
-    """Get equipped cards for a linked Discord user."""
+_SLOT_BY_ORDINAL = {1: "QB", 2: "RB", 3: "WR1", 4: "WR2", 5: "TE", 6: "K", 7: "FLEX"}
+
+
+@app.get("/api/bot/lineup")
+def bot_get_lineup(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
+    """A linked Discord user's fantasy lineup: their equipped cards (fusion), one per slot.
+
+    Shows what the site's lineup shows. This week's cards are often not written yet (the
+    site's GET and the game-start lock carry the latest earlier week forward), so with
+    none for this week the latest earlier week is shown, minus the cards a carry skips
+    (vaulted, or from another season). An explicit "unequip everything" this week stays
+    empty, as on the site."""
     from database.connection import get_session
-    from database.models import User, EquippedCard
+    from database.models import User, FantasyRoster, EquippedCard
 
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
     sm = floosball_app.seasonManager
-    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else None
+    week = week if isinstance(week, int) and week > 0 else None
 
     session = get_session()
     try:
@@ -15555,102 +15565,55 @@ def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAu
         if not user:
             raise HTTPException(404, "Account not linked — use /link first")
 
-        from database.repositories.card_repositories import EquippedCardRepository
-        equippedRepo = EquippedCardRepository(session)
-        equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
+        empty = {"username": user.username, "season": season, "week": week,
+                 "locked": False, "slots": []}
+        if season is None:
+            return build_success_response(empty)
 
-        posLabels = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
-        cards = []
-        for eq in equipped:
-            template = eq.user_card.card_template
-            effectConfig = template.effect_config or {}
-            cards.append({
+        q = session.query(EquippedCard).filter(EquippedCard.user_id == user.id, EquippedCard.season == season)
+        if week is not None:
+            q = q.filter(EquippedCard.week <= week)
+        latest = q.order_by(EquippedCard.week.desc()).first()
+        if latest is None:
+            return build_success_response(empty)
+
+        carried = week is not None and latest.week < week
+        if carried:
+            roster = session.query(FantasyRoster).filter_by(user_id=user.id, season=season).first()
+            if roster and roster.last_equipped_set_week == week:
+                return build_success_response(empty)  # emptied on purpose this week
+
+        rows = q.filter(EquippedCard.week == latest.week).all()
+        slots = []
+        for eq in rows:
+            card = eq.user_card
+            template = card.card_template
+            if carried and (card.vaulted or template.season_created != season):
+                continue
+            # Name and team from the live player (trades move them); the card's snapshot otherwise.
+            player = floosball_app.playerManager.getPlayerById(template.player_id)
+            team = getattr(player, 'team', None) if player else None
+            if not hasattr(team, 'name'):
+                team = template.team
+            effect = template.effect_config or {}
+            slots.append({
+                "slot": eq.slot or _SLOT_BY_ORDINAL.get(eq.slot_number, ""),
                 "slotNumber": eq.slot_number,
-                "displayName": effectConfig.get("displayName", "Unknown"),
+                "playerName": getattr(player, 'name', None) or template.player_name,
+                "teamName": getattr(team, 'name', '') if team else '',
+                "teamAbbr": getattr(team, 'abbr', '') if team else '',
+                "effectName": effect.get("displayName") or "No effect",
+                "effectDetail": effect.get("detail") or effect.get("tagline") or "",
                 "edition": template.edition,
-                "position": posLabels.get(template.position, "??"),
-                "playerName": template.player_name,
-                "teamAbbr": getattr(template.team, 'abbr', '') if template.team else "",
-                "teamName": getattr(template.team, 'name', '') if template.team else "",
-                "streakCount": getattr(eq, 'streak_count', 1) or 1,
-                "locked": eq.locked,
+                "streakCount": eq.streak_count or 0,
             })
-        cards.sort(key=lambda c: c["slotNumber"])
+        slots.sort(key=lambda x: x["slotNumber"])
 
         return build_success_response({
-            "username": user.username,
-            "equippedCards": cards,
-            "season": currentSeason,
-            "week": currentWeek,
-        })
-    finally:
-        session.close()
-
-
-@app.get("/api/bot/roster")
-def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
-    """Get fantasy lineup for a linked Discord user (fusion: the equipped cards)."""
-    from database.connection import get_session
-    from database.models import User, FantasyRoster
-    from database.repositories.card_repositories import EquippedCardRepository
-
-    if floosball_app is None:
-        raise HTTPException(503, "Application not initialized")
-
-    sm = floosball_app.seasonManager
-    currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.discord_id == discordId).first()
-        if not user:
-            raise HTTPException(404, "Account not linked — use /link first")
-
-        if currentSeasonNum is None:
-            return build_success_response({"username": user.username, "roster": None, "season": None})
-
-        roster = session.query(FantasyRoster).filter_by(
-            user_id=user.id, season=currentSeasonNum
-        ).first()
-
-        if roster is None:
-            return build_success_response({"username": user.username, "roster": None, "season": currentSeasonNum})
-
-        # Fusion: the lineup IS the equipped cards' depicted players. earnedPoints is
-        # each fielded player's live season FP (an approximate summary — the precise
-        # weekly-sum total lives on the fantasy leaderboard).
-        equipped = EquippedCardRepository(session).getByUserWeek(user.id, currentSeasonNum, currentWeek)
-        players = []
-        for eq in equipped:
-            pid = eq.user_card.card_template.player_id
-            playerObj = floosball_app.playerManager.getPlayerById(pid) if floosball_app else None
-            liveFp = _getPlayerLiveFantasyPoints(playerObj) if playerObj else 0
-            players.append({
-                "slot": eq.slot or "",
-                "playerName": playerObj.name if playerObj else "Unknown",
-                "position": playerObj.position.name if playerObj and hasattr(playerObj.position, 'name') else "",
-                "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
-                "teamName": getattr(playerObj.team, 'name', '') if playerObj and hasattr(playerObj.team, 'name') else "",
-                "earnedPoints": round(liveFp, 1),
-            })
-
-        # Sort by slot order
-        slotOrder = {"QB": 0, "RB": 1, "WR1": 2, "WR2": 3, "TE": 4, "K": 5, "FLEX": 6}
-        players.sort(key=lambda p: slotOrder.get(p["slot"], 99))
-
-        totalEarned = sum(p["earnedPoints"] for p in players)
-        cardBonus = roster.card_bonus_points or 0.0
-
-        return build_success_response({
-            "username": user.username,
-            "roster": {
-                "isLocked": roster.is_locked,
-                "totalPoints": round(totalEarned, 1),
-                "cardBonusPoints": round(cardBonus, 1),
-                "players": players,
-            },
-            "season": currentSeasonNum,
+            **empty,
+            "week": week if week is not None else latest.week,
+            "locked": not carried and any(eq.locked for eq in rows),
+            "slots": slots,
         })
     finally:
         session.close()
