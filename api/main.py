@@ -15408,6 +15408,30 @@ def bot_set_reminders(body: _BotRemindersBody, _auth: None = Depends(_checkBotAu
         session.close()
 
 
+@app.get("/api/bot/favorite-teams")
+def bot_get_favorite_teams(discordId: Optional[str] = Query(None), _auth: None = Depends(_checkBotAuth)):
+    """Linked Discord users and their favorite team, for syncing Discord team roles.
+
+    Every linked user is listed; one without a favorite team has team None. A pending
+    (next-season) switch isn't the favorite yet, so it isn't reported until promoted.
+    discordId narrows the list to that user (empty if they aren't linked)."""
+    from database.connection import get_session
+    from database.models import User, Team
+    session = get_session()
+    try:
+        q = session.query(User.discord_id, Team.id, Team.name, Team.city).outerjoin(
+            Team, User.favorite_team_id == Team.id
+        ).filter(User.discord_id.isnot(None))
+        if discordId:
+            q = q.filter(User.discord_id == discordId)
+        return build_success_response([
+            {"discordId": did, "team": {"id": tid, "name": name, "city": city} if tid else None}
+            for did, tid, name, city in q.all()
+        ])
+    finally:
+        session.close()
+
+
 @app.get("/api/bot/unsubmitted")
 def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
     """Get Discord IDs of users who opted into reminders but haven't equipped a lineup,
