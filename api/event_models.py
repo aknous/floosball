@@ -481,12 +481,20 @@ class LeagueNewsEvent:
     """Factory for league-wide news events (clinches, eliminations, championships)"""
 
     @staticmethod
-    def leagueNews(text: str) -> Dict[str, Any]:
-        return {
+    def leagueNews(text: str, category: Optional[str] = None,
+                   eventType: Optional[str] = None) -> Dict[str, Any]:
+        """category/eventType let a consumer pick news out without reading the text
+        (the Discord bot posts 'standings' news: clinches, top seeds, eliminations)."""
+        event = {
             'event': EventType.LEAGUE_NEWS.value,
             'text': text,
             'timestamp': datetime.now().isoformat()
         }
+        if category:
+            event['category'] = category
+        if eventType:
+            event['eventType'] = eventType
+        return event
 
 
 class AchievementEvent:

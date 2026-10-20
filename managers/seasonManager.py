@@ -1050,7 +1050,8 @@ class SeasonManager:
             for event in newClinchEvents:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': event['text']}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(event['text']))
+                    await broadcaster.broadcast_season_event(
+                        LeagueNewsEvent.leagueNews(event['text'], 'standings', event['type']))
                 if event['type'] == 'clinch_playoff':
                     self._awardFavoriteTeamBonus(
                         event['teamId'], CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
@@ -5549,7 +5550,8 @@ class SeasonManager:
                 _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
+                    await broadcaster.broadcast_season_event(
+                        LeagueNewsEvent.leagueNews(_topSeedText, 'standings', 'clinch_topseed'))
 
             season_str_div = 'Season {}'.format(self.currentSeason.seasonNumber)
 
@@ -5596,7 +5598,7 @@ class SeasonManager:
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _divText}})
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                         await broadcaster.broadcast_season_event(
-                            LeagueNewsEvent.leagueNews(_divText))
+                            LeagueNewsEvent.leagueNews(_divText, 'standings', 'clinch_division'))
 
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
@@ -5632,7 +5634,8 @@ class SeasonManager:
                         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
                         self._publishTeamNews('clinched', _clinchText, team, lead=True)
                         if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                            await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
+                            await broadcaster.broadcast_season_event(
+                                LeagueNewsEvent.leagueNews(_clinchText, 'standings', 'clinch_playoff'))
 
         for team in nonPlayoffTeamList:
             team: FloosTeam.Team
@@ -5645,7 +5648,8 @@ class SeasonManager:
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
                     self._publishTeamNews('eliminated', _elimText, team)
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
+                        await broadcaster.broadcast_season_event(
+                            LeagueNewsEvent.leagueNews(_elimText, 'standings', 'eliminated'))
 
 
         # freeAgencyOrder seeding: on a fresh run, start it with the non-playoff
@@ -6038,7 +6042,8 @@ class SeasonManager:
                                 _playoffElimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
                                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _playoffElimText}})
                                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_playoffElimText))
+                                    await broadcaster.broadcast_season_event(
+                                        LeagueNewsEvent.leagueNews(_playoffElimText, 'standings', 'playoff_eliminated'))
                                 roundLosers.append(team)
                                 playoffTeams[league.name].remove(team)
                                 break
