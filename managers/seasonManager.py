@@ -6096,6 +6096,7 @@ class SeasonManager:
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
+                        weekText=self.currentWeekText,
                         results=playoffResults,
                         nextGameStartTime=nextStartIso,
                     )
@@ -6115,6 +6116,7 @@ class SeasonManager:
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
+                        weekText=self.currentWeekText,
                         results=finalResults,
                         nextGameStartTime=None,
                     )

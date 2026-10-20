@@ -426,14 +426,16 @@ class SeasonEvent:
     
     @staticmethod
     def weekEnd(seasonNumber: int, weekNumber: int, results: List[Dict],
-                nextGameStartTime: str = None) -> Dict[str, Any]:
-        """Create a week end event"""
+                nextGameStartTime: str = None, weekText: str = None) -> Dict[str, Any]:
+        """Create a week end event. weekText names a playoff round ("Floos Bowl")."""
+        text = weekText or f'Week {weekNumber}'
         event = {
             'event': EventType.WEEK_END.value,
             'seasonNumber': seasonNumber,
             'weekNumber': weekNumber,
+            'weekText': text,
             'results': results,
-            'message': f"Week {weekNumber} complete"
+            'message': f"{text} complete"
         }
         if nextGameStartTime:
             event['nextGameStartTime'] = nextGameStartTime
