@@ -6377,8 +6377,12 @@ class Game:
                 if need - spend in landings:
                     return 'helpful'
             return None
-        # Tied: a single hoop point breaks the tie and takes the lead.
-        if scoreDiff == 0:
+        # Tied: a single hoop point breaks the tie and takes the lead. ⚠️ Includes a hair
+        # BELOW zero: the final frame's margin (`_framesMatchMargin`) sits an epsilon on
+        # the losing side of the first winning total when there is no tie point, i.e. any
+        # score at all wins it. Read as an exact deficit that is 0.001, which no band
+        # matches, and the point that wins the match came back None.
+        if -0.01 < scoreDiff <= 0:
             # OT: the go-ahead point ends it outright, so it is not merely helpful.
             if self._offensiveScoreWinsNow(
                     float(getattr(self.gameRules, 'sidelineGoalPoints', 1) or 1)):
@@ -6589,11 +6593,27 @@ class Game:
         from constants import (SIDELINE_GOAL_ATTEMPT_INRANGE, SIDELINE_GOAL_ATTEMPT_STALL_MULT,
                                SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX,
                                SIDELINE_GOAL_DESPERATION_SECS, SIDELINE_GOAL_DESPERATION_CHANCE)
-        need = self._hoopPointsNeeded(scoreDiff)
+        # ⚠️ FRAMES: THE MARGIN AND THE DEADLINE ARE THE FRAME'S (fixed 2026-10-20). This
+        # read the TOTAL score and the Q4 game clock while `_isHurryUp` reads the frame, so
+        # at every frame ending but the last the two disagreed: a team tied in the frame was
+        # in hurry-up (guard below) with no late need to lift it, and a frame leader, not in
+        # hurry-up, got the base roll. Prod season 11, 16 Frames games, last 2:00 of a frame
+        # with a hoop in range: tied or down 1 shot 5% of snaps, leaders 45%.
+        # `_clockMargin` / `_periodEnd` are the frame margin and frame clock in Frames (the
+        # match standing in the final frame) and the score and game clock everywhere else.
+        margin = self._clockMargin()
+        need = self._hoopPointsNeeded(margin)
+        _endKind, _endSecs = self._periodEnd()
         late = (getattr(self, 'isOvertime', False)
-                or (self.currentQuarter >= 4 and self.gameClockSeconds <= SIDELINE_GOAL_DESPERATION_SECS))
+                or (_endKind == 'game' and _endSecs <= SIDELINE_GOAL_DESPERATION_SECS))
         critical = late and need == 'critical'
         helpfulLate = late and need == 'helpful'
+        # ⚠️ A LEADER LATE DOES NOT SHOOT. Every hoop shot stops the clock (a make is a
+        # score, a miss an incompletion), and the side ahead at a 'game' ending is the one
+        # the clock is working for (the frame-leader rule: never stop the clock). The base
+        # roll below was handing the trailing side a huddle's worth of time back.
+        if late and margin > 0:
+            return False
         # ⚠️ A LATE 'helpful' POINT LIFTS THE HURRY-UP GUARD, AND WITHOUT THAT ITS OWN
         # BRANCH BELOW IS UNREACHABLE BY CONSTRUCTION. In regulation `helpful` means the
         # offense is TIED (the point takes the lead) or a field goal alone cannot tie —
@@ -6629,7 +6649,7 @@ class Game:
             # field goal or a touchdown to fall back on, a 49% heave is worth declining
             # for a 70% tap one snap later; where it does not, take what is there. This
             # is the same split the guards above already make.
-            if helpfulLate and not (self._hoopPlanFits(scoreDiff)
+            if helpfulLate and not (self._hoopPlanFits(margin)
                                     and self._hoopWorthTakingNow()):
                 return False
             return _random.random() < SIDELINE_GOAL_DESPERATION_CHANCE
