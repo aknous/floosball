@@ -31,7 +31,8 @@ TRIALS = 30
 
 
 def lastSnap(*, down, distance, ballOn, snapsLeft=1, unit='plays', reset='possession',
-             quarter=1, clock=600, offScore=0, defScore=0, hoops=False, frames=False):
+             quarter=1, clock=600, offScore=0, defScore=0, hoops=False, frames=False,
+             offTimeouts=3):
     rules = GameRules()
     rules.sidelineGoalsEnabled = hoops
     if frames:
@@ -45,7 +46,7 @@ def lastSnap(*, down, distance, ballOn, snapsLeft=1, unit='plays', reset='posses
     scenario.situation(quarter=quarter, clock=clock, offense='home',
                        offScore=offScore, defScore=defScore,
                        down=down, distance=distance, ballOn=ballOn,
-                       offTimeouts=3, defTimeouts=3, clockRunning=True)
+                       offTimeouts=offTimeouts, defTimeouts=3, clockRunning=True)
     scenario.game.driveClockRemaining = snapsLeft
     return scenario
 
@@ -133,6 +134,22 @@ class FramesLastSnap(unittest.TestCase):
     def test_insideTheFiveGoesForTheTouchdown(self):
         out = calls(down=2, distance=3, ballOn=3, quarter=1, clock=850, frames=True)
         self.assertLessEqual(out['FieldGoal'], 3, out)
+
+
+class NoSpikeOnTheSecondToLastSnap(unittest.TestCase):
+    """A spike spends a snap. Prod game 4901, frame 5: 1st & goal at the 5, down 3,
+    1:05 left, no timeouts, two snaps on the clock. The spike's down gate read 1st down
+    as room to spare, so the Trains spiked and had only the tying kick left."""
+
+    def test_twoSnapsLeftNeverSpikes(self):
+        out = calls(down=1, distance=5, ballOn=5, snapsLeft=2, quarter=4, clock=25,
+                    defScore=3, offTimeouts=0)
+        self.assertEqual(out['Spike'], 0, out)
+
+    def test_withSnapsToSpareItStillSpikes(self):
+        out = calls(down=1, distance=5, ballOn=5, snapsLeft=6, quarter=4, clock=25,
+                    defScore=3, offTimeouts=0)
+        self.assertGreaterEqual(out['Spike'], 10, out)
 
 
 def hoopShots(**kw):

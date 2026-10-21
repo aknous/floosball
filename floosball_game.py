@@ -2208,7 +2208,9 @@ class Game:
         # against a huddle's 18s) purely because it stops the clock; once it does not,
         # it is a forfeited down that buys nothing, so counting one would have the
         # estimator promise a play the offense can no longer reach.
-        spikesAvailable = (1 if self.down < self.gameRules.downsPerSeries - 1 else 0)
+        # Counted in SNAPS (`_seriesSnapsLeft`): a plays drive clock spends a snap on a
+        # spike the way the series spends a down.
+        spikesAvailable = (1 if self._seriesSnapsLeft() >= 3 else 0)
         if not self._deadBallStopsClock():
             spikesAvailable = 0
         # ⚠️ THE FIRST SNAP PAYS ITS PRE-SNAP DRAIN TOO, and for a long time it did not.
@@ -7912,7 +7914,7 @@ class Game:
                     and timeoutsLeft == 0
                     and self._estimateAvailablePlays() >= 2
                     and self.clockRunning
-                    and self.down <= self.gameRules.downsPerSeries - 2
+                    and self._seriesSnapsLeft() >= 3
                     and self.yardsToEndzone > 5
                     and not self._isFgDrainMode()
                     and not self._isGarbageTime(scoreDiff)):
@@ -7939,7 +7941,13 @@ class Game:
             # into a 4th-down must-score).
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
-            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1
+            # ⚠️ COUNTED IN SNAPS, NOT DOWNS (`_seriesSnapsLeft`): a spike spends a plays
+            # drive clock's snap as well as a down. Prod game 4901, frame 5: Trains 1st &
+            # goal at the 5, down 3 in the frame, 1:05 left, two snaps on the clock. The
+            # down gate read 1st down as room to spike, and the spike took one of the two
+            # shots at the end zone, leaving only the tying kick. Off the drive clock the
+            # snaps left are the downs left, so nothing else changes.
+            spikeFgException = (self._seriesSnapsLeft() == 2
                                 and (_periodKind == 'half' or -self._fgValue() <= decisionDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
@@ -7950,7 +7958,7 @@ class Game:
             # _estimateAvailablePlays is frame-aware (reserves a closing FG snap off the frame
             # deadline in frames); >= 1 means room for the spike plus a real play. The
             # deliberate 3rd-down FG-setup spike keeps its own gate.
-            spikeDownOK = ((self.down <= self.gameRules.downsPerSeries - 2
+            spikeDownOK = ((self._seriesSnapsLeft() >= 3
                             and self._estimateAvailablePlays() >= 1)
                            or spikeFgException)
             if (_periodKind is not None
