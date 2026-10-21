@@ -31,9 +31,12 @@ TRIALS = 30
 
 
 def lastSnap(*, down, distance, ballOn, snapsLeft=1, unit='plays', reset='possession',
-             quarter=1, clock=600, offScore=0, defScore=0, hoops=False):
+             quarter=1, clock=600, offScore=0, defScore=0, hoops=False, frames=False):
     rules = GameRules()
     rules.sidelineGoalsEnabled = hoops
+    if frames:
+        rules.gameFormat = 'frames'
+        rules.framesPerGame = 6
     rules.driveClockEnabled = True
     rules.driveClockUnit = unit
     rules.driveClockReset = reset
@@ -119,6 +122,17 @@ class NotTheLastSnap(unittest.TestCase):
         """With a snap still to come the offense plays on; the last-snap decision waits."""
         out = calls(down=2, distance=6, ballOn=45, snapsLeft=2)
         self.assertEqual(out['Punt'] + out['FieldGoal'], 0, out)
+
+
+class FramesLastSnap(unittest.TestCase):
+    """Frames (and every non-standard format) decides a final down with the older branch
+    tree, not the fitted model. Read as 4th & goal, it kicked from the 3-5 on a last snap
+    (its go-for-it in range needs 2 yards or fewer), where the old early-down path ran a
+    play for the touchdown."""
+
+    def test_insideTheFiveGoesForTheTouchdown(self):
+        out = calls(down=2, distance=3, ballOn=3, quarter=1, clock=850, frames=True)
+        self.assertLessEqual(out['FieldGoal'], 3, out)
 
 
 def hoopShots(**kw):

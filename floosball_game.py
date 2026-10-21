@@ -4063,6 +4063,19 @@ class Game:
                 self.play.playType = PlayType.Punt
             return
 
+        # ⚠️ A DRIVE CLOCK'S LAST SNAP INSIDE THE 5, IN THE BRANCH TREE BELOW (every format
+        # but standard: Frames on prod). The tree reads the yards to go as the goal line
+        # here (`_decisionYardsToGo`), and from the 3-5 that sends it to the field goal,
+        # since its go-for-it inside range is gated on 2 yards or fewer. On a real 4th & 3
+        # that is right; on a last snap at the 3 a touchdown (about half the time) is worth
+        # more than three. Measured over 40 Frames games: last snaps inside the 5 kicked 15
+        # of 18 times, against 1 of 28 before the last snap became a final down, when the
+        # early-down path simply ran a play. A leader late in range still takes the points.
+        if self._driveClockFinalSnap() and self.yardsToEndzone <= 5:
+            if not (inFieldGoalRange and leadingLate):
+                self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
+                return
+
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
