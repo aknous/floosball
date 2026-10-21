@@ -152,6 +152,34 @@ class NoSpikeOnTheSecondToLastSnap(unittest.TestCase):
         self.assertGreaterEqual(out['Spike'], 10, out)
 
 
+class NoPuntTheLeaderCanKneelOut(unittest.TestCase):
+    """Prod game 4892, final frame: Jetskis down 7 on the match, last snap on their own
+    48 with 0:22 left and no timeouts. They punted and the Pinecones knelt it out. A
+    trailing team punts only when time is left to get the ball back."""
+
+    def test_downSevenAtTheEndDoesNotPunt(self):
+        for clock in (22, 120):
+            out = calls(down=2, distance=10, ballOn=52, quarter=4, clock=clock,
+                        defScore=7, offTimeouts=0)
+            self.assertEqual(out['Punt'], 0, (clock, out))
+
+    def test_withTimeToGetItBackItStillPunts(self):
+        out = calls(down=2, distance=10, ballOn=52, quarter=4, clock=210,
+                    defScore=7, offTimeouts=0)
+        self.assertGreaterEqual(out['Punt'], 24, out)
+
+    def test_theReportedFinalFrame(self):
+        out = collections.Counter()
+        for _ in range(TRIALS):
+            scenario = lastSnap(down=2, distance=10, ballOn=52, quarter=4, clock=22,
+                                defScore=7, offTimeouts=0, frames=True)
+            game = scenario.game
+            game._frameIndex = 5                         # the frame clock reads 0:22
+            game.framesWonHome, game.framesWonAway = 2, 3
+            out[str(scenario.callPlay()).replace('PlayType.', '')] += 1
+        self.assertEqual(out['Punt'], 0, out)
+
+
 def hoopShots(**kw):
     shots = 0
     for _ in range(TRIALS):

@@ -3811,6 +3811,38 @@ class Game:
         self.play.insights['_otWeights'] = weights
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
+    def _puntNeverComesBack(self) -> bool:
+        """A punt would hand a leader the ball with no time left for the punting team
+        to get it back: trailing at the end of the game (Q4, or the final frame) with no
+        more on the clock than the receiver can kneel away on a fresh series. Field position is then worth nothing, so the snap has to be a
+        shot at points.
+
+        Prod game 4892, final frame: Jetskis down 7 on the match, last drive-clock snap
+        on their own 48 with 0:22 left and no timeouts. They punted and the Pinecones
+        knelt it out. The kneel arithmetic is `_kneelOutDetail`'s: a kneel against a
+        timeout drains ~4s, a free one `kneelDrainSeconds`."""
+        kind, secs = self._periodEnd()
+        if kind != 'game' or self._clockMargin() >= 0:
+            return False
+        # Frames: only the FINAL frame. An earlier frame's ending is not the end of the
+        # match, and the points a short field concedes there still count in the total
+        # that breaks a frames tie.
+        if self._frameScoreDiff() is not None:
+            try:
+                if int(getattr(self, '_frameIndex', 0)) < self.format._frames(self) - 1:
+                    return False
+            except Exception:
+                return False
+        kneels = self.gameRules.downsPerSeries
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'):
+            kneels = min(kneels, int(self.gameRules.driveClockLimit))
+        ourTimeouts = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                       else self.awayTimeoutsRemaining)
+        stopped = min(ourTimeouts, kneels)
+        drainable = stopped * 4 + (kneels - stopped) * self.gameRules.kneelDrainSeconds
+        return secs <= drainable
+
     def _driveClockPuntCall(self, scoreDiff: int, gameIQ: float) -> bool:
         """On the Drive Clock's last snap, punt from the offense's own half rather than
         snap into a turnover on downs at its own spot, which hands the defense a short
@@ -3843,6 +3875,8 @@ class Game:
             return False   # a charged kicker takes the points instead
         if (self.format.suppressPunt(self) or self._isFgDrainMode()
                 or self._isGarbageTime(scoreDiff)):
+            return False
+        if self._puntNeverComesBack():
             return False
         if _random.random() >= DRIVE_CLOCK_PUNT_BASE + DRIVE_CLOCK_PUNT_IQ_SPAN * gameIQ:
             return False   # a poor staff can still give it up
