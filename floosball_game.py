@@ -3193,6 +3193,34 @@ class Game:
             return self.driveClockRemaining <= 1
         return self.driveClockRemaining <= DRIVE_CLOCK_LOW_FRAC * self._driveClockLimitSecs()
 
+    def _driveClockFinalSnap(self) -> bool:
+        """This snap is the drive's last, whatever the down: a PLAYS drive clock with one
+        snap left under 'possession' reset. Nothing after it can save the drive (a first
+        down refills nothing), so it is a final down whose only conversion is the goal
+        line: kick, punt, or go for the touchdown, decided as 4th & goal from the spot.
+
+        ⚠️ PLAYS UNIT ONLY. The count is exact there; a seconds clock only estimates its
+        last snap (`_driveClockLastSnap`), and treating an estimate as a final down would
+        give up a snap that might still fit. 'series' reset is excluded because a first
+        down refills the clock, so the real yards to go still matter."""
+        return (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'
+                and getattr(self.gameRules, 'driveClockReset', 'possession') == 'possession'
+                and self.driveClockRemaining <= 1)
+
+    def _isFinalDown(self) -> bool:
+        """The last snap of the series: the rule's final down, or a drive clock's last
+        snap (`_driveClockFinalSnap`)."""
+        return self.down == self.gameRules.downsPerSeries or self._driveClockFinalSnap()
+
+    def _decisionYardsToGo(self) -> int:
+        """Yards the play CALL has to cover: the first-down marker, or the goal line on a
+        drive clock's last snap, where reaching the marker buys nothing. Decisions only:
+        play resolution keeps reading `yardsToFirstDown`."""
+        if self._driveClockFinalSnap():
+            return self.yardsToEndzone
+        return self.yardsToFirstDown
+
     def _chessClockOffenseSecs(self):
         """The offense's remaining chess-clock budget (seconds), or None when not in chess
         clock / in OT (budgets don't apply). In chess clock THIS is the offense's real
@@ -3816,6 +3844,9 @@ class Game:
 
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
+        # Yards this down has to cover: the marker, or the goal line on a drive clock's
+        # last snap (`_decisionYardsToGo`), where a first down buys nothing.
+        ytg = self._decisionYardsToGo()
         # Frames: each frame is a mini-game you're trying to WIN, so every score-relative
         # decision here (FG-vs-go, sideline targeting, desperation) reasons off the CURRENT
         # FRAME's margin, not the running total. Total points only break a frames tie, so
@@ -3957,11 +3988,11 @@ class Game:
         if self.format.suppressPunt(self):
             if inFieldGoalRange and fgHelps:
                 self.play.playType = PlayType.FieldGoal
-            elif self.yardsToFirstDown <= 3:
+            elif ytg <= 3:
                 self.play.runPlay()
             else:
                 self.play.passPlay(self._selectPassPlay(
-                    'medium' if self.yardsToFirstDown <= 12 else 'long'))
+                    'medium' if ytg <= 12 else 'long'))
             return
 
         # ── THE NORMAL-GAME 4TH DOWN: GO, KICK OR PUNT, ON ONE MODEL ──
@@ -3987,7 +4018,7 @@ class Game:
                 'yardsToEndzone': self.yardsToEndzone,
                 'coachAggr': coach.aggressiveness if coach else None,
             }
-            if (chargedInRange and fgHelps and self.yardsToFirstDown > 2
+            if (chargedInRange and fgHelps and ytg > 2
                     and self.yardsToEndzone > 8):
                 # A charged awakened kicker takes the free three (unchanged rule).
                 self.play.insights['fourthDown']['decision'] = 'chargedKick'
@@ -4097,7 +4128,7 @@ class Game:
         # range — but only when fgHelps (computed above) and not protecting a late
         # lead; short-yardage / goal-line defer to the go-for-it logic.
         if (chargedInRange and fgHelps and not leadingLate
-                and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
+                and ytg > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
             return
         if self.yardsToEndzone <= 40 and not leadingLate:
@@ -4107,16 +4138,16 @@ class Game:
             # TD to win loses the game. Go for the first down / TD instead.
             if not fgHelps:
                 goForIt = True
-            if inFieldGoalRange and self.yardsToFirstDown <= 2:
+            if inFieldGoalRange and ytg <= 2:
                 # 4th-and-short can still favor going for the first down / TD.
                 if batched_randint(1, 10) <= goForItThreshold:
                     goForIt = True
             if goForIt:
-                if self.yardsToFirstDown <= 3:
+                if ytg <= 3:
                     self.play.runPlay()
                 else:
                     self.play.passPlay(self._selectPassPlay(
-                        'medium' if self.yardsToFirstDown <= 12 else 'long'))
+                        'medium' if ytg <= 12 else 'long'))
             else:
                 self.play.playType = PlayType.FieldGoal
             return
@@ -4133,7 +4164,7 @@ class Game:
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
                     self.play.playType = PlayType.FieldGoal
                     return
-                if self.yardsToFirstDown <= 1 and self.yardsToSafety > 50:
+                if ytg <= 1 and self.yardsToSafety > 50:
                     x = batched_randint(1, 10)
                     if x <= goForItThreshold:
                         self.play.runPlay()
@@ -4145,17 +4176,17 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
             # Deep in opponent territory: go for it on short yardage instead of punting
-            if self.yardsToEndzone <= 40 and self.yardsToFirstDown <= 3:
+            if self.yardsToEndzone <= 40 and ytg <= 3:
                 # Inside 40: almost always go for it on 4th and short
                 threshold = max(1, min(9, round(6 + aggrNorm * 3)))
                 x = batched_randint(1, 10)
                 if x <= threshold:
-                    if self.yardsToFirstDown <= 1:
+                    if ytg <= 1:
                         self.play.runPlay()
                     else:
                         self.play.passPlay(self._selectPassPlay('short'))
                     return
-            elif self.yardsToFirstDown <= 1 and self.yardsToSafety > 45:
+            elif ytg <= 1 and self.yardsToSafety > 45:
                 x = batched_randint(1, 10)
                 if x <= max(1, min(9, round(3 + aggrNorm * 3))):
                     self.play.runPlay()
@@ -4178,7 +4209,7 @@ class Game:
                         self.play.playType = PlayType.FieldGoal
                         return
                     # Bad coach blunder: goes for TD instead of makeable FG
-                    if self.yardsToFirstDown <= 5:
+                    if ytg <= 5:
                         self.play.passPlay(self._selectPassPlay('short'))
                     else:
                         self.play.passPlay(self._selectPassPlay('medium'))
@@ -4196,9 +4227,9 @@ class Game:
                             self.play.playType = PlayType.FieldGoal
                             return
                     # Go for TD
-                    if self.yardsToFirstDown <= 5:
+                    if ytg <= 5:
                         self.play.passPlay(self._selectPassPlay('short'))
-                    elif self.yardsToFirstDown <= 10:
+                    elif ytg <= 10:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
@@ -4209,7 +4240,7 @@ class Game:
                     if aggrNorm < -0.5:
                         self.play.playType = PlayType.FieldGoal
                         return
-                    if self.yardsToFirstDown <= 5:
+                    if ytg <= 5:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
@@ -4245,9 +4276,9 @@ class Game:
                 # Under 2.5 min: must go for it — punting is conceding
                 if secs < 150:
                     # Bad coaches may pick the wrong play tier, but they still go for it
-                    if self.yardsToFirstDown <= 3:
+                    if ytg <= 3:
                         self.play.passPlay(self._selectPassPlay('short'))
-                    elif self.yardsToFirstDown <= 10:
+                    elif ytg <= 10:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
@@ -4257,10 +4288,10 @@ class Game:
                 if secs <= 300:
                     if deficit <= self._maxPossession():
                         # Down 1 score: go for it on short/medium yardage
-                        if self.yardsToFirstDown <= 3:
+                        if ytg <= 3:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
-                        elif self.yardsToFirstDown <= 8:
+                        elif ytg <= 8:
                             self.play.passPlay(self._selectPassPlay('medium'))
                             return
                         else:
@@ -4269,10 +4300,10 @@ class Game:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
                     elif deficit <= 2 * self._maxPossession():
-                        if self.yardsToFirstDown <= 3:
+                        if ytg <= 3:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
-                        elif self.yardsToFirstDown <= 5:
+                        elif ytg <= 5:
                             if _random.random() < 0.7 + 0.2 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('medium'))
                                 return
@@ -4286,10 +4317,10 @@ class Game:
                         return
 
                 # 5+ min: standard trailing behavior
-                if deficit <= self._maxPossession() and self.yardsToFirstDown <= 2:
+                if deficit <= self._maxPossession() and ytg <= 2:
                     self.play.passPlay(self._selectPassPlay('short'))
                     return
-                elif deficit <= self._maxPossession() and self.yardsToFirstDown <= 5:
+                elif deficit <= self._maxPossession() and ytg <= 5:
                     # Aggressive coaches willing to attempt short yardage with time
                     if _random.random() < max(0, 0.1 + aggrMod):
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -4297,15 +4328,15 @@ class Game:
 
             # Q2 two-minute drill: go for it past midfield with under 60 sec
             elif _periodKind == 'half' and secs < 60 and self.yardsToSafety > 50:
-                if self.yardsToFirstDown <= 3:
+                if ytg <= 3:
                     self.play.passPlay(self._selectPassPlay('short'))
-                elif self.yardsToFirstDown <= 10:
+                elif ytg <= 10:
                     self.play.passPlay(self._selectPassPlay('medium'))
                 else:
                     self.play.passPlay(self._selectPassPlay('long'))
                 return
 
-            elif self.currentQuarter == 3 and deficit <= self._maxPossession() and self.yardsToFirstDown <= 2:
+            elif self.currentQuarter == 3 and deficit <= self._maxPossession() and ytg <= 2:
                 self.play.passPlay(self._selectPassPlay('short'))
                 return
             self.play.playType = PlayType.Punt
@@ -4318,11 +4349,11 @@ class Game:
         # defaults to the kick (high prob > the conversion gamble).
         if (_periodKind == 'game' and scoreDiff == 0 and inFieldGoalRange
                 and _periodSecs >= 30
-                and self.yardsToFirstDown <= 5
+                and ytg <= 5
                 and self.yardsToEndzone > 15
                 and fgProb < 0.92):
             goBias = max(0.0, aggrNorm)  # 0 (avg) to 1 (max aggressive)
-            if self.yardsToFirstDown <= 2:
+            if ytg <= 2:
                 goChance = 0.10 + goBias * 0.40  # avg=10%, aggressive=50%
             else:
                 goChance = 0.05 + goBias * 0.20  # avg=5%, aggressive=25%
@@ -4331,7 +4362,7 @@ class Game:
                 self.play.insights['fourthDown']['reason'] = (
                     'tied Q4 with time, aggressive push to advance FG'
                 )
-                if self.yardsToFirstDown <= 2:
+                if ytg <= 2:
                     self.play.runPlay()
                 else:
                     self.play.passPlay(self._selectPassPlay('short'))
@@ -4355,7 +4386,7 @@ class Game:
                     return
 
         elif self.yardsToEndzone <= 20 and inFieldGoalRange:
-            if self.yardsToFirstDown <= 1:
+            if ytg <= 1:
                 x = batched_randint(1, 10)
                 if x >= 7:
                     y = randint(1, 3)
@@ -4369,7 +4400,7 @@ class Game:
             return
 
         elif self.yardsToEndzone <= 35 and inFieldGoalRange:
-            if self.yardsToFirstDown <= 2:
+            if ytg <= 2:
                 x = batched_randint(1, 10)
                 if x <= 7:
                     self.play.playType = PlayType.FieldGoal
@@ -4402,7 +4433,7 @@ class Game:
 
         else:
             # Tied or trailing (outside Q4 urgency), out of FG range
-            if self.yardsToFirstDown == 1:
+            if ytg == 1:
                 if self.yardsToSafety >= 50 or (scoreDiff < -2 * self._oneScore() and self.currentQuarter >= 3):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(7, goForItThreshold - 1)):
@@ -4410,7 +4441,7 @@ class Game:
                         return
                 self.play.playType = PlayType.Punt
                 return
-            elif self.yardsToFirstDown == 2:
+            elif ytg == 2:
                 if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -3 * self._oneScore() and _periodKind == 'game' and _periodSecs < 600):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(5, goForItThreshold - 3)):
@@ -4419,7 +4450,7 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
             else:
-                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and _periodKind == 'game' and _periodSecs < 300):
+                if (self.yardsToSafety >= 55 and ytg <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and _periodKind == 'game' and _periodSecs < 300):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(4, goForItThreshold - 4)):
                         self.play.passPlay(self._selectPassPlay('medium'))
@@ -4447,7 +4478,7 @@ class Game:
         if q >= 5 or (q == 4 and secs <= 300) or (q == 2 and secs <= 60):
             return None
         byYtg = [float(np.interp(self.yardsToEndzone, FOURTH_GO_YTE, row)) for row in FOURTH_GO_TABLE]
-        base = float(np.interp(self.yardsToFirstDown, FOURTH_GO_YTG, byYtg))
+        base = float(np.interp(self._decisionYardsToGo(), FOURTH_GO_YTG, byYtg))
         base = min(0.995, max(0.002, base))
         shift = float(np.interp(scoreDiff, FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT))
         aggrNorm = ((coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE) if coach else 0.0
@@ -4506,9 +4537,11 @@ class Game:
         # IS the must-convert-soon down. At the default four this is exactly 1st / 2nd /
         # 3rd, as before.
         from constants import PLAY_CALL_BASE_ROWS
-        ytg = self.yardsToFirstDown
+        ytg = self._decisionYardsToGo()
         downs = int(getattr(self.gameRules, 'downsPerSeries', 4) or 4)
-        if self.down <= 1:
+        if self._driveClockFinalSnap():
+            rowKey = 3   # a drive clock's last snap plays as a must-convert down
+        elif self.down <= 1:
             rowKey = 1
         elif self.down >= downs - 1:
             rowKey = 3
@@ -7305,7 +7338,8 @@ class Game:
                 return
 
         # Clock management — evaluated before any play selection on non-final downs
-        if self.down < self.gameRules.downsPerSeries:
+        # (a drive clock's last snap is a final down: `_isFinalDown`).
+        if not self._isFinalDown():
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
             # Each kneel ~40 sec; opponent timeouts only matter when game is close (≤8 pts)
             # Field-position guard: kneel loses 1 yard, so on own 1 (or goal line) it
@@ -8017,7 +8051,7 @@ class Game:
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if _periodKind == 'half' and _periodSecs < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
+        if _periodKind == 'half' and _periodSecs < self.gameRules.timeoutClockThreshold and self._isFinalDown():
             if self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -8027,15 +8061,15 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if _periodKind == 'game' and _periodSecs < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
+        if _periodKind == 'game' and _periodSecs < self.gameRules.timeoutClockThreshold and self._isFinalDown():
             if (-self._fgValue() <= decisionDiff <= self._fgValue() and not self._framesFgFutile()) and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = _periodSecs >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
-                if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
+                if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self._decisionYardsToGo() <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     goForItChance = 0.45 + aggrNorm * 0.30
                     if _random.random() < goForItChance:
-                        if self.yardsToFirstDown <= 2:
+                        if self._decisionYardsToGo() <= 2:
                             self.play.runPlay()
                         else:
                             self.play.passPlay(self._selectPassPlay('short'))
@@ -8104,8 +8138,13 @@ class Game:
         # the punt keeps the heave.
         from constants import DRIVE_CLOCK_PUNT_MIN_YTE as _DC_PUNT_YTE
         _driveHailMary = (_dcLastPlay and _hmDiff <= 0
+                          and not self._driveClockFinalSnap()
                           and (self.yardsToEndzone < _DC_PUNT_YTE
                                or self.format.suppressPunt(self)))
+        # ⚠️ NOT on a plays clock's last snap: that is a final down (`_isFinalDown`), and
+        # `_fourthDownCaller` weighs the heave against the punt and the kick as 4th & goal
+        # from the spot. Heaving there whenever tied or trailing, in any quarter, threw
+        # it away from the opponent's 45 in the first quarter instead of punting.
         if ((_gameHailMary or _driveHailMary)
                 and self.yardsToEndzone >= 30
                 and not self._isGarbageTime(_hmDiff)):
@@ -8153,8 +8192,9 @@ class Game:
                 self.play.targetSideline = False
                 return
 
-        # Final down — punt / FG / go-for-it decision
-        if self.down == self.gameRules.downsPerSeries:
+        # Final down — punt / FG / go-for-it decision (including a drive clock's last
+        # snap, whatever the down: `_isFinalDown`)
+        if self._isFinalDown():
             self._fourthDownCaller(scoreDiff, coach, isHome)
             # Rule 1: a charged awakened kicker prefers the sure 3 over a punt from
             # WITHIN its (capped) extended range. If the 4th-down logic chose to
