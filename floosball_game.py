@@ -3213,6 +3213,16 @@ class Game:
         snap (`_driveClockFinalSnap`)."""
         return self.down == self.gameRules.downsPerSeries or self._driveClockFinalSnap()
 
+    def _seriesSnapsLeft(self) -> int:
+        """Snaps this series still has, counting this one: the downs left, or a plays
+        drive clock's snaps when that runs out first. Equal to the downs left off the
+        drive clock, so `<= 1` is the final down and `<= 2` the one before it."""
+        left = self.gameRules.downsPerSeries - self.down + 1
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'):
+            left = min(left, max(1, int(self.driveClockRemaining)))
+        return left
+
     def _decisionYardsToGo(self) -> int:
         """Yards the play CALL has to cover: the first-down marker, or the goal line on a
         drive clock's last snap, where reaching the marker buys nothing. Decisions only:
@@ -6318,7 +6328,7 @@ class Game:
             return False
         if self.play is None or getattr(self.play, 'isHoopShot', False):
             return False
-        if self.down < self.gameRules.downsPerSeries:
+        if not self._isFinalDown():
             return False        # the weighted path already asked on this down
         # A kneel or spike is a deliberate clock play; a resolved score is not ours to undo.
         if self.play.playType in (PlayType.Kneel, PlayType.Spike):
@@ -6490,6 +6500,12 @@ class Game:
             maxFg = kicker.maxFgDistance - self.gameRules.fgSnapDistance
             if self.yardsToEndzone > maxFg:
                 snapsNeeded += 1
+        # A plays drive clock is a second budget: the hoops, and the kick the bridge
+        # leans on, each take a snap.
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'
+                and self.driveClockRemaining < snapsNeeded + (1 if scoreDiff < 0 else 0)):
+            return False
         return self._estimateAvailablePlays() >= snapsNeeded
 
     def _hoopWorthTakingNow(self) -> bool:
@@ -6536,7 +6552,7 @@ class Game:
         # all; at five it holds through two downs and relaxes on the third. A literal 2
         # here would silently become "never hold" or "hold too long" the next time the
         # fans move the rule.
-        return self.down >= self.gameRules.downsPerSeries - 2
+        return self._seriesSnapsLeft() <= 3
 
     def _shouldAttemptHoopShot(self) -> bool:
         """Choice to throw at a sideline hoop instead of a normal play, when a fresh
@@ -6633,8 +6649,10 @@ class Game:
                         closeness = 1.0 - (yardsToCrossing / DARTS_HOOP_CLOSING_YARDS)
                         chance += DARTS_HOOP_LAST_CHANCE_LIFT * closeness
                 return _random.random() < max(0.0, min(1.0, chance))
-        # Final down: a hoop always forfeits the scoring play — never shoot.
-        if self.down >= self.gameRules.downsPerSeries:
+        # Final down: a hoop always forfeits the scoring play — never shoot. A plays
+        # drive clock's last snap counts too (`_seriesSnapsLeft`): a hoop spends a snap
+        # exactly as it spends a down.
+        if self._seriesSnapsLeft() <= 1:
             return False
         from constants import (SIDELINE_GOAL_ATTEMPT_INRANGE, SIDELINE_GOAL_ATTEMPT_STALL_MULT,
                                SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX,
@@ -6682,7 +6700,7 @@ class Game:
         # play still needs, which is just as true late. Only a 'critical' need — where no
         # conventional score reaches at all — is worth that down.
         if not critical:
-            if self.down >= self.gameRules.downsPerSeries - 1:
+            if self._seriesSnapsLeft() <= 2:
                 return False
             if self._isHurryUp() and not helpfulLate:
                 return False
