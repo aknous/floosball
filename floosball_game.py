@@ -2549,6 +2549,10 @@ class Game:
         # throw in the playbook in exchange for nothing — and no-huddle fires 2.4x more
         # often there (it keys off `clockRunning`, which a running clock leaves true
         # almost permanently), so the pointless version is the common one.
+        # ⚠️ NEVER ON A DRIVE CLOCK'S LAST SNAP: the drive ends whatever happens, so there
+        # is no clock worth stopping.
+        if self._driveClockFinalSnap():
+            return False
         if self._isNoHuddle() and self._deadBallStopsClock():
             return True
 
@@ -5161,6 +5165,11 @@ class Game:
         contributes a matchup delta to that play's weight. Coach offensiveMind scales
         how aggressively the coach exploits favourable matchups (60→neutral, 100→max).
         """
+        # Every pass on a drive clock's last snap from 30+ out is the heave, whichever
+        # tier the caller asked for (`_finalSnapIsAHeave`).
+        if self._finalSnapIsAHeave():
+            self.play.insights['playCall'] = 'hailMary'
+            return 'Play9'
         pools = {
             'short':  ['Play8', 'Play10', 'Play11', 'Play12', 'Play14'],
             'medium': ['Play3', 'Play6', 'Play7', 'Play13', 'Play15', 'Play16', 'Play17'],
@@ -5510,8 +5519,24 @@ class Game:
         }
         return newCall
 
+    def _finalSnapIsAHeave(self) -> bool:
+        """A plays drive clock's last snap from 30+ yards out: only a touchdown is worth
+        anything. A play short of the end zone ends the drive at its spot, so a completion
+        that does not score hands the opponent better field position than an incompletion.
+        The same 30 yards as `playCaller`'s Hail Mary.
+
+        Prod game 4904: Rocks down 2 on the match, last snap on the SLC 47 at 0:17 of the
+        final frame. The 4th-down tree picks its pass by the yards to go (the goal line
+        here) and capped it at 'long' to the sideline; a 10-yard out ended the game."""
+        return self._driveClockFinalSnap() and self.yardsToEndzone >= 30
+
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
+        if self._finalSnapIsAHeave():
+            self.play.insights['playCall'] = 'hailMary'
+            self.play.passPlay('Play9')
+            self.play.targetSideline = False
+            return
         playCall = _random.choices(
             ['run', 'short', 'medium', 'long', 'deep'],
             weights=[weights['run'], weights['short'], weights['medium'],
