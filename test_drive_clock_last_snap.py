@@ -152,6 +152,37 @@ class NoSpikeOnTheSecondToLastSnap(unittest.TestCase):
         self.assertGreaterEqual(out['Spike'], 10, out)
 
 
+class TheLastSnapFromDistanceIsAHeave(unittest.TestCase):
+    """Prod game 4904: Rocks down 2 on the match, last snap on the SLC 47 at 0:17 of
+    the final frame. The 4th-down tree threw a 10-yard sideline out, which ended the
+    game. From 30+ out on a last snap only a touchdown counts, and a play short of the
+    end zone hands the ball over at its spot."""
+
+    def _calls(self, frames, **kw):
+        out = collections.Counter()
+        sideline = 0
+        for _ in range(TRIALS):
+            scenario = lastSnap(down=1, distance=10, ballOn=47, quarter=4, clock=17,
+                                defScore=2, offTimeouts=0, frames=frames, hoops=True)
+            if frames:
+                scenario.game._frameIndex = 5
+                scenario.game.framesWonHome, scenario.game.framesWonAway = 2.0, 3.0
+            scenario.callPlay()
+            out[scenario.game.play.insights.get('playCall')] += 1
+            sideline += bool(scenario.game.play.targetSideline)
+        return out, sideline
+
+    def test_theReportedFinalFrame(self):
+        out, sideline = self._calls(frames=True)
+        self.assertEqual(out['hailMary'], TRIALS, out)
+        self.assertEqual(sideline, 0)
+
+    def test_standard(self):
+        out, sideline = self._calls(frames=False)
+        self.assertEqual(out['hailMary'], TRIALS, out)
+        self.assertEqual(sideline, 0)
+
+
 class NoPuntTheLeaderCanKneelOut(unittest.TestCase):
     """Prod game 4892, final frame: Jetskis down 7 on the match, last snap on their own
     48 with 0:22 left and no timeouts. They punted and the Pinecones knelt it out. A
