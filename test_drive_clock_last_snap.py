@@ -31,8 +31,12 @@ TRIALS = 30
 
 
 def lastSnap(*, down, distance, ballOn, snapsLeft=1, unit='plays', reset='possession',
-             quarter=1, clock=600, offScore=0, defScore=0):
+             quarter=1, clock=600, offScore=0, defScore=0, hoops=False, frames=False):
     rules = GameRules()
+    rules.sidelineGoalsEnabled = hoops
+    if frames:
+        rules.gameFormat = 'frames'
+        rules.framesPerGame = 6
     rules.driveClockEnabled = True
     rules.driveClockUnit = unit
     rules.driveClockReset = reset
@@ -118,6 +122,58 @@ class NotTheLastSnap(unittest.TestCase):
         """With a snap still to come the offense plays on; the last-snap decision waits."""
         out = calls(down=2, distance=6, ballOn=45, snapsLeft=2)
         self.assertEqual(out['Punt'] + out['FieldGoal'], 0, out)
+
+
+class FramesLastSnap(unittest.TestCase):
+    """Frames (and every non-standard format) decides a final down with the older branch
+    tree, not the fitted model. Read as 4th & goal, it kicked from the 3-5 on a last snap
+    (its go-for-it in range needs 2 yards or fewer), where the old early-down path ran a
+    play for the touchdown."""
+
+    def test_insideTheFiveGoesForTheTouchdown(self):
+        out = calls(down=2, distance=3, ballOn=3, quarter=1, clock=850, frames=True)
+        self.assertLessEqual(out['FieldGoal'], 3, out)
+
+
+def hoopShots(**kw):
+    shots = 0
+    for _ in range(TRIALS):
+        scenario = lastSnap(hoops=True, **kw)
+        scenario.callPlay()
+        shots += bool(getattr(scenario.game.play, 'isHoopShot', False))
+    return shots
+
+
+class SidelineGoalsSpendASnap(unittest.TestCase):
+    """A hoop shot gains no yards and spends a snap the way it spends a down, so its
+    final-down and second-to-last-down guards count the drive clock's snaps too
+    (`_seriesSnapsLeft`). They used to count downs only: down 4 at the 6 with two snaps
+    left, the offense spent snap 7 on a hoop to set up a tying kick (35 of 40) instead
+    of taking two shots at the winning touchdown."""
+
+    def test_snapsLeftIsTheDownsLeftOffTheClock(self):
+        game = lastSnap(down=2, distance=6, ballOn=45, snapsLeft=8).game
+        self.assertEqual(game._seriesSnapsLeft(), 3)
+        game = lastSnap(down=1, distance=10, ballOn=45, snapsLeft=2).game
+        self.assertEqual(game._seriesSnapsLeft(), 2)
+
+    def test_noHoopOnTheSecondToLastSnapWhenATouchdownStillWins(self):
+        self.assertLessEqual(hoopShots(down=1, distance=6, ballOn=6, snapsLeft=2,
+                                       quarter=4, clock=90, defScore=4), 2)
+
+    def test_noHoopOnTheLastSnapEvenWhenOneIsNeeded(self):
+        self.assertEqual(hoopShots(down=1, distance=10, ballOn=14, snapsLeft=1,
+                                   quarter=4, clock=180, defScore=9), 0)
+
+    def test_aNeededHoopIsStillTakenWithTwoSnapsLeft(self):
+        """Down 9: no touchdown reaches it alone, so hoop now, touchdown on the last."""
+        self.assertGreaterEqual(hoopShots(down=1, distance=10, ballOn=14, snapsLeft=2,
+                                          quarter=4, clock=180, defScore=9), 22)
+
+    def test_withSnapsToSpareTheHoopIsStillTaken(self):
+        """Measured over 400 games: a hoop with three or more snaps left is worth more
+        than the snap (barring it cost ~6 points a game), so it is not restricted."""
+        self.assertGreaterEqual(hoopShots(down=1, distance=10, ballOn=14, snapsLeft=6), 12)
 
 
 if __name__ == '__main__':
