@@ -14682,7 +14682,7 @@ class Game:
             if landing is not None and landing <= 10:
                 return '{}, downed at the {}'.format(base, landing)
             if retName and landing is not None:
-                text = '{}, fair catch by {} at the {}'.format(base, retName, landing)
+                text = '{}, fair catch by {} at {}'.format(base, retName, self._puntSpotText(landing))
             elif retName:
                 text = '{}, fair catch by {}'.format(base, retName)
             else:
@@ -14691,6 +14691,18 @@ class Game:
             text = base
 
         return text
+
+    def _puntSpotText(self, landing):
+        """Name a punt's landing spot the way a yard line reads. `landing` is yards from
+        the RECEIVING team's own goal (0-100), so a short punt can land past 50: that is
+        the KICKING team's side of the field. Printed raw it read "at the 60"."""
+        if landing < 50:
+            return 'the {}'.format(landing)
+        if landing == 50:
+            return 'midfield'
+        kicking = getattr(self.play, 'offense', None)
+        label = getattr(kicking, 'abbr', None) or getattr(kicking, 'name', None)
+        return 'the {} {}'.format(label, 100 - landing) if label else 'the {}'.format(100 - landing)
 
     def _shouldOnsideKick(self) -> bool:
         """

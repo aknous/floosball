@@ -116,3 +116,14 @@ def testReturnTouchdown():
 def testMissingReturnerDoesNotBreakIt():
     t = _text(gross=45, action='fairCatch', landing=30, returner=False)
     assert t.startswith('Dane Fulcher punts 45 yards')
+
+
+def testAShortPuntPastMidfieldNamesTheKickingTeamsSide():
+    # Prod: "shanks the punt, 18 yards, fair catch by Bitmap Forte at the 60".
+    # The landing is measured from the receiver's goal, so 60 is the kicker's 40.
+    t = _text(gross=18, result='shank', action='fairCatch', landing=60)
+    assert t == 'Dane Fulcher shanks the punt, 18 yards, fair catch by Cass Whitlow at the Rockets 40'
+
+
+def testAFairCatchAtTheFiftyIsMidfield():
+    assert _text(gross=30, action='fairCatch', landing=50).endswith('at midfield')
