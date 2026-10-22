@@ -4242,6 +4242,16 @@ class Game:
                 and ytg > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
             return
+        # ⚠️ EXCEPT ON A DRIVE CLOCK'S LAST SNAP FROM 30+ OUT, where going for it is a heave
+        # (`_finalSnapIsAHeave`): a team not behind punts. Prod game 5002: the Normals, up
+        # 5 with 3:17 left, threw a Hail Mary from the Caddies' 38 instead of pinning them.
+        # A team behind keeps the heave; a tied one too when a tie is short of a win.
+        if (self._finalSnapIsAHeave() and not inFieldGoalRange
+                and (scoreDiff > 0 or (scoreDiff == 0 and not self._frameTieIsShort()))
+                and not self.format.suppressPunt(self)):
+            self.play.insights['fourthDown']['decision'] = 'punt'
+            self.play.playType = PlayType.Punt
+            return
         if self.yardsToEndzone <= 40 and not leadingLate:
             goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
             # A FG that can't help — trailing by more than a field goal, late — must
@@ -14306,10 +14316,18 @@ class Game:
         # tempo REGARDLESS of the game clock or score: a fast huddle (visible hurry-up
         # in the feed) that also drains the drive clock far slower, so the offense
         # visibly races its own shot clock instead of turning it over.
+        # ⚠️ NOT FOR A LEADER AT THE END OF THE GAME ON A PLAYS CLOCK. A plays clock counts
+        # snaps, so a fast huddle saves none of it and only hands game time back, which
+        # is the one thing a leader late must not do. Prod game 5002: the Normals, up 5
+        # with 3:27 left, went no-huddle on the 7th snap of an 8-play drive. Everyone else
+        # keeps the hurry: dropping it league-wide slowed every drive's last two snaps
+        # and took ~4.6 points a game off scoring (3 seeds x 150 games).
         if self._driveClockActive():
             from constants import DRIVE_CLOCK_HURRY_FRAC
             _u = getattr(self.gameRules, 'driveClockUnit', 'seconds')
-            if (_u == 'plays' and self.driveClockRemaining <= 2) or \
+            _leaderLate = (self._periodEnd()[0] in ('game', 'overtime')
+                           and self._clockMargin() > 0)
+            if (_u == 'plays' and self.driveClockRemaining <= 2 and not _leaderLate) or \
                (_u == 'seconds' and self.driveClockRemaining <= DRIVE_CLOCK_HURRY_FRAC * self._driveClockLimitSecs()):
                 return ('hurryUp', 12)
 

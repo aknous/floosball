@@ -252,5 +252,53 @@ class SidelineGoalsSpendASnap(unittest.TestCase):
         self.assertGreaterEqual(hoopShots(down=1, distance=10, ballOn=14, snapsLeft=6), 12)
 
 
+
+class ALeaderPuntsInsteadOfHeaving(unittest.TestCase):
+    """Prod game 5002: the Normals, up 5 with 3:17 left, last snap on the Caddies' 38 and
+    out of field-goal range. The late-game tree's "never punt inside the opponent's 40"
+    sent it to a go, and a go from there is a heave."""
+
+    def _calls(self, **kw):
+        out = collections.Counter()
+        for _ in range(TRIALS):
+            scenario = lastSnap(**kw)
+            scenario.setKickerLeg('home', 50)          # range ends at the 33
+            out[str(scenario.callPlay()).replace('PlayType.', '')] += 1
+        return out
+
+    def test_aLeaderPunts(self):
+        out = self._calls(down=3, distance=4, ballOn=38, quarter=4, clock=197,
+                          offScore=23, defScore=18)
+        self.assertEqual(out['Punt'], TRIALS, out)
+
+    def test_aTeamBehindStillHeaves(self):
+        out = self._calls(down=3, distance=4, ballOn=38, quarter=4, clock=197,
+                          offScore=18, defScore=23)
+        self.assertEqual(out['Punt'], 0, out)
+
+
+class NoHurryOnAPlaysClock(unittest.TestCase):
+    """A plays clock counts snaps; a fast huddle saves none of them. Prod game 5002: up 5
+    with 3:27 left, the Normals went no-huddle on the 7th snap of an 8-play drive."""
+
+    def test_aLeaderLateDoesNotHurry(self):
+        game = lastSnap(down=2, distance=4, ballOn=38, snapsLeft=2, quarter=4, clock=207,
+                        offScore=23, defScore=18).game
+        self.assertNotEqual(game._classifyTempoIntent()[0], 'hurryUp')
+
+    def test_everyoneElseStillHurries(self):
+        game = lastSnap(down=2, distance=4, ballOn=38, snapsLeft=2, quarter=4, clock=207,
+                        offScore=18, defScore=23).game
+        self.assertEqual(game._classifyTempoIntent()[0], 'hurryUp')
+        game = lastSnap(down=2, distance=4, ballOn=38, snapsLeft=2, quarter=1, clock=600,
+                        offScore=23, defScore=18).game
+        self.assertEqual(game._classifyTempoIntent()[0], 'hurryUp')
+
+    def test_aSecondsClockStillHurries(self):
+        game = lastSnap(down=2, distance=4, ballOn=38, snapsLeft=10, unit='seconds',
+                        quarter=2, clock=600).game
+        self.assertEqual(game._classifyTempoIntent()[0], 'hurryUp')
+
+
 if __name__ == '__main__':
     unittest.main()
