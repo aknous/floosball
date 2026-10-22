@@ -16651,6 +16651,17 @@ class Game:
                 awayWinProb = 100 - homeWinProb
         return homeWinProb
 
+    def _scoreEndsPossession(self) -> bool:
+        """The play just scored and the ball goes back with a kick: every score but a
+        made sideline goal, after which the scorer keeps the ball and plays on. Win
+        probability prices a scoring play at the possession after it, so reading a hoop
+        as a kickoff handed the ball to the other team for one play: in prod game 4983
+        every make moved win probability against the team that made it (3-8 points),
+        and the next snap swung it back."""
+        play = getattr(self, 'play', None)
+        return (play is not None and bool(getattr(play, 'scoreChange', False))
+                and not getattr(play, 'hoopMade', False))
+
     def _wpClockFeatures(self, scoreDiff, total_seconds, eloHomeWp) -> dict:
         """The state the fitted clock model reads, from the home team's side. `wp_fit.py`
         records exactly this, so the fit and the engine cannot read the game differently.
@@ -16665,7 +16676,7 @@ class Game:
         down = int(self.down or 1)
         ytg = float(self.yardsToFirstDown or 10)
         play = getattr(self, 'play', None)
-        if play is not None and getattr(play, 'scoreChange', False):
+        if self._scoreEndsPossession():
             scorer = getattr(play, 'scoringTeam', None)
             if scorer is not None:
                 receiver = (scorer if getattr(play, 'isSafety', False)
@@ -16678,6 +16689,12 @@ class Game:
         p = min(99.5, max(0.5, float(eloHomeWp)))
         return {
             'homeLead': float(scoreDiff),
+            # Before the opening kickoff nobody has the ball (`offensiveTeam` is None and
+            # the spot reads 0), so no side gets a possession's value. Reading it as the
+            # away team on the goal line put every kickoff about a touchdown toward the
+            # away team; the first snap then booked the correction as a 4-15 point home
+            # swing, often a BIG PLAY with its momentum bonus (prod week 22, all 16 games).
+            'hasBall': offense is not None,
             'offenseIsHome': offense is self.homeTeam,
             'yte': yte,
             'downsLeft': max(0, int(self.gameRules.downsPerSeries) - down),
@@ -16696,6 +16713,8 @@ class Game:
         left = features['downsLeft']
         if left < len(WP_DOWN_PENALTY):
             value += WP_DOWN_PENALTY[left] * min(features['ytg'], 15.0) / 10.0
+        if not features.get('hasBall', True):
+            value = 0.0
         margin = (features['homeLead'] + (value if features['offenseIsHome'] else -value)
                   + WP_STRENGTH_PER_LOGIT * features['strengthLogit'] * features['timeLeft'])
         spread = WP_MARGIN_SIGMA * math.sqrt(features['timeLeft'] + WP_TIME_FLOOR)
@@ -16705,8 +16724,7 @@ class Game:
         """The fitted model, plus the one state it cannot see: a leader who can kneel the
         clock out has already won (`_kneelOutDetail`, the same test the play caller uses
         to take the kneel)."""
-        play = getattr(self, 'play', None)
-        if not (play is not None and getattr(play, 'scoreChange', False)):
+        if not self._scoreEndsPossession():
             offenseIsHome = self.offensiveTeam is self.homeTeam
             try:
                 if self._kneelOutDetail(offenseIsHome) is not None:
@@ -16843,7 +16861,7 @@ class Game:
         """
         # After any scoring play, field position is stale (ball is about to be
         # placed for a kickoff). Return neutral EP so it doesn't inflate the WP.
-        if hasattr(self, 'play') and self.play and getattr(self.play, 'scoreChange', False):
+        if self._scoreEndsPossession() or self.offensiveTeam is None:
             return 0.0
 
         # Field position value (0 = own goal line, 100 = opponent goal line)
