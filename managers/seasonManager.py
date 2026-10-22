@@ -8205,6 +8205,11 @@ class SeasonManager:
                            f"valuing on attributes alone: {e}")
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
                                  performanceMap=performanceMap)
+        # Start from the reads the Front Office desk has been showing all season
+        # (`projectedResigns`), so the GM decides with the same opinions fans saw.
+        desk = getattr(self, '_foDeskBrain', None)
+        if desk and desk[0] == season:
+            brain._scoutBeliefs = dict(desk[2]._scoutBeliefs)
         # Every cut path reads fan verdicts through `isCutProtected`; give it this read.
         from managers.playerManager import setFanSentiment
         setFanSentiment(sentimentMap)
@@ -8220,6 +8225,101 @@ class SeasonManager:
         brain.week = int(_DEADLINE_WEEK)
         self._foBrainCache = (season, brain)
         return brain
+
+    def _foBrainForDesk(self):
+        """The GM brain the Front Office desk projects re-signings with.
+
+        ⚠️ NOT `_foBrainForOffseason`. That one is cached for the whole offseason, so
+        building it mid-season would freeze this week's fan ratings and performance
+        history into the real decision. This one is rebuilt every
+        `FO_DESK_PROJECTION_TTL_SECS` with fresh inputs, but keeps ONE scouting-belief
+        cache for the season, so a GM's misreads hold from week to week instead of
+        re-rolling, and the offseason brain starts from the same reads. Once the
+        offseason brain exists for this season, the desk uses it."""
+        import time
+        from constants import FO_DESK_PROJECTION_TTL_SECS, GM_ACTIVE_WEEK
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        offseason = getattr(self, '_foBrainCache', None)
+        if offseason and offseason[0] == season:
+            return offseason[1]
+        desk = getattr(self, '_foDeskBrain', None)
+        now = time.monotonic()
+        if desk and desk[0] == season and now - desk[1] < FO_DESK_PROJECTION_TTL_SECS:
+            return desk[2]
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        sentimentMap, performanceMap = {}, {}
+        try:
+            from constants import SENTIMENT_ENABLED
+            if SENTIMENT_ENABLED:
+                from database.connection import get_session
+                from database.repositories.sentiment_repository import buildSentimentMap
+                sentimentMap = buildSentimentMap(get_session())
+        except Exception as e:
+            logger.debug(f"desk GM brain: sentiment unavailable: {e}")
+        try:
+            performanceMap = self._buildPerformanceMap()
+        except Exception as e:
+            logger.debug(f"desk GM brain: performance history unavailable: {e}")
+        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
+                                 performanceMap=performanceMap)
+        brain.season = int(season or 0)
+        brain.week = int(GM_ACTIVE_WEEK)
+        if desk and desk[0] == season:
+            brain._scoutBeliefs = desk[2]._scoutBeliefs
+        self._foDeskBrain = (season, now, brain)
+        return brain
+
+    def projectedResigns(self) -> dict:
+        """`{playerId: True if the GM is projected to re-sign him}` for every walk-year
+        player, from the same decision the offseason makes (`_resignDecision`).
+
+        A projection, not a result: the offseason decides with the final draft order, the
+        free-agent pool as it stands then and fan ratings up to that point. Cached for
+        `FO_DESK_PROJECTION_TTL_SECS`. Empty on failure, so a caller can fall back."""
+        import time
+        from constants import (FO_DESK_PROJECTION_TTL_SECS, RESIGN_LIMIT_ENABLED,
+                               RESIGN_LIMIT_PER_OFFSEASON)
+        # ⚠️ KEYED TO THE CALENDAR, NOT ONLY THE CLOCK. A time-only cache carried one
+        # season's projection into the next (a fast sim plays a season inside the TTL),
+        # so no walk-year player was found in it and the desk quietly fell back to the
+        # rating guess. The walk-year set changes at the offseason contract step, so the
+        # phase is part of the key too.
+        cacheKey = (getattr(self.currentSeason, 'seasonNumber', None),
+                    getattr(self.currentSeason, 'currentWeek', None),
+                    getattr(self, '_offseasonFlowPhase', None))
+        cached = getattr(self, '_projectedResignsCache', None)
+        now = time.monotonic()
+        if (cached and cached[2] == cacheKey
+                and now - cached[0] < FO_DESK_PROJECTION_TTL_SECS):
+            return cached[1]
+        out = {}
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = [t for t in (getattr(teamManager, 'teams', None) or [])
+                     if getattr(t, 'id', None) is not None]
+            brain = self._foBrainForDesk()
+            from standings_view import projectedDraftOrder
+            ids, _final = projectedDraftOrder(
+                teams, getattr(self.leagueManager, 'leagues', None),
+                getattr(self.currentSeason, 'freeAgencyOrder', None))
+            byId = {t.id: t for t in teams}
+            faOrder = [byId[i] for i in ids if i in byId]
+            try:
+                slotOwners = [owner for _o, owner in self._rookieDraftSlots(list(faOrder))]
+            except Exception:
+                slotOwners = []
+            limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+            for team in teams:
+                expiring, forcedWalk, kept, _d, _a = self._resignDecision(
+                    team, brain, faOrder, slotOwners, limit)
+                keptIds = {id(p) for p in kept}
+                for p in expiring + forcedWalk:
+                    out[getattr(p, 'id', None)] = id(p) in keptIds
+        except Exception as e:
+            logger.warning(f"re-sign projection unavailable: {e}")
+            out = {}
+        self._projectedResignsCache = (now, out, cacheKey)
+        return out
 
     def _buildPerformanceMap(self) -> dict:
         """{playerId: [(season, ratingThatSeason, performanceThatSeason), ...]}, oldest first.
@@ -8866,6 +8966,75 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
+    def _resignDecision(self, team, brain, faOrder, slotOwners, limit):
+        """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,
+        teamsAhead)`. Read-only: nothing on the players changes here.
+
+        ⚠️ ONE DEFINITION FOR THE OFFSEASON AND THE FRONT OFFICE DESK. The desk used to
+        guess who a team keeps by taking its two highest-rated walk-year players, which
+        kept a 91 kicker over an 80 receiver the GM values at nearly twice as much
+        (Strangers, season 11). It now asks this (`projectedResigns`).
+        """
+        coach = getattr(team, 'coach', None)
+        expiring, forcedWalk = [], []
+        for p in team.rosterDict.values():
+            if p is None or getattr(p, 'willRetire', False):
+                continue  # empty slot, or retires in STEP 3 (vacates)
+            if (getattr(p, 'termRemaining', 0) or 0) > 1:
+                continue  # stays on current deal
+            if self.playerManager.hasReachedResignLimit(p):
+                forcedWalk.append(p)    # limit re-enabled — must walk
+            else:
+                expiring.append(p)      # contract up → keep only if the GM wants them
+
+        # GM BRAIN decides. A slot is spent only where the incumbent beats
+        # the best replacement available at his position, so a good player
+        # the market can replace is allowed to walk while a modest one with
+        # nothing behind him is kept.
+        # ⚠️ `team=` is load-bearing on BOTH calls: it applies destination
+        # preference (a club must not plan around a free agent who would
+        # refuse it) and the Scouting Department's vision bonus. Omitted
+        # until 2026-08-13, which silently disabled both for retention.
+        pickDepth = brain.faPickDepth(team, faOrder)
+        # Raw count of clubs picking first, which the confidence model needs
+        # (pickDepth is already the discounted expectation built from it).
+        teamsAhead = brain.faTeamsAhead(team, faOrder)
+        # ⚠️ `teamsAhead` is load-bearing here now, not just for cuts. The re-sign
+        # decision asks how likely a better player survives to this club's pick, and
+        # with teamsAhead defaulting to 0 every club believes it picks first, so
+        # nobody is ever worth keeping over the market.
+        # The club's own replacements: its prospects, and the rookies it will take
+        # with a top pick in this draft (`slotOwners`, read once above the loop).
+        # ⚠️ READ AGAINST THE PROSPECT WINDOW, which advances at step 3.78, after
+        # this. A prospect on WINDOW-1 washes out there unless step 3.78's last look
+        # (`_promoteWashoutProspects`) promotes him, and it promotes him straight into
+        # a slot this decision leaves open. One on WINDOW-2 reaches the FA kickoff on
+        # a final window. Both are weighed the way that promotion will weigh them
+        # (`lastChance`: roughly matching the starter), so the club chooses between
+        # the starter and the prospect here, instead of keeping the starter by
+        # default and losing the prospect (owner, 2026-10-17). Prod season 10: the
+        # Raccoons let Crunchtime McCown (79) walk at this step and then released
+        # Dearie Lizardo (86), a WINDOW-1 prospect who was left out of this list,
+        # into free agency with their TE slot empty.
+        from constants import PROSPECT_DEVELOPMENT_WINDOW
+        internal, lastChance = [], set()
+        for pr in (getattr(team, 'prospects', None) or []):
+            if not getattr(pr, 'is_prospect', False):
+                continue
+            served = int(getattr(pr, 'prospect_seasons', 0) or 0)
+            internal.append(pr)
+            if served >= PROSPECT_DEVELOPMENT_WINDOW - 2:
+                lastChance.add(id(pr))
+        try:
+            internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
+        except Exception as e:
+            logger.debug(f"expected draftees unavailable for {team.name}: {e}")
+        kept = brain.chooseResigns(expiring, limit, coach=coach,
+                                   pickDepth=pickDepth, team=team,
+                                   teamsAhead=teamsAhead, internal=internal,
+                                   lastChance=lastChance)
+        return expiring, forcedWalk, kept, pickDepth, teamsAhead
+
     def _applyRetentionLimits(self) -> None:
         """Per team, decide which EXPIRING players (contract up this offseason) get
         RE-SIGNED vs walk to FA.
@@ -8952,63 +9121,8 @@ class SeasonManager:
 
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
-            expiring, forcedWalk = [], []
-            for p in team.rosterDict.values():
-                if p is None or getattr(p, 'willRetire', False):
-                    continue  # empty slot, or retires in STEP 3 (vacates)
-                if (getattr(p, 'termRemaining', 0) or 0) > 1:
-                    continue  # stays on current deal
-                if self.playerManager.hasReachedResignLimit(p):
-                    forcedWalk.append(p)    # limit re-enabled — must walk
-                else:
-                    expiring.append(p)      # contract up → keep only if the GM wants them
-
-            # GM BRAIN decides. A slot is spent only where the incumbent beats
-            # the best replacement available at his position, so a good player
-            # the market can replace is allowed to walk while a modest one with
-            # nothing behind him is kept.
-            # ⚠️ `team=` is load-bearing on BOTH calls: it applies destination
-            # preference (a club must not plan around a free agent who would
-            # refuse it) and the Scouting Department's vision bonus. Omitted
-            # until 2026-08-13, which silently disabled both for retention.
-            pickDepth = brain.faPickDepth(team, faOrder)
-            # Raw count of clubs picking first, which the confidence model needs
-            # (pickDepth is already the discounted expectation built from it).
-            teamsAhead = brain.faTeamsAhead(team, faOrder)
-            # ⚠️ `teamsAhead` is load-bearing here now, not just for cuts. The re-sign
-            # decision asks how likely a better player survives to this club's pick, and
-            # with teamsAhead defaulting to 0 every club believes it picks first, so
-            # nobody is ever worth keeping over the market.
-            # The club's own replacements: its prospects, and the rookies it will take
-            # with a top pick in this draft (`slotOwners`, read once above the loop).
-            # ⚠️ READ AGAINST THE PROSPECT WINDOW, which advances at step 3.78, after
-            # this. A prospect on WINDOW-1 washes out there unless step 3.78's last look
-            # (`_promoteWashoutProspects`) promotes him, and it promotes him straight into
-            # a slot this decision leaves open. One on WINDOW-2 reaches the FA kickoff on
-            # a final window. Both are weighed the way that promotion will weigh them
-            # (`lastChance`: roughly matching the starter), so the club chooses between
-            # the starter and the prospect here, instead of keeping the starter by
-            # default and losing the prospect (owner, 2026-10-17). Prod season 10: the
-            # Raccoons let Crunchtime McCown (79) walk at this step and then released
-            # Dearie Lizardo (86), a WINDOW-1 prospect who was left out of this list,
-            # into free agency with their TE slot empty.
-            from constants import PROSPECT_DEVELOPMENT_WINDOW
-            internal, lastChance = [], set()
-            for pr in (getattr(team, 'prospects', None) or []):
-                if not getattr(pr, 'is_prospect', False):
-                    continue
-                served = int(getattr(pr, 'prospect_seasons', 0) or 0)
-                internal.append(pr)
-                if served >= PROSPECT_DEVELOPMENT_WINDOW - 2:
-                    lastChance.add(id(pr))
-            try:
-                internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
-            except Exception as e:
-                logger.debug(f"expected draftees unavailable for {team.name}: {e}")
-            kept = brain.chooseResigns(expiring, limit, coach=coach,
-                                       pickDepth=pickDepth, team=team,
-                                       teamsAhead=teamsAhead, internal=internal,
-                                       lastChance=lastChance)
+            expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
+                team, brain, faOrder, slotOwners, limit)
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds
