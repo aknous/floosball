@@ -18369,10 +18369,16 @@ class Play():
         coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
         passRusherRun = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
         lbPlayer = coverageAssignments.get('te')  # LB = defense team's RB, assigned to cover TE
-        if gapType in ('A-gap', 'B-gap'):
-            self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
-        else:
-            self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
+        # ⚠️ THE LEVEL MODEL ALREADY NAMED THE TACKLER, AND THIS USED TO OVERWRITE HIM.
+        # `_resolveRunGates` sets the defender who stopped the carrier at the line, the
+        # second level or in the secondary; reassigning the LB / DE here on every run gave
+        # them every run tackle wherever the carrier was brought down. The gap pick is
+        # only for runs the level model did not resolve (the sneak, the flat cascade).
+        if getattr(self, '_gateOutcome', None) is None:
+            if gapType in ('A-gap', 'B-gap'):
+                self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
+            else:
+                self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
         # Derived here rather than read from _defFire, which is assigned further
         # down (below the fumble check) — this block moved above it.
         _defFireEarly = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
@@ -18515,15 +18521,7 @@ class Play():
 
         # Per-player defensive stats for run plays
         isReg = self.game.isRegularSeasonGame
-        if self.tackledBy and hasattr(self.tackledBy, 'stat_tracker'):
-            self.tackledBy.stat_tracker.add_tackle(isReg)
-            if self.yardage <= 0:
-                self.tackledBy.stat_tracker.add_tfl(isReg)
-        # Safety (QB on defense) gets tackle on runs that break into secondary (10+ yards)
-        # or assist tackle on moderate gains (5+ yards)
-        safetyPlayer = coverageAssignments.get('rb')  # Safety = defense team's QB
-        if safetyPlayer and hasattr(safetyPlayer, 'stat_tracker') and self.yardage >= 5:
-            safetyPlayer.stat_tracker.add_tackle(isReg)
+        self._creditTackle(self.tackledBy, tfl=True)
         if self.forcedFumbleBy and hasattr(self.forcedFumbleBy, 'stat_tracker'):
             self.forcedFumbleBy.stat_tracker.add_forced_fumble(isReg)
 
@@ -18863,8 +18861,7 @@ class Play():
             self.passer.gameStatsDict['rushing']['20+'] += 1
         if yds > self.passer.gameStatsDict['rushing']['longest']:
             self.passer.gameStatsDict['rushing']['longest'] = yds
-        if tackler and hasattr(tackler, 'stat_tracker'):
-            tackler.stat_tracker.add_tackle(isReg)
+        self._creditTackle(tackler, gain=yds)
 
         # Small fumble chance on the scramble (credit the tackler if lost) — never on an awakened fire.
         # Never once he has broken the plane — a scoring scramble is a dead ball (see runPlay).
@@ -18933,8 +18930,10 @@ class Play():
             rb.gameStatsDict['receiving']['longest'] = yards
         self.defense.gameDefenseStats['passYardsAlwd'] += yards
         self.defense.gameDefenseStats['totalYardsAlwd'] += yards
-        if tackler and hasattr(tackler, 'stat_tracker'):
-            tackler.stat_tracker.add_tackle(isReg)
+        # Name him on the play, as every other tackle does (text, defensive WPA, the
+        # tackler's confidence); the checkdown credited the stat and left this unset.
+        self.tackledBy = tackler
+        self._creditTackle(tackler, gain=yards)
         return True
 
     def calculatePressureImpact(self, rushDifferential: float) -> float:
@@ -19173,10 +19172,32 @@ class Play():
                         'state': state, 'moves': moves,
                         'firstContactYards': firstContactYards}
             breaks += 1
+        # Past every level: the secondary defender he beat is the one chasing him down.
+        # (On a touchdown nobody tackled him; `_creditTackle` books nothing then.)
+        self.tackledBy = tackler
         remaining = self.yardsToEndzone - self.yardage
         self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
         return {'level': 4, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins, 'state': state,
                 'moves': moves, 'firstContactYards': firstContactYards}
+
+    def _creditTackle(self, defender, gain=None, tfl: bool = False) -> None:
+        """Book ONE tackle for the defender who brought the carrier down.
+
+        ⚠️ THE TACKLE STAT USED TO BE CREDITED BY WHAT THE DEFENSE GAVE UP (fixed
+        2026-10-22): the safety got a tackle on every run of 5+ yards and every
+        completion of 15+ on top of the real tackler, the covering defender one on
+        every completion including touchdowns, and every run tackle went to the LB or
+        DE (see `runPlay`). Now a tackled carrier credits exactly one defender, and a
+        carrier who scores credits nobody. `gain` defaults to this play's yardage."""
+        if defender is None or not hasattr(defender, 'stat_tracker'):
+            return
+        gain = self.yardage if gain is None else gain
+        if gain >= self.yardsToEndzone:
+            return
+        isReg = self.game.isRegularSeasonGame
+        defender.stat_tracker.add_tackle(isReg)
+        if tfl and gain <= 0:
+            defender.stat_tracker.add_tfl(isReg)
 
     def _shortOfPlane(self, gain: float) -> int:
         """Whole yards for a carrier stopped `gain` yards downfield, never rounded across
@@ -20966,21 +20987,17 @@ class Play():
                     self.defense.updateInGameConfidence(-confBoost)
                     self.isPassCompletion = True
                     
-                    # Per-player defensive stat: covering defender gets tackle on completion
+                    # The covering defender makes the tackle, or the safety on a deep
+                    # completion. ONE tackle: both used to be credited on a 15+ yard catch,
+                    # and the covering defender got one even on a touchdown.
                     isReg = self.game.isRegularSeasonGame
-                    if coveringDefender and hasattr(coveringDefender, 'stat_tracker'):
-                        coveringDefender.stat_tracker.add_tackle(isReg)
-                    # Safety gets tackle on longer completions (deep help / last line)
                     safetyPlayer = coverageAssignments.get('rb')
-                    if safetyPlayer and hasattr(safetyPlayer, 'stat_tracker') and self.yardage >= 15:
-                        safetyPlayer.stat_tracker.add_tackle(isReg)
-
-                    # Fumble on catch — defender strips the ball on the tackle
                     primaryTackler = coveringDefender
                     if safetyPlayer and self.yardage >= 15:
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
+                    self._creditTackle(primaryTackler)
                     # The strip check is the receiving half of the same ball-security
                     # question the run game asks, so it takes the same weather key —
                     # otherwise a wet ball is only wet when a back is holding it.
