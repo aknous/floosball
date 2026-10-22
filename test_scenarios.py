@@ -76,8 +76,11 @@ goes = sum(c in (PlayType.Run, PlayType.Pass) for c in calls)
 expect(f"4th & 2: mostly goes ({goes}/50 >= 35)", goes >= 35)
 
 
-# ── 4. Late-game timeout for a tied team in FG range ─────────────────────
-print("4. Tied team in FG range burns timeouts late; not in deep territory")
+# ── 4. Late-game timeouts for a tied team near FG range ──────────────────
+# Already in COMFORTABLE range, the clock is the tied team's friend: it scores last, so it
+# mostly runs the clock (a coach call, `_isFgSecuredDrain`, 2026-10-19). Just outside
+# comfortable range it still stops the clock to bank time to get there.
+print("4. Tied team: runs the clock in comfortable FG range, stops it short of it")
 s = Scenario()
 random.seed(3)
 def toCount(clock, ballOn):
@@ -85,12 +88,14 @@ def toCount(clock, ballOn):
                            down=2, distance=7, ballOn=ballOn, offTimeouts=3, defTimeouts=3,
                            clockRunning=True).clockDecision() == 'timeout'
                for _ in range(60))
-inRange_240 = toCount(160, 30)     # 2:40, in FG range
+inRange_150 = toCount(110, 20)     # 1:50, a 37-yard kick
+short_240   = toCount(160, 40)     # 2:40, a 57-yard kick: not yet comfortable
 deep_240    = toCount(160, 72)     # 2:40, own territory
-inRange_150 = toCount(110, 30)     # 1:50 (inside 2:00), in FG range
-expect("at 2:40 in FG range, timeout fires sometimes (was 0 before the window fix)", inRange_240 > 0)
+short_150   = toCount(110, 40)     # 1:50, still short of comfortable range
+expect(f"inside 2:00 in comfortable range, mostly runs the clock ({inRange_150}/60 <= 30)", inRange_150 <= 30)
+expect(f"at 2:40 just short of comfortable range, timeout fires sometimes ({short_240}/60)", short_240 > 0)
 expect("at 2:40 in deep territory, timeout does NOT fire", deep_240 == 0)
-expect("inside 2:00 in FG range, timeout fires almost always (>=50/60)", inRange_150 >= 50)
+expect(f"inside 2:00 short of comfortable range, timeout fires almost always ({short_150}/60 >= 50)", short_150 >= 50)
 
 
 # ── 5. Kneel on 4th down only when it ends the game ──────────────────────

@@ -1050,7 +1050,8 @@ class SeasonManager:
             for event in newClinchEvents:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': event['text']}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(event['text']))
+                    await broadcaster.broadcast_season_event(
+                        LeagueNewsEvent.leagueNews(event['text'], 'standings', event['type']))
                 if event['type'] == 'clinch_playoff':
                     self._awardFavoriteTeamBonus(
                         event['teamId'], CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
@@ -1782,7 +1783,7 @@ class SeasonManager:
 
     def _carryForwardEquippedCards(self, session, equippedRepo, season: int, currentWeek: int) -> None:
         """Carry forward equipped cards from the most recent week for users who don't have any yet."""
-        from database.models import EquippedCard, UserCard, CardTemplate
+        from database.models import EquippedCard, UserCard, CardTemplate, FantasyRoster
         from sqlalchemy import func
 
         # Find users who already have rows for this week — skip them
@@ -1807,10 +1808,20 @@ class SeasonManager:
         if not needsCarry:
             return
 
+        # A user's last explicit lineup set bounds the lookback: if that week is empty,
+        # they emptied it on purpose (between weeks, edits land on the week just played),
+        # and carrying an older lineup past it would undo that. Set this week → no carry.
+        lastSetWeek = dict(
+            session.query(FantasyRoster.user_id, FantasyRoster.last_equipped_set_week)
+            .filter(FantasyRoster.season == season, FantasyRoster.user_id.in_(needsCarry))
+            .all()
+        )
+
         carried = 0
         for userId in needsCarry:
+            floor = lastSetWeek.get(userId) or 1
             # Find the most recent week with equipped cards
-            for lookback in range(currentWeek - 1, 0, -1):
+            for lookback in range(currentWeek - 1, floor - 1, -1):
                 prevEquipped = equippedRepo.getByUserWeek(userId, season, lookback)
                 if prevEquipped:
                     for prev in prevEquipped:
@@ -5549,7 +5560,8 @@ class SeasonManager:
                 _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
+                    await broadcaster.broadcast_season_event(
+                        LeagueNewsEvent.leagueNews(_topSeedText, 'standings', 'clinch_topseed'))
 
             season_str_div = 'Season {}'.format(self.currentSeason.seasonNumber)
 
@@ -5596,7 +5608,7 @@ class SeasonManager:
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _divText}})
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                         await broadcaster.broadcast_season_event(
-                            LeagueNewsEvent.leagueNews(_divText))
+                            LeagueNewsEvent.leagueNews(_divText, 'standings', 'clinch_division'))
 
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
@@ -5632,7 +5644,8 @@ class SeasonManager:
                         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
                         self._publishTeamNews('clinched', _clinchText, team, lead=True)
                         if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                            await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
+                            await broadcaster.broadcast_season_event(
+                                LeagueNewsEvent.leagueNews(_clinchText, 'standings', 'clinch_playoff'))
 
         for team in nonPlayoffTeamList:
             team: FloosTeam.Team
@@ -5645,7 +5658,8 @@ class SeasonManager:
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
                     self._publishTeamNews('eliminated', _elimText, team)
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
+                        await broadcaster.broadcast_season_event(
+                            LeagueNewsEvent.leagueNews(_elimText, 'standings', 'eliminated'))
 
 
         # freeAgencyOrder seeding: on a fresh run, start it with the non-playoff
@@ -6038,7 +6052,8 @@ class SeasonManager:
                                 _playoffElimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
                                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _playoffElimText}})
                                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_playoffElimText))
+                                    await broadcaster.broadcast_season_event(
+                                        LeagueNewsEvent.leagueNews(_playoffElimText, 'standings', 'playoff_eliminated'))
                                 roundLosers.append(team)
                                 playoffTeams[league.name].remove(team)
                                 break
@@ -6081,6 +6096,7 @@ class SeasonManager:
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
+                        weekText=self.currentWeekText,
                         results=playoffResults,
                         nextGameStartTime=nextStartIso,
                     )
@@ -6100,6 +6116,7 @@ class SeasonManager:
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
+                        weekText=self.currentWeekText,
                         results=finalResults,
                         nextGameStartTime=None,
                     )
@@ -6879,6 +6896,18 @@ class SeasonManager:
         # re-run on a restart would age every prospect twice and wash out a class
         # early. The offseason is exactly where this project's restarts land.
         if not self._isOffseasonStepComplete('prospect_window'):
+            # ⚠️ THE LAST LOOK BEFORE THE RELEASE (owner, 2026-10-17: "the team should
+            # always be looking at their last chance prospects for promotion"). Prod
+            # season 10: Raccoons' Dearie Lizardo (TE, 86) was released here with the
+            # club's TE slot EMPTY, because Crunchtime McCown had walked at step 3 and
+            # the only promotion pass after that was the FA kickoff, which comes after
+            # this release. Every prospect about to wash out is weighed now, into an
+            # open slot or by cutting a roster player (`_promoteProspectsAutonomously`
+            # with the final-window rules).
+            try:
+                await self._promoteWashoutProspects()
+            except Exception as e:
+                logger.error(f"Washout promotion pass failed: {e}")
             try:
                 windowResult = self.playerManager._advanceProspectWindow()
                 _tm = self.serviceContainer.getService('team_manager')
@@ -7882,39 +7911,62 @@ class SeasonManager:
         for team in faOrder:
             # The fan ballot that used to drive this is gone with the GM vote
             # system; the front-office brain decides promotions now.
-            promotions = self._promoteProspectsAutonomously(team)
-            for promo in promotions:
-                teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
-                entry = {
-                    'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                    'playerId': promo.get('id'),
-                    'player': promo['name'], 'position': promo['position'],
-                    'rating': promo['rating'], 'tier': promo['tier'],
-                    'isPromotion': True,
-                    'slot': promo.get('slot'),
-                }
-                self._offseasonTransactions.append(entry)
-                self._recordOffseasonEvent(
-                    'promotion', teamName=team.name, teamAbbr=teamAbbr, teamId=getattr(team, 'id', None),
-                    playerId=promo.get('id'), playerName=promo['name'], position=promo['position'],
-                    rating=promo['rating'], tier=promo['tier'])
-                if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
-                    try:
-                        await broadcaster.broadcast_season_event(
-                            OffseasonEvent.pick(
-                                team.name, teamAbbr,
-                                promo['name'], promo['position'],
-                                promo['rating'], promo['tier'],
-                                isPromotion=True,
-                                playerId=promo.get('id'),
-                                slot=promo.get('slot'),
-                            )
+            await self._recordPromotions(team, self._promoteProspectsAutonomously(team))
+
+    async def _promoteWashoutProspects(self) -> None:
+        """Step 3.78: before `_advanceProspectWindow` releases this offseason's washouts,
+        give each team one last look at them. A prospect goes into an open slot, or the
+        team cuts a roster player for him if he roughly matches (the final-window rules
+        in `_cutPlanForProspect`); otherwise he is released as before.
+
+        Teams go worst-first (the FA order where the sim has built it), the same order
+        the kickoff pass uses."""
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager or not self.currentSeason:
+            return
+        teams = list(getattr(self.currentSeason, 'freeAgencyOrder', None) or [])
+        for team in getattr(teamManager, 'teams', None) or []:
+            if team not in teams:
+                teams.append(team)
+        for team in teams:
+            promotions = self._promoteProspectsAutonomously(team, washoutOnly=True)
+            if promotions:
+                await self._recordPromotions(team, promotions)
+
+    async def _recordPromotions(self, team, promotions: list) -> None:
+        """Log, persist and broadcast promotions (offseason feed, recap log, WS)."""
+        for promo in promotions:
+            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+            entry = {
+                'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                'playerId': promo.get('id'),
+                'player': promo['name'], 'position': promo['position'],
+                'rating': promo['rating'], 'tier': promo['tier'],
+                'isPromotion': True,
+                'slot': promo.get('slot'),
+            }
+            self._offseasonTransactions.append(entry)
+            self._recordOffseasonEvent(
+                'promotion', teamName=team.name, teamAbbr=teamAbbr, teamId=getattr(team, 'id', None),
+                playerId=promo.get('id'), playerName=promo['name'], position=promo['position'],
+                rating=promo['rating'], tier=promo['tier'])
+            if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
+                try:
+                    await broadcaster.broadcast_season_event(
+                        OffseasonEvent.pick(
+                            team.name, teamAbbr,
+                            promo['name'], promo['position'],
+                            promo['rating'], promo['tier'],
+                            isPromotion=True,
+                            playerId=promo.get('id'),
+                            slot=promo.get('slot'),
                         )
-                        # Same 100ms breath as FA picks — keeps each
-                        # promotion as its own React render tick.
-                        await asyncio.sleep(0.1)
-                    except Exception as e:
-                        logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
+                    )
+                    # Same 100ms breath as FA picks — keeps each
+                    # promotion as its own React render tick.
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
 
     def _draftOrderIds(self) -> list:
         """The upcoming rookie draft's order as team ids: the real order once the sim has
@@ -8153,6 +8205,11 @@ class SeasonManager:
                            f"valuing on attributes alone: {e}")
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
                                  performanceMap=performanceMap)
+        # Start from the reads the Front Office desk has been showing all season
+        # (`projectedResigns`), so the GM decides with the same opinions fans saw.
+        desk = getattr(self, '_foDeskBrain', None)
+        if desk and desk[0] == season:
+            brain._scoutBeliefs = dict(desk[2]._scoutBeliefs)
         # Every cut path reads fan verdicts through `isCutProtected`; give it this read.
         from managers.playerManager import setFanSentiment
         setFanSentiment(sentimentMap)
@@ -8168,6 +8225,101 @@ class SeasonManager:
         brain.week = int(_DEADLINE_WEEK)
         self._foBrainCache = (season, brain)
         return brain
+
+    def _foBrainForDesk(self):
+        """The GM brain the Front Office desk projects re-signings with.
+
+        ⚠️ NOT `_foBrainForOffseason`. That one is cached for the whole offseason, so
+        building it mid-season would freeze this week's fan ratings and performance
+        history into the real decision. This one is rebuilt every
+        `FO_DESK_PROJECTION_TTL_SECS` with fresh inputs, but keeps ONE scouting-belief
+        cache for the season, so a GM's misreads hold from week to week instead of
+        re-rolling, and the offseason brain starts from the same reads. Once the
+        offseason brain exists for this season, the desk uses it."""
+        import time
+        from constants import FO_DESK_PROJECTION_TTL_SECS, GM_ACTIVE_WEEK
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        offseason = getattr(self, '_foBrainCache', None)
+        if offseason and offseason[0] == season:
+            return offseason[1]
+        desk = getattr(self, '_foDeskBrain', None)
+        now = time.monotonic()
+        if desk and desk[0] == season and now - desk[1] < FO_DESK_PROJECTION_TTL_SECS:
+            return desk[2]
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        sentimentMap, performanceMap = {}, {}
+        try:
+            from constants import SENTIMENT_ENABLED
+            if SENTIMENT_ENABLED:
+                from database.connection import get_session
+                from database.repositories.sentiment_repository import buildSentimentMap
+                sentimentMap = buildSentimentMap(get_session())
+        except Exception as e:
+            logger.debug(f"desk GM brain: sentiment unavailable: {e}")
+        try:
+            performanceMap = self._buildPerformanceMap()
+        except Exception as e:
+            logger.debug(f"desk GM brain: performance history unavailable: {e}")
+        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
+                                 performanceMap=performanceMap)
+        brain.season = int(season or 0)
+        brain.week = int(GM_ACTIVE_WEEK)
+        if desk and desk[0] == season:
+            brain._scoutBeliefs = desk[2]._scoutBeliefs
+        self._foDeskBrain = (season, now, brain)
+        return brain
+
+    def projectedResigns(self) -> dict:
+        """`{playerId: True if the GM is projected to re-sign him}` for every walk-year
+        player, from the same decision the offseason makes (`_resignDecision`).
+
+        A projection, not a result: the offseason decides with the final draft order, the
+        free-agent pool as it stands then and fan ratings up to that point. Cached for
+        `FO_DESK_PROJECTION_TTL_SECS`. Empty on failure, so a caller can fall back."""
+        import time
+        from constants import (FO_DESK_PROJECTION_TTL_SECS, RESIGN_LIMIT_ENABLED,
+                               RESIGN_LIMIT_PER_OFFSEASON)
+        # ⚠️ KEYED TO THE CALENDAR, NOT ONLY THE CLOCK. A time-only cache carried one
+        # season's projection into the next (a fast sim plays a season inside the TTL),
+        # so no walk-year player was found in it and the desk quietly fell back to the
+        # rating guess. The walk-year set changes at the offseason contract step, so the
+        # phase is part of the key too.
+        cacheKey = (getattr(self.currentSeason, 'seasonNumber', None),
+                    getattr(self.currentSeason, 'currentWeek', None),
+                    getattr(self, '_offseasonFlowPhase', None))
+        cached = getattr(self, '_projectedResignsCache', None)
+        now = time.monotonic()
+        if (cached and cached[2] == cacheKey
+                and now - cached[0] < FO_DESK_PROJECTION_TTL_SECS):
+            return cached[1]
+        out = {}
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = [t for t in (getattr(teamManager, 'teams', None) or [])
+                     if getattr(t, 'id', None) is not None]
+            brain = self._foBrainForDesk()
+            from standings_view import projectedDraftOrder
+            ids, _final = projectedDraftOrder(
+                teams, getattr(self.leagueManager, 'leagues', None),
+                getattr(self.currentSeason, 'freeAgencyOrder', None))
+            byId = {t.id: t for t in teams}
+            faOrder = [byId[i] for i in ids if i in byId]
+            try:
+                slotOwners = [owner for _o, owner in self._rookieDraftSlots(list(faOrder))]
+            except Exception:
+                slotOwners = []
+            limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+            for team in teams:
+                expiring, forcedWalk, kept, _d, _a = self._resignDecision(
+                    team, brain, faOrder, slotOwners, limit)
+                keptIds = {id(p) for p in kept}
+                for p in expiring + forcedWalk:
+                    out[getattr(p, 'id', None)] = id(p) in keptIds
+        except Exception as e:
+            logger.warning(f"re-sign projection unavailable: {e}")
+            out = {}
+        self._projectedResignsCache = (now, out, cacheKey)
+        return out
 
     def _buildPerformanceMap(self) -> dict:
         """{playerId: [(season, ratingThatSeason, performanceThatSeason), ...]}, oldest first.
@@ -8264,6 +8416,8 @@ class SeasonManager:
                 logger.warning(f"FA board build failed for {getattr(team, 'name', '?')}: {e}")
         self.playerManager._faDraftBoards = boards
         self.playerManager._faCutBars = cutBars
+        # The open-slot prospect-or-free-agent rule reads the same GM (`_attemptRosterFill`).
+        self.playerManager._faBrain = brain
         # ⚠️ AND WHY ANYONE IS MISSING FROM A BOARD, so a pick can explain itself. See
         # `buildDraftBoard`'s note: a fan watching a five-star go unpicked assumes the club
         # blundered, and the club may simply have been turned down.
@@ -8283,16 +8437,15 @@ class SeasonManager:
 
     @staticmethod
     def _isFinalProspectWindow(prospect) -> bool:
-        """Is this the last offseason this club can promote him?
+        """Is this prospect on a final window (the lenient last-chance rules)?
 
-        ⚠️ THE PROMOTION PASS THAT MATTERS RUNS AT THE FA DRAFT KICKOFF
-        (`_applyFanVotedPromotions`), AFTER `_advanceProspectWindow` (step 3.78) has
-        already incremented every prospect and released anyone at
-        `PROSPECT_DEVELOPMENT_WINDOW`. The step-3.75 pass only promotes with
-        broadcasting off. So at the kickoff a prospect on WINDOW-1 has already been
-        advanced, and the NEXT offseason's step 3.78 releases him before the next
-        kickoff: this is his last chance. (An earlier docstring said this pass ran
-        immediately before the release; in production it runs a full year before it.)
+        True at prospect_seasons >= WINDOW-1, which covers two passes:
+          - the FA draft kickoff (`_applyFanVotedPromotions`), after step 3.78 has
+            advanced him to WINDOW-1: next offseason's step 3.78 releases him;
+          - step 3.78's own last look (`_promoteWashoutProspects`), just BEFORE
+            `_advanceProspectWindow` takes him to WINDOW and releases him.
+        The second was added 2026-10-17: until then a prospect who missed at the
+        kickoff was released the next offseason even into an open slot.
         """
         from constants import PROSPECT_DEVELOPMENT_WINDOW, LAST_WINDOW_PROMOTE_ENABLED
         if not LAST_WINDOW_PROMOTE_ENABLED:
@@ -8314,8 +8467,8 @@ class SeasonManager:
              over the commitment, how he and the team played last season), and the bar
              (`brain.moveOnBar`) moves with the GM's aggressiveness. On a FINAL window
              the prospect only has to roughly match him: on value
-             (FO_PROSPECT_LAST_WINDOW_BAR) and within half a tier of his rating today
-             (`brain.roughlyMatchesToday`); otherwise he must clear
+             (FO_PROSPECT_LAST_WINDOW_BAR) and within half a tier of his rating
+             (`brain.roughlyMatches`); otherwise he must clear
              `FO_CUT_UPGRADE_MARGIN`. The incumbent he beats by the most is planned for.
           3. ⚠️ NOBODY SIGNED OR RE-SIGNED THIS OFFSEASON (owner, 2026-10-03: "I generally
              dont want teams signing players and then cutting them in the offseason").
@@ -8323,24 +8476,33 @@ class SeasonManager:
           4. `requireBetterToday` (owner, 2026-10-03, for a prospect NOT on his final
              season): the prospect must also be rated above him today, so a club only
              cuts for a player who is better now, not merely projected better.
+          ⚠️ For 2 and 4, a starter past his peak and declining is measured at next
+             season's projection rather than today (`brain.gateRatingOf`, owner
+             2026-10-17); a rising or prime starter is measured as he is today.
         A retiring incumbent is skipped (he vacates on his own), as is one
-        `isCutProtected` (a fan favorite, or a protected prospect).
+        `isCutProtected` (a fan favorite, or a protected prospect), except that a starter
+        on his prospect contract gives way to a prospect who will be better this season
+        (`_prospectContractYields`, owner 2026-10-17), ahead of every gate below.
           5. ⚠️ AN INCUMBENT IN THE LAST YEAR OF HIS DEAL IS SKIPPED ONLY WHEN THE PROSPECT
              CAN WAIT (`finalWindow` False). He plays the coming season and his slot opens
              next offseason, which an earlier-window prospect can wait for. A final-window
-             prospect is released at the next offseason's step 3.78, BEFORE that
-             offseason's promotion pass, so he cannot.
+             prospect is weighed against him now and again at the next offseason's step
+             3.78 (`_promoteWashoutProspects`), the last look before the release.
         """
         from constants import FO_CUT_UPGRADE_MARGIN, FO_PROSPECT_LAST_WINDOW_BAR
         from managers.playerManager import isCutProtected, signedThisOffseason
         posSlots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
         slots = posSlots.get(getattr(getattr(prospect, 'position', None), 'value', 0), [])
         bestSlot, bestPlayer, bestEdge = None, None, None
+        yields = []
         for slot in slots:
             incumbent = team.rosterDict.get(slot)
             if incumbent is None:
                 return slot, None
             if getattr(incumbent, 'willRetire', False):
+                continue
+            if self._prospectContractYields(team, prospect, incumbent, brain, coach):
+                yields.append((brain.seasonRating(incumbent, coach, team), slot, incumbent))
                 continue
             remaining = getattr(incumbent, 'termRemaining', 0) or 0
             if remaining <= 1 and not finalWindow:
@@ -8349,20 +8511,49 @@ class SeasonManager:
                 continue
             if isCutProtected(incumbent, getattr(self.currentSeason, 'seasonNumber', 0)):
                 continue
-            if requireBetterToday and float(getattr(prospect, 'playerRating', 0) or 0) <= \
-                    float(getattr(incumbent, 'playerRating', 0) or 0):
+            if requireBetterToday and not brain.ratedAtLeast(prospect, incumbent, coach,
+                                                             strictly=True):
                 continue
-            if finalWindow and not brain.roughlyMatchesToday(prospect, incumbent):
+            if finalWindow and not brain.roughlyMatches(prospect, incumbent, coach):
                 continue
             edge = brain.prospectEdgeOver(prospect, incumbent, team, coach)
             if bestEdge is None or edge > bestEdge:
                 bestSlot, bestPlayer, bestEdge = slot, incumbent, edge
+        if yields:
+            _rating, slot, incumbent = min(yields, key=lambda y: y[0])
+            return slot, incumbent
         if bestPlayer is None:
             return None
         base = FO_PROSPECT_LAST_WINDOW_BAR if finalWindow else FO_CUT_UPGRADE_MARGIN
         if bestEdge < brain.moveOnBar(coach, base):
             return None
         return bestSlot, bestPlayer
+
+    def _prospectContractYields(self, team, prospect, incumbent, brain, coach) -> bool:
+        """Does a starter on his PROSPECT CONTRACT give way to this prospect?
+
+        ⚠️ THE ONE EXCEPTION TO THAT PROTECTION (owner, 2026-10-17: "there needs to be a
+        point where the team chooses one or the other ... so teams are fielding the best
+        team they can"). `onProspectContract` makes a promoted prospect uncuttable, which
+        is right against a free agent, a trade or an upgrade cut, and wrong against the
+        team's OWN next prospect at the position: there it froze the choice, and the
+        better player washed out behind the protected one (prod-snapshot sim: WAS's
+        Blorbos Phil, 77, released while a 68 K on a prospect contract started).
+        The prospect wins only by being the better player this season
+        (`brain.seasonRating`, strictly). Still protected: a player promoted or signed in
+        THIS offseason (no promoting and cutting in one offseason; the selection order in
+        `_promoteProspectsAutonomously` already put the better one first), and a fan
+        favorite (`fanVerdict` 'keep')."""
+        from managers.playerManager import isCutProtected, signedThisOffseason
+        if not getattr(incumbent, 'onProspectContract', False):
+            return False
+        if signedThisOffseason(incumbent):
+            return False
+        if isCutProtected(incumbent, getattr(self.currentSeason, 'seasonNumber', 0),
+                          ignoreProspectContract=True):
+            return False
+        return (brain.seasonRating(prospect, coach, team)
+                > brain.seasonRating(incumbent, coach, team))
 
     def _executeProspectCut(self, team, prospect, slot, incumbent, finalWindow: bool):
         """Cut `incumbent` to promote `prospect` into `slot`, paying the cut fee. Returns
@@ -8431,7 +8622,7 @@ class SeasonManager:
         finally:
             session.close()
 
-    def _promoteProspectsAutonomously(self, team) -> list:
+    def _promoteProspectsAutonomously(self, team, washoutOnly: bool = False) -> list:
         """Promote this team's prospects when the GM rates them over the market.
 
         The prospect pipeline is CLOSED (ROOKIE_DRAFT_ENABLED False) but teams
@@ -8441,15 +8632,25 @@ class SeasonManager:
         as the team losing its prospects the day the change landed.
 
         Promotion used to be fan-directed off the GM sign_fa ballot. With the
-        autonomous front office there is no ballot, so the same decider that
-        handles re-signs and cuts values the prospect against the free agent
-        this team could realistically land at its own slot in the FA order.
+        autonomous front office there is no ballot, so the GM decides.
+        ⚠️ ONLY PROMOTIONS THAT DISPLACE A STARTER HAPPEN HERE (owner, 2026-10-17): a
+        last-window cut-to-make-room, an earlier-window prospect clearly better today,
+        and a prospect beating a starter on his prospect contract. An OPEN slot is the
+        FA draft's to fill (`playerManager._attemptRosterFill`), except for a prospect
+        washing out at step 3.78 (`washoutOnly`), who is released before the draft and
+        is weighed here against the free agent the team can expect at its pick.
         Returns promotion dicts in the shape the broadcast/log path expects.
         """
         prospects = list(getattr(team, 'prospects', []) or [])
+        if washoutOnly:
+            # Step 3.78's pass (`_promoteWashoutProspects`): only the prospects this
+            # offseason's window advance is about to release.
+            from constants import PROSPECT_DEVELOPMENT_WINDOW
+            prospects = [p for p in prospects
+                         if int(getattr(p, 'prospect_seasons', 0) or 0)
+                         >= PROSPECT_DEVELOPMENT_WINDOW - 1]
         if not prospects:
             return []
-        from constants import FO_PROSPECT_PROMOTE_EDGE
         brain = self._foBrainForOffseason()
         coach = getattr(team, 'coach', None)
         faOrder = getattr(self.currentSeason, 'freeAgencyOrder', None) or None
@@ -8459,7 +8660,7 @@ class SeasonManager:
         # Loop: a promotion fills one slot, but a second prospect may fit a
         # different one, so re-evaluate until nothing more clears the bar.
         while True:
-            best, bestSlot, bestValue, bestCut = None, None, 0.0, None
+            best, bestSlot, bestKey, bestCut = None, None, None, None
             for prospect in prospects:
                 lastChance = self._isFinalProspectWindow(prospect)
                 try:
@@ -8473,6 +8674,21 @@ class SeasonManager:
                 # two sides of the comparison were read by different GMs.
                 value = brain.decisionValue(prospect, coach=coach, team=team)
                 cutFor = None
+                if slot:
+                    # ⚠️ AN OPEN SLOT IS THE FA DRAFT'S TO FILL (owner, 2026-10-17: "teams
+                    # should be able to hold off on promoting until the free agent draft").
+                    # There the team weighs its prospect against the free agents it can
+                    # actually sign (`_attemptRosterFill`, `brain.prospectTakesSlot`).
+                    # Promoting here put a 64 WR prospect into a slot an 83 had just left
+                    # (prod-snapshot sim, BUF). Only a prospect about to wash out at this
+                    # step 3.78 is decided now, against the free agent this team can
+                    # expect at its pick, since he is released before the draft.
+                    if not washoutOnly:
+                        continue
+                    fa = brain.expectedFreeAgent(prospect.position, team=team, coach=coach,
+                                                 pickDepth=pickDepth)
+                    if not brain.prospectTakesSlot(prospect, fa, coach, team):
+                        continue
                 if not slot and not lastChance:
                     # ⚠️ A PROSPECT WHO IS CLEARLY BETTER TODAY DOES NOT WAIT (owner,
                     # 2026-10-03: "make sure prospects are kept in mind"). The club may cut
@@ -8496,18 +8712,15 @@ class SeasonManager:
                     if not plan:
                         continue
                     slot, cutFor = plan
-                elif not lastChance and cutFor is None:
-                    replacement = brain.bestReplacementValue(
-                        prospect, coach=coach, pickDepth=pickDepth, team=team)
-                    if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
-                        continue    # free agency offers better — leave him down
-                # ⚠️ On the LAST window the bar above is skipped entirely. It prices him
-                # against the free agent this club could sign instead, and that is not
-                # the alternative any more: `_advanceProspectWindow` runs moments from
-                # now and releases him for nothing, so the choice is the prospect or an
-                # empty slot rating 50. Better-than-nothing beats better-than-a-free-agent.
-                if value > bestValue:
-                    best, bestSlot, bestValue, bestCut = prospect, slot, value, cutFor
+                # ⚠️ THE BETTER PLAYER THIS SEASON GOES FIRST (owner, 2026-10-17: "the
+                # better player should always win"). Candidates were taken in order of
+                # decisionValue, which credits a rookie's ceiling: prod-snapshot sim,
+                # season 11, WAS promoted a 68 K rookie over Blorbos Phil (75, last
+                # chance) into the one open slot, and Blorbos washed out behind him.
+                # Once one is promoted, the other faces him through `_cutPlanForProspect`.
+                key = (brain.seasonRating(prospect, coach, team), value)
+                if bestKey is None or key > bestKey:
+                    best, bestSlot, bestKey, bestCut = prospect, slot, key, cutFor
             if best is None:
                 break
             if bestCut is not None:
@@ -8753,6 +8966,75 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
+    def _resignDecision(self, team, brain, faOrder, slotOwners, limit):
+        """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,
+        teamsAhead)`. Read-only: nothing on the players changes here.
+
+        ⚠️ ONE DEFINITION FOR THE OFFSEASON AND THE FRONT OFFICE DESK. The desk used to
+        guess who a team keeps by taking its two highest-rated walk-year players, which
+        kept a 91 kicker over an 80 receiver the GM values at nearly twice as much
+        (Strangers, season 11). It now asks this (`projectedResigns`).
+        """
+        coach = getattr(team, 'coach', None)
+        expiring, forcedWalk = [], []
+        for p in team.rosterDict.values():
+            if p is None or getattr(p, 'willRetire', False):
+                continue  # empty slot, or retires in STEP 3 (vacates)
+            if (getattr(p, 'termRemaining', 0) or 0) > 1:
+                continue  # stays on current deal
+            if self.playerManager.hasReachedResignLimit(p):
+                forcedWalk.append(p)    # limit re-enabled — must walk
+            else:
+                expiring.append(p)      # contract up → keep only if the GM wants them
+
+        # GM BRAIN decides. A slot is spent only where the incumbent beats
+        # the best replacement available at his position, so a good player
+        # the market can replace is allowed to walk while a modest one with
+        # nothing behind him is kept.
+        # ⚠️ `team=` is load-bearing on BOTH calls: it applies destination
+        # preference (a club must not plan around a free agent who would
+        # refuse it) and the Scouting Department's vision bonus. Omitted
+        # until 2026-08-13, which silently disabled both for retention.
+        pickDepth = brain.faPickDepth(team, faOrder)
+        # Raw count of clubs picking first, which the confidence model needs
+        # (pickDepth is already the discounted expectation built from it).
+        teamsAhead = brain.faTeamsAhead(team, faOrder)
+        # ⚠️ `teamsAhead` is load-bearing here now, not just for cuts. The re-sign
+        # decision asks how likely a better player survives to this club's pick, and
+        # with teamsAhead defaulting to 0 every club believes it picks first, so
+        # nobody is ever worth keeping over the market.
+        # The club's own replacements: its prospects, and the rookies it will take
+        # with a top pick in this draft (`slotOwners`, read once above the loop).
+        # ⚠️ READ AGAINST THE PROSPECT WINDOW, which advances at step 3.78, after
+        # this. A prospect on WINDOW-1 washes out there unless step 3.78's last look
+        # (`_promoteWashoutProspects`) promotes him, and it promotes him straight into
+        # a slot this decision leaves open. One on WINDOW-2 reaches the FA kickoff on
+        # a final window. Both are weighed the way that promotion will weigh them
+        # (`lastChance`: roughly matching the starter), so the club chooses between
+        # the starter and the prospect here, instead of keeping the starter by
+        # default and losing the prospect (owner, 2026-10-17). Prod season 10: the
+        # Raccoons let Crunchtime McCown (79) walk at this step and then released
+        # Dearie Lizardo (86), a WINDOW-1 prospect who was left out of this list,
+        # into free agency with their TE slot empty.
+        from constants import PROSPECT_DEVELOPMENT_WINDOW
+        internal, lastChance = [], set()
+        for pr in (getattr(team, 'prospects', None) or []):
+            if not getattr(pr, 'is_prospect', False):
+                continue
+            served = int(getattr(pr, 'prospect_seasons', 0) or 0)
+            internal.append(pr)
+            if served >= PROSPECT_DEVELOPMENT_WINDOW - 2:
+                lastChance.add(id(pr))
+        try:
+            internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
+        except Exception as e:
+            logger.debug(f"expected draftees unavailable for {team.name}: {e}")
+        kept = brain.chooseResigns(expiring, limit, coach=coach,
+                                   pickDepth=pickDepth, team=team,
+                                   teamsAhead=teamsAhead, internal=internal,
+                                   lastChance=lastChance)
+        return expiring, forcedWalk, kept, pickDepth, teamsAhead
+
     def _applyRetentionLimits(self) -> None:
         """Per team, decide which EXPIRING players (contract up this offseason) get
         RE-SIGNED vs walk to FA.
@@ -8839,60 +9121,8 @@ class SeasonManager:
 
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
-            expiring, forcedWalk = [], []
-            for p in team.rosterDict.values():
-                if p is None or getattr(p, 'willRetire', False):
-                    continue  # empty slot, or retires in STEP 3 (vacates)
-                if (getattr(p, 'termRemaining', 0) or 0) > 1:
-                    continue  # stays on current deal
-                if self.playerManager.hasReachedResignLimit(p):
-                    forcedWalk.append(p)    # limit re-enabled — must walk
-                else:
-                    expiring.append(p)      # contract up → keep only if the GM wants them
-
-            # GM BRAIN decides. A slot is spent only where the incumbent beats
-            # the best replacement available at his position, so a good player
-            # the market can replace is allowed to walk while a modest one with
-            # nothing behind him is kept.
-            # ⚠️ `team=` is load-bearing on BOTH calls: it applies destination
-            # preference (a club must not plan around a free agent who would
-            # refuse it) and the Scouting Department's vision bonus. Omitted
-            # until 2026-08-13, which silently disabled both for retention.
-            pickDepth = brain.faPickDepth(team, faOrder)
-            # Raw count of clubs picking first, which the confidence model needs
-            # (pickDepth is already the discounted expectation built from it).
-            teamsAhead = brain.faTeamsAhead(team, faOrder)
-            # ⚠️ `teamsAhead` is load-bearing here now, not just for cuts. The re-sign
-            # decision asks how likely a better player survives to this club's pick, and
-            # with teamsAhead defaulting to 0 every club believes it picks first, so
-            # nobody is ever worth keeping over the market.
-            # The club's own replacements: its prospects, and the rookies it will take
-            # with a top pick in this draft (`slotOwners`, read once above the loop).
-            # ⚠️ READ AGAINST THE PROSPECT WINDOW, which advances at step 3.78, after
-            # this. A prospect already on WINDOW-1 is released there and can replace
-            # nobody, so he is left out (he used to count, letting a starter walk for a
-            # man about to leave). One on WINDOW-2 is advanced to his LAST chance, at
-            # this offseason's FA draft kickoff, so he is weighed the way that
-            # promotion will weigh him (`lastChance`).
-            from constants import PROSPECT_DEVELOPMENT_WINDOW
-            internal, lastChance = [], set()
-            for pr in (getattr(team, 'prospects', None) or []):
-                if not getattr(pr, 'is_prospect', False):
-                    continue
-                served = int(getattr(pr, 'prospect_seasons', 0) or 0)
-                if served >= PROSPECT_DEVELOPMENT_WINDOW - 1:
-                    continue
-                internal.append(pr)
-                if served == PROSPECT_DEVELOPMENT_WINDOW - 2:
-                    lastChance.add(id(pr))
-            try:
-                internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
-            except Exception as e:
-                logger.debug(f"expected draftees unavailable for {team.name}: {e}")
-            kept = brain.chooseResigns(expiring, limit, coach=coach,
-                                       pickDepth=pickDepth, team=team,
-                                       teamsAhead=teamsAhead, internal=internal,
-                                       lastChance=lastChance)
+            expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
+                team, brain, faOrder, slotOwners, limit)
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds

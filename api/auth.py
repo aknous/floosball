@@ -757,9 +757,16 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
     except HTTPException:
         raise
     except Exception as e:
+        # ⚠️ THE TOKEN WAS VALID: this is the database failing, not the caller. Reporting
+        # it as 401 is what made the 2026-10-20 full-disk outage read as "my ratings are
+        # gone" (the login stamp's commit failed, every signed-in request became a
+        # credentials error, and `getOptionalUser` quietly served them as signed out).
         session.rollback()
         logger.error(f"User lookup/creation failed: {e}")
-        raise credentialsException
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not load your account right now",
+        )
     finally:
         session.close()
 
@@ -772,6 +779,12 @@ def getOptionalUser(
         return None
     try:
         return getCurrentUser(creds)
+    except HTTPException as e:
+        # A bad token is anonymous; a server failure is not. Serving a signed-in
+        # caller as signed out hides an outage behind blank personal data.
+        if e.status_code >= 500:
+            raise
+        return None
     except Exception:
         return None
 

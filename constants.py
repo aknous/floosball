@@ -333,7 +333,7 @@ MENTAL_DIVE_K = 10          # catch-prob (pp) a confident receiver gains laying 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
 # season total that feeds the MVP + All-Pro defense value metrics.
-WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
+WPA_PASS_QB_SHARE = 0.6      # targeted pass (complete, incomplete or picked): QB share of the WPA, receiver the rest; drops and untargeted plays have their own rules
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
 # MVP + All-Pro value metric (flat z-score blend, pooled within position group):
@@ -399,8 +399,14 @@ CONFIDENCE_DECAY_PER_GAME = 0.90
 MOMENTUM_CASCADE_STEP = 0.15           # Multiplier increase per consecutive streak event
 MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
-MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
-MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
+# Momentum's gameplay effect is a LEVEL: each player of the team with momentum holds
+# +AT_50 x momentum/50 confidence/determination, the other team the same negative, re-targeted
+# every play and removed before postgame (`Game._applyMomentumEffect`). Sized to keep the
+# average in-force effect of the old per-play nudge (0.039 / 0.023 per player per play,
+# mean |momentum| outside the neutral zone 15.6). At momentum 100 that is 0.24 on the ±5
+# confidence scale, a ~5% state move.
+MOMENTUM_CONFIDENCE_AT_50 = 0.12
+MOMENTUM_DETERMINATION_AT_50 = 0.07
 MOMENTUM_NEUTRAL_ZONE = 5              # Abs momentum below this = no gameplay effect
 MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
 MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight
@@ -2774,8 +2780,14 @@ ROOKIE_DRAFT_ENABLED = True
 # 2026-10-01: "with high picks, prospects are assets"). A top pick is the one chance at a
 # headline prospect, and on the old board the QB multiplier let a 75-ceiling quarterback
 # go #2 while a 99 went #4. After these slots the board shifts from asset value toward
-# NEED, reaching pure need at the last pick of the draft (playerManager.rookieNeedWeight).
-ROOKIE_DRAFT_BPA_SLOTS = 5
+# NEED (playerManager.rookieNeedWeight).
+# ⚠️ 5 -> 2, AND PURE NEED BY PICK 8 INSTEAD OF THE LAST PICK (owner, 2026-10-17:
+# "hopefully teams are drafting based on need outside of the top couple picks"). At 5
+# slots with a linear ramp to #32, need was ~19% of the decision at #10 and ~44% at #17,
+# and 16% of the picks after #5 landed behind a 4-star+ starter, where a good prospect
+# washes out (prod: Hersh Pruitt #8 behind a 92 TE; SEA's two RBs behind an 84-88).
+ROOKIE_DRAFT_BPA_SLOTS = 2
+ROOKIE_DRAFT_NEED_FULL_SLOT = 8
 
 
 def rookieDraftEnabled() -> bool:
@@ -2818,6 +2830,11 @@ def rookieDraftEnabled() -> bool:
 # overwhelming, break the kicker's valuation outright, and move every contract in the league.
 # Swapping the two that are in the wrong order fixes the ordering, matches the measurement,
 # and leaves the spread -- and therefore the economy -- where it was.
+# How long the Front Office desk's re-sign projection (`SeasonManager.projectedResigns`)
+# is reused before the GM brain is asked again. Its inputs (fan ratings, the draft order,
+# the free-agent pool) move slowly within a day.
+FO_DESK_PROJECTION_TTL_SECS = 600
+
 POSITION_VALUE = {
     'QB': 1.00,
     'RB': 0.78,
@@ -3080,14 +3097,10 @@ FO_CUT_MIN_CONFIDENCE = 0.60
 # a good team picking late sees thin leftovers and holds onto its own.
 FO_FA_CONTENTION = 0.30
 
-# Benefit of the doubt given to a prospect the team ALREADY owns when weighing
-# promotion against signing a free agent. Promotion costs the team nothing and
-# the prospect is under its own control, so a prospect within this fraction of
-# the free agent it could otherwise land gets the roster spot. Below 1.0 or a
-# prospect essentially never wins — a developing player's forward projection
-# sits under a proven veteran's almost by definition, and the whole pipeline
-# would wash out to free agency instead of ever reaching a roster.
-FO_PROSPECT_PROMOTE_EDGE = 0.88
+# FO_PROSPECT_PROMOTE_EDGE (0.88, a value bar for promoting into an open slot at the
+# kickoff) was removed 2026-10-17: open slots are filled in the FA draft, where a
+# prospect takes the slot unless a free agent the team can sign is better today AND this
+# season (`frontOfficeBrain.prospectTakesSlot`).
 
 # ---- Attitude: a toxic player damages the room, and the GM could not see it ----
 # ⚠️ THE SIM MODELS THE DAMAGE AND GAVE THE GM NO WAY TO PERCEIVE IT.
@@ -4000,11 +4013,31 @@ RULE_BALLOT_META = {
 # adds higher-value tries snapped from further out (harder to convert). Each rung
 # is one run/pass from its distance — "harder from further" emerges from the play
 # resolution, not a dial. Off by default; switched on by a Cores vote.
+# ⚠️ THE 3 IS SNAPPED FROM THE 3, NOT THE 5 (owner, 2026-10-15). From the 5 it converted
+# no better than the 4 from the 10 (36.4% against 36.2%), so the 3 was a rung nobody should
+# pick: the same odds for a point less. The engine's rate is nearly FLAT from 3 to 13 yards
+# (36-43%, see `CONVERSION_MAKE_BY_DISTANCE`) and falls off at 14, where the try becomes a
+# deep throw, so the only place the 3 sits between its neighbors is the 3-yard line: 41.7%,
+# midway between the 2 (46.9%) and the 4 (36.2%). The ladder then gets harder at every rung.
 CONVERSION_LADDER_RUNGS = [
-    {"points": 3, "distance": 5},
+    {"points": 3, "distance": 3},
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+# How often a post-touchdown try converts from each distance (yards), the coaches' read used
+# by every conversion decision (`Game._estimateConversionProb`). It is the ENGINE'S OWN rate,
+# measured with `conversion_rate_check.py` (200 matchups x 20 tries a yard, +/- 0.008),
+# 2026-10-15. ⚠️ It replaced a fixed `0.70 - 0.028 x (yards - 2)` guess from before the
+# goal-line and catch-model work, which read the two-pointer as 70% against a measured 47%,
+# so every team went for two in the fourth quarter about twice as often as the odds justify
+# (45% of Q4 touchdowns). ⚠️ The shape is not smooth and should not be smoothed: the try's
+# play call changes tier at 3 / 8 / 13 yards (`_simulateConversionPlay`), which is where the
+# steps are. Re-measure when that play call or the passing / goal-line models move.
+CONVERSION_MAKE_BY_DISTANCE = {
+    1: 0.514, 2: 0.469, 3: 0.417, 4: 0.375, 5: 0.364, 6: 0.431, 7: 0.383,
+    8: 0.363, 9: 0.389, 10: 0.362, 11: 0.431, 12: 0.398, 13: 0.404, 14: 0.229,
+    15: 0.209, 16: 0.193, 17: 0.196, 18: 0.192, 19: 0.189, 20: 0.178,
+}
 # "No kick" mode (gameRules.conversionKickEnabled=False): every post-TD try is a forced
 # go-for-it. When NOT in a Q4 comeback, a coach reaches for the highest-value rung whose
 # make estimate clears a personal floor — aggressive coaches accept lower odds (reach
@@ -4028,9 +4061,14 @@ CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (
 #
 # Same shape as the CONVERSION_FORCEGO_* floor above: the landing rung is taken when its
 # make estimate clears a floor that aggressiveness lowers.
-DARTS_LAND_MAKE_FLOOR = 0.45   # a neutral coach's minimum make% to try to win it outright
-DARTS_LAND_AGGR_SWING = 0.26   # +/- the floor across the coach-aggressiveness range
-DARTS_LAND_JITTER     = 0.06   # per-attempt randomness on the floor (variety)
+# ⚠️ RESCALED 2026-10-15 with `CONVERSION_MAKE_BY_DISTANCE`, which replaced an estimate that
+# read every rung far too high (the 5 at 34% against a measured 21%). The floors keep each
+# coach where they were on the ladder: a neutral coach lands the 4 most of the time and banks
+# instead of trying the 5, an aggressive one tries every rung, a conservative one banks.
+# They were 0.45 / 0.26 / 0.06 on the old scale.
+DARTS_LAND_MAKE_FLOOR = 0.33   # a neutral coach's minimum make% to try to win it outright
+DARTS_LAND_AGGR_SWING = 0.21   # +/- the floor across the coach-aggressiveness range
+DARTS_LAND_JITTER     = 0.05   # per-attempt randomness on the floor (variety)
 # Only defer to the coach when banking is MATERIALLY safer. Below this the landing rung
 # is close enough in odds that declining a win is just leaving the game on the field.
 DARTS_LAND_MIN_EDGE   = 0.06
@@ -4056,7 +4094,21 @@ CONVERSION_GO_Q3_DAMPEN      = 0.55
 # why the chart comes out more aggressive than the NFL's (owner, 2026-09-14).
 CONVERSION_DRIVE_ODDS = (0.64, 0.12, 0.22, 0.02)
 CONVERSION_SECS_PER_DRIVE = 165.0     # regulation seconds per drive, both teams combined
+CONVERSION_MIN_DRIVE_SECS = 15.0      # less time than this left: no opponent drive to value
 CONVERSION_TRAIL_SECS_PER_DRIVE = 150.0   # a trailing team's hurry-up drive, for counting the drives it can still get
+# How the coach reads the team's own defense (Game._opponentDriveOdds). The opponent's points per
+# drive this game is shrunk toward the league rate by this many drives of prior: about a third
+# of a team's ~11 drives, so by the fourth quarter the game's own evidence outweighs the prior
+# roughly two to one.
+CONVERSION_DEFENSE_PRIOR_DRIVES = 4
+# Temperament: the opponent's scoring chance as the coach perceives it is scaled by
+# 1 + aggressiveness lean x this, so the most conservative coach (60) rates the threat at a
+# quarter of its measured size and trusts the defense to get the stop, the most aggressive
+# (100) at 1.75x and goes for it now. Temperament works ONLY through this perception, so the
+# defense's showing always counts: a conservative coach whose defense is being shredded still
+# goes for the win, an aggressive one whose defense is pitching a shutout may take the tie.
+# Owner (2026-10-15): given the tie or the win, a conservative coach goes for the tie.
+CONVERSION_DEFENSE_TRUST_SWING = 0.75
 CONVERSION_CHASE_WIN_BELOW = 0.10     # below this win chance a trailing team weighs edges relative to its odds
 CONVERSION_VALUE_MIN_GAIN = 0.005     # win-chance edge below which the kick is automatic
 CONVERSION_VALUE_BASE = 0.35          # go probability at the smallest real edge ...
@@ -4385,10 +4437,20 @@ DRIVE_CLOCK_HURRY_FRAC = 0.625          # 2-minute-drill tempo below this
 DRIVE_CLOCK_TAKE_POINTS_FRAC = 0.167    # ~one snap left: take a makeable FG / heave a hail mary
 DRIVE_CLOCK_LOW_FRAC = 0.125            # amber chip / spike-to-stop trigger
 DRIVE_CLOCK_SPIKE_FRAC = 0.10           # critically low: spike to stop the game clock
-# Last-snap PUNT (deep in own territory, can't convert, out of FG range): rather than
-# hand the ball back on downs at your own spot, punt to flip field position.
-DRIVE_CLOCK_PUNT_MIN_YTE = 60           # only "deep" — ball on your own side (>=60 yds to EZ)
-DRIVE_CLOCK_PUNT_MIN_TOGO = 7           # only long yardage — can't realistically convert in one snap
+# Last-snap PUNT (own territory, out of FG range): rather than hand the ball back on
+# downs at your own spot, punt to flip field position. Applies on EVERY down, the final
+# one included, and it also bars the drive-clock Hail Mary from this territory (see
+# `playCaller`): a heave from your own side almost never scores, and its incompletion
+# hands the opponent a short field.
+DRIVE_CLOCK_PUNT_MIN_YTE = 50           # your own half of the field (>=50 yds to EZ)
+# 'series' reset only: a first down refills the clock there, so a short-yardage snap is
+# worth running for the conversion. Under 'possession' a conversion does not save the
+# drive, so the yardage is irrelevant and the punt applies at any distance.
+DRIVE_CLOCK_PUNT_MIN_TOGO = 7
+# Coach roll for that punt: base + span x clock IQ (0..1). A staff that snaps into a
+# turnover at its own 30 is not making a subtle error, so the floor is high.
+DRIVE_CLOCK_PUNT_BASE = 0.75
+DRIVE_CLOCK_PUNT_IQ_SPAN = 0.25
 
 # ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
 # Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the
@@ -5224,6 +5286,11 @@ GM_VOTE_TYPES: set = set()
 NAME_SUBMISSION_PENDING_CAP = 10
 NAME_SUBMISSION_MIN_LENGTH = 2
 NAME_SUBMISSION_MAX_LENGTH = 60
+# How close two names must read before the admin name tools flag them (`name_similarity`,
+# 0..1 on the normalized base name). 0.8 catches one-letter swaps ("Bob Smith" / "Rob
+# Smith" 0.89) and a shared surname with a near first name ("John Smith" / "Jane Smith"
+# 0.80), and leaves a shared surname alone ("Bob Smith" / "Al Smith" 0.71).
+NAME_SIMILARITY_THRESHOLD = 0.8
 
 GM_VOTE_COST = {
     "fire_coach": 15,
@@ -5639,6 +5706,19 @@ FRAMES_TIMEOUTS_PER_FRAME = 2
 # decisions' own thresholds (2:00, 3:00, 5:00) sit inside it, as they sit inside a quarter.
 FRAMES_END_WINDOW_SECS = 300
 
+# ⚠️ A TEAM ALREADY IN FIELD-GOAL RANGE RUNS THE CLOCK, NOT STOPS IT (2026-10-19). Tied or
+# within a field goal at the end of the game (or of a frame), inside a kick this kicker
+# makes at least FG_SECURE_MIN_PROB, with between 1:00 and FG_SECURE_DRAIN_SECS left: the
+# offense plays slowly (no hurry-up, no clock-stopping timeouts, spikes or sideline throws)
+# so it scores last, and the existing FG drain (`_isFgDrainMode`) takes over inside 1:00.
+# It used to stop the clock: prod game 4688, tied on the 12 with 1:39 left, used both
+# timeouts, kicked with 1:22 left and conceded the tying kick at 0:00; a standard Q4 in
+# the same spot called a timeout 87% of the time. Recognising the spot is a coach call:
+# FG_SECURE_READ_BASE + (1 - base) x clock IQ, decided once per drive.
+FG_SECURE_DRAIN_SECS = 180
+FG_SECURE_MIN_PROB = 0.75
+FG_SECURE_READ_BASE = 0.4
+
 GLITCH_CARDS_ENABLED = True
 
 # Trigger base, by the on-card player's position on the attention ladder. Chosen over an
@@ -6018,3 +6098,73 @@ PUNT_FAIRCATCH_SIGHT_K = 0.45
 EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
 EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
 EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]
+
+# ── Win probability: the fitted clock model (`Game.clockModelWp`) ──
+# WP = Phi(margin / spread), from the home team's side:
+#   margin = lead + WP_FIELD_VALUE(yards to go) + WP_DOWN_PENALTY[downs left] x min(to go, 15)/10
+#            (both for the team with the ball) + WP_STRENGTH_PER_LOGIT x logit(ELO odds) x time left
+#   spread = WP_MARGIN_SIGMA x sqrt(time left + WP_TIME_FLOOR), time left as a fraction of 60:00
+# FITTED, not tuned: `wp_fit.py` plays seasons on real rosters with ELO updated the way the
+# league updates it (so the prior is as noisy as production's) and fits these by log loss
+# to who actually won. Re-fit whenever scoring, the clock or ELO moves; the harness prints a
+# replacement block. Used by standard and play limit (`GameFormat.clockWinProbability`).
+#
+# The hand-built core it replaced (`_legacyCoreHomeWp`, still used by target / darts /
+# frames / innings) was audited against 5,000 sim games and 416k NFL plays (2026-10-18):
+# underconfident (75% won 84%), field position nearly ignored (tied in the red zone read
+# 55%, won 68%), the ELO prior faded on a straight line to 5% (an 83% favorite tied at
+# the start of Q4 read 61%, won 80%), and the first quarter was inert (average WP move
+# per snap 0.27 against the NFL's 2.59; no big play in Q1 across 5,000 games).
+WP_FIELD_VALUE_YTE = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+WP_FIELD_VALUE = [5.11, 4.36, 3.99, 3.43, 2.92, 2.36, 1.68, 1.12, 0.67, -0.25, -0.52]
+WP_DOWN_PENALTY = [-2.98, -1.29, -0.41]   # by downs left in the series: last down, one left, two left
+WP_STRENGTH_PER_LOGIT = 12.7
+WP_MARGIN_SIGMA = 15.17
+WP_TIME_FLOOR = 0.0448
+
+# A play is a BIG PLAY (and fires MOMENTUM_BIG_PLAY_BONUS) when either side's WPA reaches
+# this. Set to hold the big-play RATE the hand-built model produced, because the fitted
+# model moves WP about twice as much and the bonus feeds back into play outcomes. Measured
+# on `wp_fit.py` seasons: the hand-built core tagged 3.42 big plays a game at 7.0; under
+# the fitted model 7.0 would tag 7.8, 10.5 tags 3.51 and 10.75 tags 3.26. Re-derive with
+# `wp_fit.py --hold-rate` whenever the WP constants are re-fit.
+BIG_PLAY_WPA_THRESHOLD = 10.6
+
+# ── Overtime win probability, tied (measured) ──
+# The offense's chance of winning a TIED overtime, by yards to the end zone. Measured,
+# not fitted: `ot_wp_check.py` plays games whose regulation is one second a quarter, so
+# nearly every one reaches a fresh 0-0 overtime, and counts how often the team with the
+# ball goes on to win (two seeds, ~9,700 overtimes, adjacent buckets pooled where a
+# farther spot read higher). Re-measure if OT rules, the kicking model or the offense
+# move.
+#
+# ⚠️ The formula these replaced squashed every first-possession spot into 43-57% and
+# put "next score wins" at ~70% from the opponent's 25, against a measured 95%. It also
+# rated a TIE at regulation's 0:00 off field position (31-79% observed) while the first
+# OT snap read 43%, so the WP chart jumped on the first play of overtime.
+#
+# FIRST POSSESSION: the first OT possession is in progress; the other team is still
+# guaranteed a possession. The receiving team wins ~46% of overtimes in this sim, so a
+# kickoff to the own 20 reads ~42%.
+OT_FIRST_POSS_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_FIRST_POSS_WP = [76.0, 73.5, 69.3, 66.0, 58.2, 55.2, 50.1, 42.1, 42.1, 42.1]
+# NEXT SCORE WINS: either sudden death, or the second team's guaranteed possession
+# after the first team failed to score (any score by the offense ends it).
+OT_NEXT_SCORE_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_NEXT_SCORE_WP = [96.7, 96.4, 95.3, 88.5, 77.0, 70.2, 60.8, 51.1, 48.1, 43.3]
+# ANSWERING: the first team scored on its possession and the second team is on its one
+# guaranteed possession, trailing; if it fails, it loses. Measured as DRIVE rates from the
+# answering team's spot (two seeds, ~8,100 answering possessions, adjacent buckets pooled
+# where a farther spot read higher), because what a score is WORTH follows from the rules
+# and is computed (`Game._overtimeAnswerWp`): a tie becomes sudden death with the other
+# team receiving (the next-score table above), a touchdown's conversion is valued off
+# the engine's own make rates. Two drive types, since a team that a field goal can tie or
+# beat kicks one where a team needing a touchdown goes for it on fourth down:
+#   FG drive (trailing by a field goal or less): touchdown rate, and any-score rate.
+#   TD drive (trailing by more): touchdown rate.
+# The formula these replaced read down 7 on the 5 at 14% (measured 32%) and down 3 on the
+# 25 at 41% (measured 63%).
+OT_ANSWER_WP_YTE = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]
+OT_ANSWER_FG_DRIVE_TD = [48.9, 43.2, 34.9, 24.7, 24.7, 23.3, 21.0, 18.5, 18.5, 18.5]
+OT_ANSWER_FG_DRIVE_SCORE = [95.0, 92.2, 91.8, 83.3, 69.5, 59.2, 52.9, 45.4, 45.4, 45.4]
+OT_ANSWER_TD_DRIVE_TD = [69.4, 58.6, 51.0, 44.5, 38.4, 34.3, 29.3, 24.5, 24.5, 24.5]

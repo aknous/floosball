@@ -95,8 +95,12 @@ class TheFrameIsWhatCounts(unittest.TestCase):
         """⚠️ THE HEART OF IT. With frames level, the frame in progress decides the match,
         so the margin that matters is -7 (the frame) and not -3 (the aggregate)."""
         g = framesGame().game
-        self.assertEqual(g._frameDecisionDiff(), -7,
-                         'the frame margin should drive end-of-frame decisions')
+        # Since 2026-10-19 the final frame reads the match standing: 7 points ties the frame,
+        # which levels the frames with the offense 4 up on aggregate, so 7 wins outright
+        # (-7 + epsilon, never 0), rather than -7 meaning "7 forces overtime".
+        self.assertAlmostEqual(g._frameDecisionDiff(), -7, delta=0.01,
+                               msg='the frame margin should drive end-of-frame decisions')
+        self.assertGreater(g._frameDecisionDiff(), -7)
 
     def test_itDoesNotKickAwayTheFrame(self):
         """THE REGRESSION: a field goal here loses the frame and the match."""

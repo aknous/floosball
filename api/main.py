@@ -14,6 +14,9 @@ import json
 from datetime import datetime, timezone
 
 import os
+import secrets
+import threading
+import time
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
 from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent, PlayerOffDayEvent
@@ -5983,13 +5986,26 @@ def _acceptNamesIntoPool(pm, names: list, source: str = "admin") -> dict:
         seen.add(n)
         deduped.append(n)
 
+    # ⚠️ ONE FORM OF A LINEAGE AT A TIME (see `connection._normalizeNamePool`): a name
+    # whose base form is already pooled, held, or worn by a live player or coach would
+    # fork that lineage, so it is refused here rather than cleaned up at the next boot.
+    from name_similarity import normalizeName
+    pooled = {normalizeName(x) for x in (getattr(pm, 'unusedNames', None) or [])}
+    pooled |= {normalizeName(x[0]) for x in (getattr(pm, 'pendingNames', None) or [])}
+    live = {normalizeName(x) for x, source in _leagueNames(pm) if source in ('player', 'coach')}
+
     rejectedInUse: list = []
+    rejectedInPool: list = []
     accepted: list = []
     for n in deduped:
-        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(n):
+        norm = normalizeName(n)
+        if norm in pooled:
+            rejectedInPool.append(n)
+        elif (hasattr(pm, 'isNameInUse') and pm.isNameInUse(n)) or norm in live:
             rejectedInUse.append(n)
         else:
             accepted.append(n)
+            pooled.add(norm)
 
     if accepted:
         pm.unusedNames.extend(accepted)
@@ -5999,7 +6015,49 @@ def _acceptNamesIntoPool(pm, names: list, source: str = "admin") -> dict:
         _recordCuratedNames(pm, accepted, source)
 
     return {"accepted": accepted, "rejectedInUse": rejectedInUse,
-            "duplicatesInBatch": duplicatesInBatch}
+            "rejectedInPool": rejectedInPool, "duplicatesInBatch": duplicatesInBatch}
+
+
+def _leagueNames(pm, includeSuggested: bool = False) -> list:
+    """Every name a new one could collide with, as (name, source): the unused pool
+    ('pool'), names serving their reuse hold ('held'), players on a roster or in free
+    agency ('player'), retired players ('retired'), coaches ('coach'), and optionally
+    Discord suggestions awaiting review ('suggested')."""
+    out = [(n, 'pool') for n in (getattr(pm, 'unusedNames', None) or [])]
+    out += [(n[0], 'held') for n in (getattr(pm, 'pendingNames', None) or [])]
+    from database.connection import get_session
+    from database.models import Player as DBPlayer, Coach as DBCoach, NameSubmission
+    session = get_session()
+    try:
+        for name, serviceTime in session.query(DBPlayer.name, DBPlayer.service_time).all():
+            out.append((name, 'retired' if serviceTime == 'Retired' else 'player'))
+        out += [(r[0], 'coach') for r in session.query(DBCoach.name).all()]
+        if includeSuggested:
+            out += [(r[0], 'suggested') for r in session.query(NameSubmission.name)
+                    .filter(NameSubmission.status == 'pending').all()]
+    except Exception as e:
+        logger.warning(f"Could not read league names: {e}")
+    finally:
+        session.close()
+    return out
+
+
+def _nameCheck(pm, index, name: str, batchPeers=()) -> dict:
+    """How a candidate name sits against the league: 'blocked' (adding it would be
+    refused: same name or lineage as one pooled, held, or worn by a live player or coach),
+    'similar' (close to an existing name), or 'clear'."""
+    from name_similarity import NameIndex
+    matches = index.similarTo(name)
+    peers = [p for p in batchPeers if p != name]
+    if peers:
+        matches = sorted(matches + NameIndex([(p, 'batch') for p in peers]).similarTo(name),
+                         key=lambda m: (-m['score'], m['name']))[:5]
+    blocked = any(m['sameLineage'] and m['source'] in ('pool', 'held', 'player', 'coach')
+                  for m in matches)
+    if not blocked and hasattr(pm, 'isNameInUse') and pm.isNameInUse(name):
+        blocked = True
+    status = 'blocked' if blocked else ('similar' if matches else 'clear')
+    return {"name": name, "status": status, "matches": matches}
 
 
 def _recordCuratedNames(pm, names: list, source: str = "admin") -> None:
@@ -6057,8 +6115,42 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
         "added": len(result["accepted"]),
         "total": len(pm.unusedNames),
         "rejectedInUse": result["rejectedInUse"],
+        "rejectedInPool": result["rejectedInPool"],
         "duplicatesInBatch": result["duplicatesInBatch"],
     }
+
+
+@app.get("/api/admin/names/pool")
+async def admin_name_pool(_auth: None = Depends(_checkAdminAuth)):
+    """The unused name pool, alphabetical, plus the names serving their reuse hold."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    pm = floosball_app.playerManager
+    names = sorted(set(pm.unusedNames or []), key=str.lower)
+    held = sorted(({"name": n, "availableSeason": season}
+                   for n, season in (getattr(pm, 'pendingNames', None) or [])),
+                  key=lambda h: h["name"].lower())
+    return {"names": names, "total": len(names), "held": held}
+
+
+@app.post("/api/admin/names/check")
+async def admin_check_names(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
+    """Before adding names: for each, the existing names it reads too close to
+    (`name_similarity`), across the pool, held names, players, retirees, coaches, pending
+    Discord suggestions and the rest of the batch. Adds nothing."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    names = payload.get("names", [])
+    if not isinstance(names, list) or not names:
+        raise HTTPException(400, "'names' must be a non-empty list of strings")
+    if len(names) > 500:
+        raise HTTPException(400, "Too many names; maximum 500 per request")
+    from name_similarity import NameIndex
+    names = list(dict.fromkeys(' '.join(n.split()) for n in names
+                               if isinstance(n, str) and n.strip()))
+    pm = floosball_app.playerManager
+    index = NameIndex(_leagueNames(pm, includeSuggested=True))
+    return {"results": [_nameCheck(pm, index, n, names) for n in names]}
 
 
 @app.get("/api/app-settings")
@@ -7091,9 +7183,21 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
             "totalPlaysInMemory": totalPlays,
             "pid": os.getpid(),
         },
+        "disk": _adminDiskStatus(),
         "websockets": ws_manager.get_stats(),
         "personality": personality,
     })
+
+
+def _adminDiskStatus():
+    """The DB volume for the admin monitor. None if it cannot be read, so a disk
+    hiccup never takes the dashboard down with it."""
+    try:
+        from backup_manager import diskStatus
+        return diskStatus()
+    except Exception as e:
+        logger.warning(f"admin monitor: disk status unavailable: {e}")
+        return None
 
 
 @app.get("/api/admin/analytics")
@@ -8550,9 +8654,13 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     ⚠️ THE BLOCK AND THE WALK-YEAR LIST ARE THE SECTIONS WITH EDITORIAL WEIGHT, and the
     ones that make the page worth visiting outside the trade window. "These 33 players are
     leaving for nothing unless someone moves" is a story every week of the season.
+
+    ⚠️ WITH TRADING OFF THE PAGE STAYS, ITS TRADE SECTIONS GO (owner, 2026-10-16). The draft
+    order, the class, the walk-years and the moves feed have nothing to do with the market,
+    so `_tradesHidden()` empties `trades` and `block`, reports every pick as its own team's
+    (rookie drafts ignore pick ownership while trading is off), and drops the roster moves a
+    trade forced (recap rows carrying a trade id).
     """
-    if _tradesHidden():
-        raise HTTPException(404, "Not found")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     from constants import tradingEnabled, RESIGN_LIMIT_PER_OFFSEASON, GM_ACTIVE_WEEK
@@ -8564,6 +8672,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
     teamsById = {getattr(t, 'id', None): t for t in (getattr(tm, 'teams', None) or [])}
+    tradesHidden = _tradesHidden()
 
     def teamBlob(teamId):
         team = teamsById.get(teamId)
@@ -8578,8 +8687,11 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     session = get_session()
     try:
         ranked, orderFinal, playoffSlotsFrom = _rookieDraftOrder()
-        ownerByOrigin = {r.original_team_id: r.current_owner_id for r in
-                         session.query(DraftPick).filter_by(season=season, used=False).all()}
+        # With trading off each team drafts in its own slot (`_rookieDraftSlots`), so a
+        # leftover ownership row would show a trade the draft will not honor.
+        ownerByOrigin = {} if tradesHidden else {
+            r.original_team_id: r.current_owner_id for r in
+            session.query(DraftPick).filter_by(season=season, used=False).all()}
         def recordOf(teamId):
             st = getattr(teamsById.get(teamId), 'seasonTeamStats', None) or {}
             return {"wins": int(st.get('wins', 0) or 0),
@@ -8607,9 +8719,10 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
                 "ownerRecord": recordOf(ownerId),
             })
 
-        trades = (session.query(Trade)
-                  .filter(Trade.season == season)
-                  .order_by(Trade.id.desc()).limit(limit).all())
+        trades = [] if tradesHidden else (
+            session.query(Trade)
+            .filter(Trade.season == season)
+            .order_by(Trade.id.desc()).limit(limit).all())
         # ⚠️ RATINGS ARE RESOLVED AT READ TIME, NOT STORED IN THE MANIFEST. The manifest
         # records WHAT changed hands — kind, id, name, detail — and adding a rating to it
         # would only ever help trades settled after the change, while every trade already
@@ -8640,12 +8753,15 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             "buyerWhy": getattr(t, 'buyer_why', None),
         } for t in trades]
 
-        moves = (session.query(SeasonRecapEvent)
-                 .filter(SeasonRecapEvent.season == season,
-                         SeasonRecapEvent.event_type.in_(
-                             ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
-                              'rookie_pick', 'retirement')))
-                 .order_by(SeasonRecapEvent.id.desc()).limit(limit).all())
+        movesQuery = (session.query(SeasonRecapEvent)
+                      .filter(SeasonRecapEvent.season == season,
+                              SeasonRecapEvent.event_type.in_(
+                                  ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
+                                   'rookie_pick', 'retirement'))))
+        if tradesHidden:
+            # A cut, signing or promotion a trade forced carries the trade's id.
+            movesQuery = movesQuery.filter(SeasonRecapEvent.trade_id.is_(None))
+        moves = movesQuery.order_by(SeasonRecapEvent.id.desc()).limit(limit).all()
         moveRows = [{
             "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
             "playerId": m.player_id, "player": m.player_name,
@@ -8654,29 +8770,38 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     finally:
         session.close()
 
-    # ---- walk-year players, and who cannot be kept ----
+    # ---- walk-year players, and who may leave ----
+    # ⚠️ THE GM'S OWN RE-SIGN DECISION, PROJECTED (`SeasonManager.projectedResigns`, owner
+    # 2026-10-22). This used to keep each team's two highest-rated walk-year players,
+    # which ignores position: the Strangers showed their 91 kicker as kept over an 80
+    # receiver the GM values at nearly twice as much. It is a projection, so a player
+    # the GM is not expected to re-sign MAY leave (`mayLeave`); the decision is made at
+    # the start of the offseason. Falls back to the rating guess only if the projection
+    # is unavailable.
+    projected = {}
+    try:
+        projected = sm.projectedResigns() if sm is not None else {}
+    except Exception as e:
+        logger.debug(f"re-sign projection unavailable: {e}")
     expiring = []
     for team in getattr(tm, 'teams', None) or []:
         walkers = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
                    if p is not None and (getattr(p, 'termRemaining', 99) or 99) <= 1
                    and not getattr(p, 'willRetire', False)]
-        # ⚠️ THE STORY IS WHO THE CLUB CANNOT KEEP. `RESIGN_LIMIT_PER_OFFSEASON` is 2, so
-        # a club with three expiring players is losing one for nothing whatever it wants.
         overLimit = max(0, len(walkers) - int(RESIGN_LIMIT_PER_OFFSEASON))
-        # ⚠️ ENUMERATE THE SORTED LIST. This iterated the sorted order and then asked
-        # `walkers.index(p)` — the position in the UNSORTED list — so `cannotKeep` landed on
-        # whoever happened to sit first in the roster dict rather than on the weakest, which
-        # is the one thing the flag claims to mean.
         for rank, p in enumerate(sorted(walkers,
                                         key=lambda x: getattr(x, 'playerRating', 0))):
+            pid = getattr(p, 'id', None)
+            mayLeave = ((not projected[pid]) if pid in projected
+                        else overLimit > 0 and rank < overLimit)
             expiring.append({
-                "playerId": getattr(p, 'id', None), "name": p.name,
+                "playerId": pid, "name": p.name,
                 "position": p.position.name,
                 "rating": round(getattr(p, 'playerRating', 0), 1),
                 "team": teamBlob(getattr(team, 'id', None)),
-                # True for the WEAKEST of an over-limit club's walk-years — the ones the
-                # re-sign slots will not stretch to.
-                "cannotKeep": overLimit > 0 and rank < overLimit,
+                "mayLeave": mayLeave,
+                # The old name, for clients that still read it. Same value.
+                "cannotKeep": mayLeave,
             })
 
     # ---- the block ----
@@ -8696,7 +8821,7 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
 
     block = []
     tradingOn = tradingEnabled()
-    if windowState == TRADE_WINDOW_OPEN and sm and sm.currentSeason:
+    if not tradesHidden and windowState == TRADE_WINDOW_OPEN and sm and sm.currentSeason:
         try:
             from managers.tradeManager import TradeMarket
             brain = sm._foBrainForOffseason()
@@ -11068,45 +11193,60 @@ class SetShowcaseRequest(BaseModel):
     slots: List[ShowcaseSlotInput]
 
 
+def _showcaseStandings(session, season: int) -> list:
+    """Everyone with a featured Showcase this season, ranked by score (best first):
+    [{userId, rank, grade, weeklyDividend, cardCount, activeSets}]. The score itself
+    stays private (the site shows the grade it drives)."""
+    from database.models import ShowcaseSlot
+    from managers import showcaseManager
+    userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
+        ShowcaseSlot.season == season).distinct().all()]
+    rows = []
+    for uid in userIds:
+        infos = showcaseManager.loadShowcaseCardInfos(session, uid, season)
+        if not infos:
+            continue
+        ev = showcaseManager.evaluate(infos, season, showcaseManager.buildLegacyLookup(session, infos))
+        rows.append({
+            "userId": uid,
+            "grade": ev["grade"],
+            "weeklyDividend": ev["weeklyDividend"],
+            "cardCount": len(infos),
+            "activeSets": ev["activeSets"],
+            "_score": ev["score"],
+        })
+    rows.sort(key=lambda r: r["_score"], reverse=True)
+    for rank, r in enumerate(rows, start=1):
+        r.pop("_score")
+        r["rank"] = rank
+    return rows
+
+
 @app.get("/api/cards/showcase/leaderboard")
 def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
     """Ranked list of everyone with a featured Showcase this season. Ranked by the
     score (which drives the grade); grade / weekly dividend / card count exposed."""
     from database.connection import get_session
-    from database.models import ShowcaseSlot, User as _UserModel
-    from managers import showcaseManager
+    from database.models import User as _UserModel
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
 
     session = get_session()
     try:
-        userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
-            ShowcaseSlot.season == currentSeason).distinct().all()]
-        rows = []
-        for uid in userIds:
-            infos = showcaseManager.loadShowcaseCardInfos(session, uid, currentSeason)
-            if not infos:
-                continue
-            ev = showcaseManager.evaluate(infos, currentSeason,
-                                          showcaseManager.buildLegacyLookup(session, infos))
-            u = session.get(_UserModel, uid)
-            rows.append({
-                "userId": uid,
-                "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
-                "grade": ev["grade"],
-                "weeklyDividend": ev["weeklyDividend"],
-                "cardCount": len(infos),
-                "activeSets": ev["activeSets"],
-                "_score": ev["score"],  # for ranking only; stripped below
-                "isCurrentUser": uid == user.id,
-            })
-        rows.sort(key=lambda r: r["_score"], reverse=True)
         leaderboard = []
-        for rank, r in enumerate(rows, start=1):
-            r.pop("_score", None)
-            r["rank"] = rank
-            leaderboard.append(r)
+        for r in _showcaseStandings(session, currentSeason):
+            u = session.get(_UserModel, r["userId"])
+            leaderboard.append({
+                "userId": r["userId"],
+                "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
+                "grade": r["grade"],
+                "weeklyDividend": r["weeklyDividend"],
+                "cardCount": r["cardCount"],
+                "activeSets": r["activeSets"],
+                "isCurrentUser": r["userId"] == user.id,
+                "rank": r["rank"],
+            })
         return build_success_response({"leaderboard": leaderboard, "season": currentSeason})
     finally:
         session.close()
@@ -11274,16 +11414,17 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         _rosterForMarker = session.query(FantasyRoster).filter_by(
             user_id=user.id, season=currentSeason,
         ).first()
-        _explicitlySetThisWeek = bool(
-            _rosterForMarker and _rosterForMarker.last_equipped_set_week == currentWeek
-        )
+        _lastSetWeek = _rosterForMarker.last_equipped_set_week if _rosterForMarker else None
+        _explicitlySetThisWeek = _lastSetWeek == currentWeek
 
         # Auto-carry forward: if no cards equipped this week, find the most recent week that has them
         if not equipped and currentWeek > 1 and not _explicitlySetThisWeek:
             # If games are active, lockWeek() already ran — auto-carried cards must also be locked
             gamesActive = _areGamesStarted()
             prevEquipped = []
-            for lookback in range(currentWeek - 1, 0, -1):
+            # Never look back past the user's last explicit set: an empty week there was
+            # emptied on purpose (between weeks, edits land on the week just played).
+            for lookback in range(currentWeek - 1, max(_lastSetWeek or 1, 1) - 1, -1):
                 prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, lookback)
                 if prevEquipped:
                     break
@@ -11846,12 +11987,13 @@ def _tradesHidden() -> bool:
 
 
 def _transactionsAvailable(cs) -> bool:
-    """Whether the Transactions page is open: from the week the in-season trade window
-    opens, through the deadline, the playoffs and the offseason. Closed before that."""
+    """Whether the Transactions page is open: from week 15 (the week the in-season trade
+    window opens), through the deadline, the playoffs and the offseason. Closed before that.
+    Same rule with trading off, when the page serves no trade sections (owner, 2026-10-16)."""
     import trading
     from constants import TRADE_MIN_CERTAINTY
     sm = floosball_app.seasonManager if floosball_app else None
-    if cs is None or _tradesHidden():
+    if cs is None:
         return False
     if cs.isComplete or getattr(sm, '_offseasonFlowPhase', None) is not None:
         return True
@@ -14973,6 +15115,17 @@ def get_fantasy_modifier_schedule(response: Response):
     return build_success_response({"season": currentSeason.seasonNumber, **sched})
 
 
+def _pickemActiveUserIds(session) -> set:
+    """Users who count on the LIVE (current-season) pick'em board: logged in within
+    SUPPORTER_ACTIVITY_WINDOW_DAYS, so long-departed accounts don't clutter it."""
+    from datetime import datetime as _dt, timedelta as _td
+    from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+    from database.models import User
+    cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+    return {r[0] for r in session.query(User.id).filter(
+        User.last_login_at.isnot(None), User.last_login_at >= cutoff).all()}
+
+
 @app.get("/api/pickem/leaderboard")
 def get_pickem_leaderboard(season: Optional[int] = None):
     """Get pick-em leaderboard (season + current week)."""
@@ -15035,14 +15188,7 @@ def get_pickem_leaderboard(season: Optional[int] = None):
         # gated) don't clutter the standings. Past-season boards are left intact — historical
         # standings shouldn't be rewritten by who happens to be active now.
         if seasonNum == currentSeason.seasonNumber:
-            from datetime import datetime as _dt, timedelta as _td
-            from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
-            _cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
-            _activeIds = {
-                r[0] for r in session.query(User.id).filter(
-                    User.last_login_at.isnot(None), User.last_login_at >= _cutoff
-                ).all()
-            }
+            _activeIds = _pickemActiveUserIds(session)
             seasonRows = [r for r in seasonRows if r[0] in _activeIds]
             weekRows = [r for r in weekRows if r[0] in _activeIds]
 
@@ -15144,9 +15290,15 @@ def _checkBotAuth(x_bot_key: str = Header(...)):
         raise HTTPException(status_code=403, detail="Invalid bot key")
 
 
+class _BotLinkRequestBody(BaseModel):
+    discordId: str
+    username: str
+    discordName: Optional[str] = None   # shown in the notification so the owner knows who asked
+
 class _BotLinkBody(BaseModel):
     discordId: str
     username: str
+    code: str
 
 class _BotUnlinkBody(BaseModel):
     discordId: str
@@ -15156,17 +15308,99 @@ class _BotRemindersBody(BaseModel):
     enabled: bool
 
 
+# Pending /link codes, keyed (userId, discordId). Linking used to trust any username, so
+# anyone could claim anyone's account. Now the code goes to the account's in-app
+# notifications, which only the real owner can read. Kept in memory on purpose: codes
+# live 10 minutes and a restart just means asking for a new one (single API process).
+# Keyed per requester so a stranger asking for a code can't invalidate the owner's.
+_LINK_CODE_TTL = 600
+_LINK_CODE_COOLDOWN = 60          # per account, so the bell can't be spammed
+_LINK_CODE_MAX_ATTEMPTS = 5
+_LINK_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'   # no 0/O or 1/I/L
+_pendingLinkCodes: Dict[Tuple[int, str], Dict[str, Any]] = {}
+_linkCodeLastIssued: Dict[int, float] = {}
+_linkCodeLock = threading.Lock()
+
+
+def _pruneLinkCodes(now: float) -> None:
+    for key in [k for k, v in _pendingLinkCodes.items() if v['expires'] <= now]:
+        del _pendingLinkCodes[key]
+    for uid in [u for u, t in _linkCodeLastIssued.items() if now - t >= _LINK_CODE_COOLDOWN]:
+        del _linkCodeLastIssued[uid]
+
+
+def _findUserByUsername(session, username: str):
+    """Case-insensitive exact match. Not ilike(): that treats % and _ as wildcards, so
+    `/link %` would match whichever account came back first."""
+    from database.models import User
+    from sqlalchemy import func
+    return session.query(User).filter(
+        func.lower(User.username) == (username or '').strip().lower()).first()
+
+
+@app.post("/api/bot/link/request")
+def bot_link_request(body: _BotLinkRequestBody, _auth: None = Depends(_checkBotAuth)):
+    """Step 1 of linking: send a one-time code to the account's in-app notifications."""
+    from database.connection import get_session
+    from database.repositories.notification_repository import NotificationRepository
+    session = get_session()
+    try:
+        user = _findUserByUsername(session, body.username)
+        if not user:
+            raise HTTPException(404, "Username not found")
+        if user.discord_id == body.discordId:
+            raise HTTPException(409, f"You're already linked to {user.username}")
+
+        now = time.time()
+        with _linkCodeLock:
+            _pruneLinkCodes(now)
+            if user.id in _linkCodeLastIssued:
+                raise HTTPException(429, "A code was just sent to that account. "
+                                         "Wait a minute before asking for another.")
+            code = ''.join(secrets.choice(_LINK_CODE_ALPHABET) for _ in range(6))
+            _pendingLinkCodes[(user.id, body.discordId)] = {
+                'code': code, 'expires': now + _LINK_CODE_TTL, 'attempts': 0}
+            _linkCodeLastIssued[user.id] = now
+
+        who = f"Discord user {body.discordName[:40]}" if body.discordName else "A Discord user"
+        NotificationRepository(session).create(
+            user.id, 'discord_link', f"Discord link code: {code}",
+            f"{who} asked to link to your account. If that was you, run "
+            f"/link username:{user.username} code:{code} in Discord within 10 minutes. "
+            f"If it wasn't you, ignore this.")
+        session.commit()
+        return build_success_response({"username": user.username})
+    finally:
+        session.close()
+
+
 @app.post("/api/bot/link")
 def bot_link_user(body: _BotLinkBody, _auth: None = Depends(_checkBotAuth)):
-    """Link a Discord user to a Floosball account by username."""
+    """Step 2 of linking: check the code from /api/bot/link/request, then link."""
     from database.connection import get_session
     from database.models import User
     session = get_session()
     try:
-        # Find user by username (case-insensitive)
-        user = session.query(User).filter(User.username.ilike(body.username)).first()
+        user = _findUserByUsername(session, body.username)
         if not user:
             raise HTTPException(404, "Username not found")
+
+        key = (user.id, body.discordId)
+        with _linkCodeLock:
+            _pruneLinkCodes(time.time())
+            pending = _pendingLinkCodes.get(key)
+            if not pending:
+                raise HTTPException(400, "No code pending (or it expired). "
+                                         "Run /link without a code to get a new one.")
+            given = (body.code or '').strip().upper().encode()
+            if not secrets.compare_digest(given, pending['code'].encode()):
+                pending['attempts'] += 1
+                if pending['attempts'] >= _LINK_CODE_MAX_ATTEMPTS:
+                    del _pendingLinkCodes[key]
+                    raise HTTPException(400, "Too many wrong codes. "
+                                             "Run /link without a code to get a new one.")
+                raise HTTPException(400, "That code doesn't match. Check your notifications and try again.")
+            del _pendingLinkCodes[key]
 
         # Clear discord_id from any other user that has it (re-link)
         existing = session.query(User).filter(User.discord_id == body.discordId).first()
@@ -15215,11 +15449,36 @@ def bot_set_reminders(body: _BotRemindersBody, _auth: None = Depends(_checkBotAu
         session.close()
 
 
+@app.get("/api/bot/favorite-teams")
+def bot_get_favorite_teams(discordId: Optional[str] = Query(None), _auth: None = Depends(_checkBotAuth)):
+    """Linked Discord users and their favorite team, for syncing Discord team roles.
+
+    Every linked user is listed; one without a favorite team has team None. A pending
+    (next-season) switch isn't the favorite yet, so it isn't reported until promoted.
+    discordId narrows the list to that user (empty if they aren't linked)."""
+    from database.connection import get_session
+    from database.models import User, Team
+    session = get_session()
+    try:
+        q = session.query(User.discord_id, Team.id, Team.name, Team.city).outerjoin(
+            Team, User.favorite_team_id == Team.id
+        ).filter(User.discord_id.isnot(None))
+        if discordId:
+            q = q.filter(User.discord_id == discordId)
+        return build_success_response([
+            {"discordId": did, "team": {"id": tid, "name": name, "city": city} if tid else None}
+            for did, tid, name, city in q.all()
+        ])
+    finally:
+        session.close()
+
+
 @app.get("/api/bot/unsubmitted")
 def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
-    """Get Discord IDs of users who opted into reminders but haven't submitted roster/picks."""
+    """Get Discord IDs of users who opted into reminders but haven't equipped a lineup,
+    made picks, or featured any cards in this season's Showcase."""
     from database.connection import get_session
-    from database.models import User, FantasyRoster, PickEmPick
+    from database.models import User, PickEmPick, ShowcaseSlot, EquippedCard, UserCard, CardTemplate, FantasyRoster
     from sqlalchemy import func
 
     if floosball_app is None:
@@ -15228,7 +15487,8 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
     sm = floosball_app.seasonManager
     currentSeason = sm.currentSeason
     if currentSeason is None:
-        return build_success_response({"rosterMissing": [], "picksMissing": [], "week": 0, "nextGameStart": None})
+        return build_success_response({"rosterMissing": [], "picksMissing": [], "showcaseMissing": [],
+                                       "week": 0, "nextGameStart": None})
 
     seasonNum = currentSeason.seasonNumber
     pickemWeek = sm._getPickemWeek()
@@ -15242,20 +15502,42 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         ).all()
 
         if not reminderUsers:
-            return build_success_response({"rosterMissing": [], "picksMissing": [], "week": pickemWeek, "nextGameStart": None})
+            return build_success_response({"rosterMissing": [], "picksMissing": [], "showcaseMissing": [],
+                                           "week": pickemWeek, "nextGameStart": None})
 
         userIds = [u.id for u in reminderUsers]
         discordMap = {u.id: u.discord_id for u in reminderUsers}
 
-        # Users missing locked roster for this season
-        lockedUserIds = set(
-            uid for (uid,) in session.query(FantasyRoster.user_id).filter(
-                FantasyRoster.season == seasonNum,
-                FantasyRoster.is_locked == True,
-                FantasyRoster.user_id.in_(userIds),
-            ).all()
-        )
-        rosterMissing = [discordMap[uid] for uid in userIds if uid not in lockedUserIds]
+        # Users without a lineup this week. Fusion: the lineup IS the equipped cards, and
+        # the game-start lock needs them to fill ROSTER_MIN_PLAYERS slots. This week's rows
+        # often don't exist yet (the lock carries the latest earlier week forward), so a
+        # user with none is judged on that week instead, minus the cards the carry skips.
+        from constants import ROSTER_MIN_PLAYERS
+        equipWeek = currentSeason.currentWeek if isinstance(currentSeason.currentWeek, int) else 0
+        latestWeek, slotsByUser = {}, {}
+        rows = session.query(
+            EquippedCard.user_id, EquippedCard.week, EquippedCard.slot_number,
+            UserCard.vaulted, CardTemplate.season_created,
+        ).join(UserCard, EquippedCard.user_card_id == UserCard.id
+        ).join(CardTemplate, UserCard.card_template_id == CardTemplate.id
+        ).filter(
+            EquippedCard.season == seasonNum,
+            EquippedCard.week <= equipWeek,
+            EquippedCard.user_id.in_(userIds),
+        ).order_by(EquippedCard.week.desc()).all()
+        # Weeks before a user's last explicit lineup set don't carry (they emptied it).
+        lastSetWeek = dict(session.query(FantasyRoster.user_id, FantasyRoster.last_equipped_set_week).filter(
+            FantasyRoster.season == seasonNum, FantasyRoster.user_id.in_(userIds)).all())
+        for uid, week, slotNum, vaulted, cardSeason in rows:
+            if week < (lastSetWeek.get(uid) or 0):
+                continue
+            if latestWeek.setdefault(uid, week) != week:
+                continue
+            if week < equipWeek and (vaulted or cardSeason != seasonNum):
+                continue
+            slotsByUser.setdefault(uid, set()).add(slotNum)
+        rosterMissing = [discordMap[uid] for uid in userIds
+                         if len(slotsByUser.get(uid, ())) < ROSTER_MIN_PLAYERS]
 
         # Users missing picks for this week
         pickedUserIds = set(
@@ -15266,6 +15548,16 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
             ).all()
         )
         picksMissing = [discordMap[uid] for uid in userIds if uid not in pickedUserIds]
+
+        # Users with nothing featured in this season's Showcase. It starts empty every
+        # season, so this includes users with no vaulted cards yet (they'd need to vault one).
+        showcasedUserIds = set(
+            uid for (uid,) in session.query(func.distinct(ShowcaseSlot.user_id)).filter(
+                ShowcaseSlot.season == seasonNum,
+                ShowcaseSlot.user_id.in_(userIds),
+            ).all()
+        )
+        showcaseMissing = [discordMap[uid] for uid in userIds if uid not in showcasedUserIds]
 
         # Next game start time
         nextGameStart = None
@@ -15282,6 +15574,7 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         return build_success_response({
             "rosterMissing": rosterMissing,
             "picksMissing": picksMissing,
+            "showcaseMissing": showcaseMissing,
             "week": pickemWeek,
             "nextGameStart": nextGameStart,
         })
@@ -15289,18 +15582,88 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
         session.close()
 
 
-@app.get("/api/bot/cards")
-def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
-    """Get equipped cards for a linked Discord user."""
+@app.get("/api/bot/unvoted")
+def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
+    """Open votes and, for users with DM reminders on, which of them each hasn't cast.
+
+    Covers the rule vote (one window per game day, closing at that day's kickoff), the
+    MVP ballot and the Hall of Fame ballot. HoF is approval voting, so approving any one
+    player counts as voted. Returns {votes: [{key, kind, label, closesAt}],
+    missing: {discordId: [key, ...]}}; a vote's key changes with each window, so the
+    bot can tell a new vote from one it already announced."""
     from database.connection import get_session
-    from database.models import User, EquippedCard
+    from database.models import User, RuleVote, AwardVote
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from database.repositories.award_repository import HofBallotRepository
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    season, mvpOpen, hofOpen = _awardWindows()
+
+    session = get_session()
+    try:
+        reminderUsers = session.query(User).filter(
+            User.discord_dm_reminders == True,
+            User.discord_id.isnot(None),
+        ).all()
+        userIds = [u.id for u in reminderUsers]
+        discordMap = {u.id: u.discord_id for u in reminderUsers}
+
+        votes, voters = [], {}
+        window = RuleVoteRepository(session).getOpenWindow(season) if season else None
+        if _isVotingOpen(window):
+            key = f"rule:{window.id}"
+            core = _coreDisplayName(window.core)
+            label = "the rule revert vote" if window.kind == "revert" else "the rule change vote"
+            votes.append({"key": key, "kind": "rule",
+                          "label": f"{label} ({core})" if core else label,
+                          "closesAt": window.closes_at.isoformat() + "Z" if window.closes_at else None})
+            voters[key] = {uid for (uid,) in session.query(RuleVote.user_id).filter(
+                RuleVote.window_id == window.id, RuleVote.user_id.in_(userIds)).distinct()}
+        if hofOpen and not HofBallotRepository(session).getActive():
+            hofOpen = False  # nobody qualified this year: nothing to vote on
+        for awardType, isOpen, label in (("mvp", mvpOpen, "the MVP ballot"),
+                                         ("hof", hofOpen, "the Hall of Fame ballot")):
+            if not isOpen:
+                continue
+            key = f"{awardType}:{season}"
+            votes.append({"key": key, "kind": awardType, "label": label, "closesAt": None})
+            voters[key] = {uid for (uid,) in session.query(AwardVote.user_id).filter(
+                AwardVote.season == season, AwardVote.award_type == awardType,
+                AwardVote.user_id.in_(userIds)).distinct()}
+
+        missing = {}
+        for uid in userIds:
+            keys = [v["key"] for v in votes if uid not in voters[v["key"]]]
+            if keys:
+                missing[discordMap[uid]] = keys
+        return build_success_response({"votes": votes, "missing": missing})
+    finally:
+        session.close()
+
+
+_SLOT_BY_ORDINAL = {1: "QB", 2: "RB", 3: "WR1", 4: "WR2", 5: "TE", 6: "K", 7: "FLEX"}
+
+
+@app.get("/api/bot/lineup")
+def bot_get_lineup(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
+    """A linked Discord user's fantasy lineup: their equipped cards (fusion), one per slot.
+
+    Shows what the site's lineup shows. This week's cards are often not written yet (the
+    site's GET and the game-start lock carry the latest earlier week forward), so with
+    none for this week the latest earlier week is shown, minus the cards a carry skips
+    (vaulted, or from another season). An explicit "unequip everything" this week stays
+    empty, as on the site."""
+    from database.connection import get_session
+    from database.models import User, FantasyRoster, EquippedCard
 
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
     sm = floosball_app.seasonManager
-    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else None
+    week = week if isinstance(week, int) and week > 0 else None
 
     session = get_session()
     try:
@@ -15308,51 +15671,81 @@ def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAu
         if not user:
             raise HTTPException(404, "Account not linked — use /link first")
 
-        from database.repositories.card_repositories import EquippedCardRepository
-        equippedRepo = EquippedCardRepository(session)
-        equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
+        empty = {"username": user.username, "season": season, "week": week,
+                 "locked": False, "slots": []}
+        if season is None:
+            return build_success_response(empty)
 
-        posLabels = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
-        cards = []
-        for eq in equipped:
-            template = eq.user_card.card_template
-            effectConfig = template.effect_config or {}
-            cards.append({
+        q = session.query(EquippedCard).filter(EquippedCard.user_id == user.id, EquippedCard.season == season)
+        if week is not None:
+            q = q.filter(EquippedCard.week <= week)
+        latest = q.order_by(EquippedCard.week.desc()).first()
+        if latest is None:
+            return build_success_response(empty)
+
+        carried = week is not None and latest.week < week
+        if carried:
+            # Emptied on purpose at or after the week we'd carry from: nothing is carried.
+            roster = session.query(FantasyRoster).filter_by(user_id=user.id, season=season).first()
+            lastSet = roster.last_equipped_set_week if roster else None
+            if lastSet is not None and latest.week < lastSet <= week:
+                return build_success_response(empty)
+
+        rows = q.filter(EquippedCard.week == latest.week).all()
+        slots = []
+        for eq in rows:
+            card = eq.user_card
+            template = card.card_template
+            if carried and (card.vaulted or template.season_created != season):
+                continue
+            # Name and team from the live player (trades move them); the card's snapshot otherwise.
+            player = floosball_app.playerManager.getPlayerById(template.player_id)
+            team = getattr(player, 'team', None) if player else None
+            if not hasattr(team, 'name'):
+                team = template.team
+            effect = template.effect_config or {}
+            slots.append({
+                "slot": eq.slot or _SLOT_BY_ORDINAL.get(eq.slot_number, ""),
                 "slotNumber": eq.slot_number,
-                "displayName": effectConfig.get("displayName", "Unknown"),
+                "playerName": getattr(player, 'name', None) or template.player_name,
+                "teamName": getattr(team, 'name', '') if team else '',
+                "teamAbbr": getattr(team, 'abbr', '') if team else '',
+                "effectName": effect.get("displayName") or "No effect",
+                "effectDetail": effect.get("detail") or effect.get("tagline") or "",
                 "edition": template.edition,
-                "position": posLabels.get(template.position, "??"),
-                "playerName": template.player_name,
-                "teamAbbr": getattr(template.team, 'abbr', '') if template.team else "",
-                "teamName": getattr(template.team, 'name', '') if template.team else "",
-                "streakCount": getattr(eq, 'streak_count', 1) or 1,
-                "locked": eq.locked,
+                "streakCount": eq.streak_count or 0,
             })
-        cards.sort(key=lambda c: c["slotNumber"])
+        slots.sort(key=lambda x: x["slotNumber"])
 
         return build_success_response({
-            "username": user.username,
-            "equippedCards": cards,
-            "season": currentSeason,
-            "week": currentWeek,
+            **empty,
+            "week": week if week is not None else latest.week,
+            "locked": not carried and any(eq.locked for eq in rows),
+            "slots": slots,
         })
     finally:
         session.close()
 
 
-@app.get("/api/bot/roster")
-def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
-    """Get fantasy lineup for a linked Discord user (fusion: the equipped cards)."""
+@app.get("/api/bot/profile")
+def bot_get_profile(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
+    """A linked Discord user's season at a glance, for /me: favorite team, Floobits,
+    fantasy and pick'em rank, Showcase, cards, Supporter tier, achievements.
+
+    Ranks match the site's boards (the fantasy snapshot, the pick'em board's activity
+    filter, the Showcase leaderboard). A section is null when the user isn't on that
+    board (yet). Read-only: nothing here writes (unlike GET /api/achievements)."""
     from database.connection import get_session
-    from database.models import User, FantasyRoster
-    from database.repositories.card_repositories import EquippedCardRepository
+    from database.models import User, UserCurrency, UserCard
+    from database.repositories.pickem_repository import PickEmRepository
+    from managers import achievementManager
+    from managers.supporterManager import loyaltyTier
+    from constants import SHOWCASE_SLOTS
+    from sqlalchemy import func
 
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
-
-    sm = floosball_app.seasonManager
-    currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    season = _getCurrentSeasonNumber()
 
     session = get_session()
     try:
@@ -15360,51 +15753,63 @@ def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotA
         if not user:
             raise HTTPException(404, "Account not linked — use /link first")
 
-        if currentSeasonNum is None:
-            return build_success_response({"username": user.username, "roster": None, "season": None})
+        def teamInfo(teamId):
+            team = session.get(_Team, teamId) if teamId else None
+            return {"name": team.name, "abbr": team.abbr} if team else None
 
-        roster = session.query(FantasyRoster).filter_by(
-            user_id=user.id, season=currentSeasonNum
-        ).first()
+        currency = session.query(UserCurrency).filter_by(user_id=user.id).first()
+        owned = session.query(func.count(UserCard.id)).filter(UserCard.user_id == user.id).scalar() or 0
+        vaulted = session.query(func.count(UserCard.id)).filter(
+            UserCard.user_id == user.id, UserCard.vaulted == True).scalar() or 0
+        _, tierLabel = loyaltyTier(int(user.supporter_weeks or 0))
+        achievements = achievementManager.getUserAchievements(session, user.id, season or 0)
 
-        if roster is None:
-            return build_success_response({"username": user.username, "roster": None, "season": currentSeasonNum})
-
-        # Fusion: the lineup IS the equipped cards' depicted players. earnedPoints is
-        # each fielded player's live season FP (an approximate summary — the precise
-        # weekly-sum total lives on the fantasy leaderboard).
-        equipped = EquippedCardRepository(session).getByUserWeek(user.id, currentSeasonNum, currentWeek)
-        players = []
-        for eq in equipped:
-            pid = eq.user_card.card_template.player_id
-            playerObj = floosball_app.playerManager.getPlayerById(pid) if floosball_app else None
-            liveFp = _getPlayerLiveFantasyPoints(playerObj) if playerObj else 0
-            players.append({
-                "slot": eq.slot or "",
-                "playerName": playerObj.name if playerObj else "Unknown",
-                "position": playerObj.position.name if playerObj and hasattr(playerObj.position, 'name') else "",
-                "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
-                "teamName": getattr(playerObj.team, 'name', '') if playerObj and hasattr(playerObj.team, 'name') else "",
-                "earnedPoints": round(liveFp, 1),
-            })
-
-        # Sort by slot order
-        slotOrder = {"QB": 0, "RB": 1, "WR1": 2, "WR2": 3, "TE": 4, "K": 5, "FLEX": 6}
-        players.sort(key=lambda p: slotOrder.get(p["slot"], 99))
-
-        totalEarned = sum(p["earnedPoints"] for p in players)
-        cardBonus = roster.card_bonus_points or 0.0
-
-        return build_success_response({
+        profile = {
             "username": user.username,
-            "roster": {
-                "isLocked": roster.is_locked,
-                "totalPoints": round(totalEarned, 1),
-                "cardBonusPoints": round(cardBonus, 1),
-                "players": players,
-            },
-            "season": currentSeasonNum,
-        })
+            "memberSince": user.created_at.isoformat() + "Z" if user.created_at else None,
+            "season": season,
+            "favoriteTeam": teamInfo(user.favorite_team_id),
+            "pendingTeam": teamInfo(user.pending_favorite_team_id),
+            "floobits": int(currency.balance) if currency else 0,
+            "cards": {"owned": owned, "vaulted": vaulted},
+            "supporter": {"tier": tierLabel, "weeks": int(user.supporter_weeks or 0),
+                          "unclaimed": int(user.supporter_unclaimed or 0)},
+            "achievements": {"completed": sum(1 for a in achievements if a.get("completedAt")),
+                             "total": len(achievements)},
+            "fantasy": None, "pickem": None, "showcase": None,
+        }
+        if season is None:
+            return build_success_response(profile)
+
+        # Fantasy: the same snapshot the site's leaderboard and header ticker read.
+        entries = floosball_app.fantasyTracker.getSnapshot().get("entries", [])
+        mine = next((e for e in entries if e.get("userId") == user.id), None)
+        if mine:
+            profile["fantasy"] = {
+                "rank": mine.get("rank"), "of": len(entries),
+                "seasonPoints": round(mine.get("seasonTotal", 0), 1),
+                "weekPoints": round(mine.get("weekTotal", 0), 1) if _isRegularSeason() else None,
+            }
+
+        # Pick'em: the live board, with its activity filter, so the rank matches the site.
+        active = _pickemActiveUserIds(session)
+        board = [r for r in PickEmRepository(session).getSeasonLeaderboard(season) if r[0] in active]
+        for rank, (uid, correct, total, points) in enumerate(board, start=1):
+            if uid == user.id:
+                profile["pickem"] = {"rank": rank, "of": len(board), "points": points,
+                                     "correct": correct, "total": total,
+                                     "accuracy": round(correct / total * 100, 1) if total else 0}
+                break
+
+        standings = _showcaseStandings(session, season)
+        mineSc = next((r for r in standings if r["userId"] == user.id), None)
+        profile["showcase"] = {
+            "featured": mineSc["cardCount"] if mineSc else 0, "slots": SHOWCASE_SLOTS,
+            "grade": mineSc["grade"] if mineSc else None,
+            "weeklyDividend": mineSc["weeklyDividend"] if mineSc else 0,
+            "rank": mineSc["rank"] if mineSc else None, "of": len(standings),
+        }
+        return build_success_response(profile)
     finally:
         session.close()
 
@@ -15488,6 +15893,17 @@ async def admin_list_name_submissions(status: str = Query('pending'),
         if status and status != 'all':
             q = q.filter(NameSubmission.status == status)
         rows = q.order_by(NameSubmission.created_at.desc()).limit(500).all()
+        # A pending suggestion shows the names it reads close to, so approving it gets
+        # the same look a typed name gets in the add box.
+        pendingRows = [r for r in rows if r.status == 'pending']
+        similarById = {}
+        if pendingRows and floosball_app is not None:
+            from name_similarity import NameIndex
+            pm = floosball_app.playerManager
+            index = NameIndex(_leagueNames(pm, includeSuggested=True))
+            for r in pendingRows:
+                similarById[r.id] = [m for m in index.similarTo(r.name)
+                                     if not (m['source'] == 'suggested' and m['name'] == r.name)]
         counts = {}
         for st in ('pending', 'approved', 'rejected'):
             counts[st] = session.query(NameSubmission).filter(
@@ -15501,6 +15917,7 @@ async def admin_list_name_submissions(status: str = Query('pending'),
                 "discordId": r.discord_id,
                 "createdAt": r.created_at.isoformat() if r.created_at else None,
                 "reviewedAt": r.reviewed_at.isoformat() if r.reviewed_at else None,
+                "similar": similarById.get(r.id, []),
             } for r in rows],
             "counts": counts,
         }

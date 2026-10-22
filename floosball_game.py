@@ -42,6 +42,10 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from constants import (
+    OT_FIRST_POSS_WP_YTE, OT_FIRST_POSS_WP, OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP,
+    OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_TD, OT_ANSWER_FG_DRIVE_SCORE, OT_ANSWER_TD_DRIVE_TD,
+    WP_FIELD_VALUE_YTE, WP_FIELD_VALUE, WP_DOWN_PENALTY, WP_STRENGTH_PER_LOGIT,
+    WP_MARGIN_SIGMA, WP_TIME_FLOOR, BIG_PLAY_WPA_THRESHOLD,
     GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
     RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
@@ -57,7 +61,7 @@ from constants import (
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
     MOMENTUM_CASCADE_STEP, MOMENTUM_MAX_CASCADE, MOMENTUM_MAX_STREAK,
-    MOMENTUM_EFFECT_BASE, MOMENTUM_EFFECT_CAP, MOMENTUM_NEUTRAL_ZONE,
+    MOMENTUM_CONFIDENCE_AT_50, MOMENTUM_DETERMINATION_AT_50, MOMENTUM_NEUTRAL_ZONE,
     MOMENTUM_SHIFT_THRESHOLD, MOMENTUM_CROSS_ZERO_THRESHOLD, MOMENTUM_DISPLAY_THRESHOLD,
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
@@ -925,6 +929,16 @@ def _opennessToSeparation(openness: float, depth: str = 'short') -> float:
     return float(np.interp(np.interp(openness, simQ, qs), qs, nflQ))
 
 
+def hailMaryReach(passer) -> float:
+    """How far this QB can heave it, in yards past the line: ~46 (weak arm) to ~62
+    (elite). The heave is thrown at the end zone, so a goal line beyond this is out of
+    reach and the ball falls short of it."""
+    arm = 75
+    if passer is not None:
+        arm = getattr(getattr(passer, 'gameAttributes', None), 'armStrength', 75)
+    return 50 + (arm - 70) * 0.4
+
+
 def _rnd(value) -> int:
     """Unbiased round to int, replacing int() on every random yardage draw.
 
@@ -1103,6 +1117,11 @@ class Game:
         # with `yardsToEndzone` this is the whole of a drive: started there, is here now.
         self.driveStartYardsToEZ = None
         self._driveTeam = None
+        # Each side's drives this game and the points its offense scored on them. Read by
+        # the conversion choice to judge how the scoring team's defense is holding up
+        # (`_opponentDriveOdds`).
+        self._drivesBy = {}
+        self._offensePointsBy = {}
         self.offensiveTeam: FloosTeam.Team = None
         self.defensiveTeam: FloosTeam.Team = None
         self.homeTeamElo = getattr(homeTeam, 'elo', 1500) if homeTeam else 1500
@@ -1144,6 +1163,7 @@ class Game:
         # Diagnostics (sampled in _applyMomentumEffect, dumped by _logPlayAnalytics)
         self._peakAbsMomentum = 0.0
         self._playsAbove30Mom = 0
+        self._momentumApplied = {}       # id(player) -> (player, confidence, determination) offset in force
 
         # Coaching gameplans (pre-game scouting, generated once per game)
         if GAMEPLAN_AVAILABLE:
@@ -1681,6 +1701,49 @@ class Game:
             return False
         return self.down <= 2
 
+    def _isFgSecuredDrain(self) -> bool:
+        """True when an offense already in comfortable field-goal range, tied or within a
+        field goal at the end of the game or of a frame, should run the clock rather than
+        stop it, with 1:00 to `FG_SECURE_DRAIN_SECS` left (`_isFgDrainMode` owns the last
+        minute). When True the offense does not hurry, call clock-stopping timeouts, spike
+        or throw to the sideline, so it scores last instead of handing the opponent time.
+
+        ⚠️ A COACH CALL, DECIDED ONCE PER DRIVE (owner, 2026-10-19: "tied to coach clock
+        management"): a sharp clock manager reads it, a poor one keeps stopping the clock.
+        The read is cached on the drive so the offense does not flip between draining and
+        stopping the clock from one snap to the next. Off in chess clock (the budget, not
+        the game clock, is what runs out) and under the Drive Clock (its own clock forces
+        the pace). See constants FG_SECURE_*."""
+        from constants import FG_SECURE_DRAIN_SECS, FG_SECURE_MIN_PROB, FG_SECURE_READ_BASE
+        if getattr(self.format, 'key', '') == 'chess_clock' or self._driveClockActive():
+            return False
+        kind, secs = self._periodEnd()
+        if kind != 'game' or not (60 < secs <= FG_SECURE_DRAIN_SECS):
+            return False
+        margin = self._clockMargin()
+        if not (-self._fgValue() <= margin <= 0) or self._isGarbageTime(margin):
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is None:
+            return False
+        if self.yardsToEndzone > kicker.maxFgDistance - self.gameRules.fgSnapDistance:
+            return False
+        try:
+            if self._estimateFgProbability() < FG_SECURE_MIN_PROB:
+                return False
+        except Exception:
+            return False
+        driveKey = (id(self.offensiveTeam), getattr(self, '_drivesBy', {}).get(id(self.offensiveTeam), 0),
+                    self.currentQuarter, getattr(self, '_frameIndex', 0))
+        cached = getattr(self, '_fgSecureRead', None)
+        if cached is not None and cached[0] == driveKey:
+            return cached[1]
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        read = _random.random() < (FG_SECURE_READ_BASE
+                                   + (1.0 - FG_SECURE_READ_BASE) * self._coachClockIQ(coach))
+        self._fgSecureRead = (driveKey, read)
+        return read
+
     def _isFgDrainMode(self) -> bool:
         """True when the offense should drain clock to set up an end-of-game FG.
         Late Q2/Q4, scoring within 3 (trailing or tied), in chip-shot FG range.
@@ -2155,7 +2218,9 @@ class Game:
         # against a huddle's 18s) purely because it stops the clock; once it does not,
         # it is a forfeited down that buys nothing, so counting one would have the
         # estimator promise a play the offense can no longer reach.
-        spikesAvailable = (1 if self.down < self.gameRules.downsPerSeries - 1 else 0)
+        # Counted in SNAPS (`_seriesSnapsLeft`): a plays drive clock spends a snap on a
+        # spike the way the series spends a down.
+        spikesAvailable = (1 if self._seriesSnapsLeft() >= 3 else 0)
         if not self._deadBallStopsClock():
             spikesAvailable = 0
         # ⚠️ THE FIRST SNAP PAYS ITS PRE-SNAP DRAIN TOO, and for a long time it did not.
@@ -2271,6 +2336,40 @@ class Game:
         iqOffset = round(-NO_HUDDLE_IQ_SPREAD * (gameIQ - 0.5))
         jitter = batched_randint(-NO_HUDDLE_JITTER, NO_HUDDLE_JITTER)
         return max(NO_HUDDLE_PRESNAP_FLOOR, NO_HUDDLE_PRESNAP_SECS + iqOffset + jitter)
+
+    def _runSpendsTheHalf(self) -> bool:
+        """The end of the first half, with points still in reach, no timeout and too
+        little time for a run tackled in bounds to be followed by another snap: the run
+        ends the half. A pass can still get out of bounds or set up a kick; a run cannot.
+
+        This is the case `_lastSnapBeforeBreak` does not catch: the clock is STOPPED now
+        (an incompletion, a catch out of bounds), so it sees time for a snap, but a run
+        restarts the clock and the next snap then pays a full running-clock huddle.
+
+        "In reach" is this kicker's range or this QB's heave (`hailMaryReach`), whichever
+        is farther. The cost after the run is the running-clock snap `_lastSnapBeforeBreak`
+        charges: the run's live ball, the next huddle, administration and the final snap.
+
+        NFL 2019-23, last 20s of Q2: runs are 4% of plays from the opponent's 36-50 and
+        10% inside the 35; the sim ran 22% and 29% (with the half-ending heave, 8%)."""
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
+                               LAST_SNAP_LIVE_SECS)
+        kind, _ = self._periodEnd()
+        if kind != 'half' or not self._deadBallStopsClock():
+            return False
+        timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                        else self.awayTimeoutsRemaining)
+        if timeoutsLeft > 0:
+            return False
+        roster = self.offensiveTeam.rosterDict
+        kicker = roster.get('k')
+        fgReach = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        if self.yardsToEndzone > max(fgReach, hailMaryReach(roster.get('qb'))):
+            return False
+        huddle = (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                  else LAST_SNAP_HUDDLE_SECS)
+        need = LAST_SNAP_LIVE_SECS + huddle + DEAD_BALL_ADMIN_SECONDS + FINAL_SNAP_SECS
+        return self._offenseEffectiveSecs() < need
 
     def _lastSnapBeforeBreak(self) -> bool:
         """Is this the last snap the offense gets before the half or the game ends?
@@ -2494,6 +2593,10 @@ class Game:
         # throw in the playbook in exchange for nothing — and no-huddle fires 2.4x more
         # often there (it keys off `clockRunning`, which a running clock leaves true
         # almost permanently), so the pointless version is the common one.
+        # ⚠️ NEVER ON A DRIVE CLOCK'S LAST SNAP: the drive ends whatever happens, so there
+        # is no clock worth stopping.
+        if self._driveClockFinalSnap():
+            return False
         if self._isNoHuddle() and self._deadBallStopsClock():
             return True
 
@@ -2587,7 +2690,7 @@ class Game:
         # we WANT the clock running so the FG ends the game with no time left.
         # Same for a go-ahead TD being held back: an out-of-bounds catch stops the clock,
         # which is exactly what the drain is trying to avoid.
-        if self._isFgDrainMode() or self._isTdDrainMode():
+        if self._isFgDrainMode() or self._isTdDrainMode() or self._isFgSecuredDrain():
             return False
 
         clockIQ = self._coachClockIQ(coach)
@@ -2718,6 +2821,10 @@ class Game:
         _kind, secs = self._periodEnd(forDefense=True)
         if _kind is None:
             return
+        # Nothing left to stop. Prod game 4976: the Vanguards knelt out the last two
+        # seconds and the Sodas called a timeout at 0:00, after the game was over.
+        if secs <= 0:
+            return
         if not self.clockRunning:
             return
         # The two-minute warning already stopped the clock for free — don't
@@ -2814,8 +2921,21 @@ class Game:
             # 2-3 min, multi-score only — urgency builds toward the 2-min mark
             urgency = max(0.0, (180 - secs) / 60)
             toChance = (0.25 + 0.45 * defGameIQ) * urgency
-        if _random.random() >= toChance:
+        # ⚠️ A DEFENSE THAT HAS STOPPED THE CLOCK ON THIS DRIVE KEEPS STOPPING IT (fixed
+        # 2026-10-20). The roll above runs once per snap and nothing asks again during the
+        # huddle, so a coach who called a timeout one snap could "forget" the next and let
+        # a whole clock-burning huddle run. Prod game 4759, final frame: the Beans, a point
+        # behind in the match, called a timeout at 1:26 and then sat on their last one at
+        # 1:20 while the Strangers drained 48 seconds. The coach's clock IQ still decides
+        # whether he reads the situation at all; once he has, the read holds for the drive
+        # (the same once-per-drive shape as `_isFgSecuredDrain`). Every gate above still
+        # applies on every snap.
+        driveKey = (id(self.offensiveTeam),
+                    getattr(self, '_drivesBy', {}).get(id(self.offensiveTeam), 0),
+                    self.currentQuarter, getattr(self, '_frameIndex', 0))
+        if getattr(self, '_defTimeoutDrive', None) != driveKey and _random.random() >= toChance:
             return
+        self._defTimeoutDrive = driveKey
         # Call timeout
         if defIsHome:
             self.homeTimeoutsRemaining = max(0, self.homeTimeoutsRemaining - 1)
@@ -3104,6 +3224,17 @@ class Game:
         """True when an ENABLED drive clock has run out for the current possession."""
         return self._driveClockActive() and self.driveClockRemaining <= 0
 
+    def _driveClockLastSnap(self) -> bool:
+        """Roughly one snap left on the Drive Clock: the window in which the offense takes
+        the points, punts, or heaves it (`DRIVE_CLOCK_TAKE_POINTS_FRAC` of a seconds
+        limit, the final play of a plays limit)."""
+        if not self._driveClockActive():
+            return False
+        from constants import DRIVE_CLOCK_TAKE_POINTS_FRAC
+        if getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays':
+            return self.driveClockRemaining <= 1
+        return self.driveClockRemaining <= DRIVE_CLOCK_TAKE_POINTS_FRAC * self._driveClockLimitSecs()
+
     def _driveClockLow(self) -> bool:
         """True when the drive clock is low enough that the offense should hurry —
         the last ~15s (seconds unit) or the last snap (plays unit). Drives the
@@ -3115,6 +3246,44 @@ class Game:
         if unit == 'plays':
             return self.driveClockRemaining <= 1
         return self.driveClockRemaining <= DRIVE_CLOCK_LOW_FRAC * self._driveClockLimitSecs()
+
+    def _driveClockFinalSnap(self) -> bool:
+        """This snap is the drive's last, whatever the down: a PLAYS drive clock with one
+        snap left under 'possession' reset. Nothing after it can save the drive (a first
+        down refills nothing), so it is a final down whose only conversion is the goal
+        line: kick, punt, or go for the touchdown, decided as 4th & goal from the spot.
+
+        ⚠️ PLAYS UNIT ONLY. The count is exact there; a seconds clock only estimates its
+        last snap (`_driveClockLastSnap`), and treating an estimate as a final down would
+        give up a snap that might still fit. 'series' reset is excluded because a first
+        down refills the clock, so the real yards to go still matter."""
+        return (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'
+                and getattr(self.gameRules, 'driveClockReset', 'possession') == 'possession'
+                and self.driveClockRemaining <= 1)
+
+    def _isFinalDown(self) -> bool:
+        """The last snap of the series: the rule's final down, or a drive clock's last
+        snap (`_driveClockFinalSnap`)."""
+        return self.down == self.gameRules.downsPerSeries or self._driveClockFinalSnap()
+
+    def _seriesSnapsLeft(self) -> int:
+        """Snaps this series still has, counting this one: the downs left, or a plays
+        drive clock's snaps when that runs out first. Equal to the downs left off the
+        drive clock, so `<= 1` is the final down and `<= 2` the one before it."""
+        left = self.gameRules.downsPerSeries - self.down + 1
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'):
+            left = min(left, max(1, int(self.driveClockRemaining)))
+        return left
+
+    def _decisionYardsToGo(self) -> int:
+        """Yards the play CALL has to cover: the first-down marker, or the goal line on a
+        drive clock's last snap, where reaching the marker buys nothing. Decisions only:
+        play resolution keeps reading `yardsToFirstDown`."""
+        if self._driveClockFinalSnap():
+            return self.yardsToEndzone
+        return self.yardsToFirstDown
 
     def _chessClockOffenseSecs(self):
         """The offense's remaining chess-clock budget (seconds), or None when not in chess
@@ -3182,12 +3351,7 @@ class Game:
         if getattr(fmt, 'key', '') != 'frames' or self.currentQuarter >= 5:
             return None
         try:
-            n = fmt._frames(self)
-            frameLen = fmt._regSeconds(self) / n if n else 0
-            if not frameLen:
-                return None
-            elapsed = fmt._elapsed(self)
-            return max(0, int(round(frameLen - (elapsed % frameLen))))
+            return fmt.secsToFrameEnd(self)
         except Exception:
             return None
 
@@ -3221,6 +3385,18 @@ class Game:
         # frames left to bank, and a decided match ends early (checkEarlyEnd).
         if int(getattr(self, '_frameIndex', 0)) < n - 1:
             return frameDiff
+        # ⚠️ THE FINAL FRAME READS THE MATCH STANDING, NOT THE FRAME'S CURRENT LEAN (fixed
+        # 2026-10-19). The projection below assumes the frame ends as it stands, so a tied
+        # frame read as "tied" even when a tie loses the match and winning it only levels the
+        # frames for a total the offense trails. Prod game 4722: Tuesdays a frame behind,
+        # frame tied 7-7, down 26-19 on total with 3:12 left, played at a normal pace and
+        # kicked a 56-yard field goal that won the frame and lost the match; they needed 8.
+        # `_framesMatchMargin` is the distance to where the match result flips (0 = headed
+        # to overtime), the same reading the try decision uses. The projection is kept only
+        # for the rare state no score can change.
+        _match = self._framesMatchMargin(self.offensiveTeam)
+        if _match is not None:
+            return _match
         # Project the frames-won with the current frame's lean (mirrors awardFrames).
         fh = float(getattr(self, '_framesWonHome', 0.0))
         fa = float(getattr(self, '_framesWonAway', 0.0))
@@ -3440,6 +3616,25 @@ class Game:
             return (self.homeScore > self.awayScore) if isHome else (self.awayScore > self.homeScore)
         return False   # dead level — not leading, so don't drain the match out
 
+    def _frameTieIsShort(self) -> bool:
+        """Frames: True when TYING the current frame is worth less to the offense than
+        winning it, so a tied offense on the frame's last snap still has something to play
+        for. Always before the final frame (a won frame is a full point, a tie half of one,
+        and the next frame restarts at the 20, so field position at the buzzer is worth
+        nothing). In the final frame only when the offense is behind on frames won: a tie
+        then loses the match, while ahead it wins it, and with the frames level the total
+        already decides (`_frameDecisionDiff` hands that margin to every decision, and a
+        dead-level total goes to overtime as in a standard game). False off frames / OT."""
+        if getattr(self.format, 'key', '') != 'frames' or self.currentQuarter >= 5:
+            return False
+        try:
+            n = self.format._frames(self)
+        except Exception:
+            return False
+        # The final frame's margin is already the match standing (`_frameDecisionDiff` ->
+        # `_framesMatchMargin`), where 0 means overtime, as in a standard game.
+        return int(getattr(self, '_frameIndex', 0)) < n - 1
+
     def _frameEndSoon(self, threshold: int = 120) -> bool:
         """True when the current frame is winding down (frames only) — teams should manage
         the clock like the end of a game (hurry if behind in the frame, drain if ahead)."""
@@ -3491,11 +3686,18 @@ class Game:
         return secs
 
     def _estimateConversionProb(self, scoringTeam, distance) -> float:
-        """Rough likelihood a run/pass converts from `distance` yards out — used
-        ONLY by the ladder decision to weigh rungs (the actual try is a real play,
-        so 'harder from further' truly emerges there). Falls with distance."""
-        p = 0.70 - max(0, distance - 2) * 0.028   # ~0.70 at 2 yd, ~0.34 at 15 yd
-        return max(0.05, min(0.92, p))            # tuned to the end-zone-targeting play calls
+        """How likely a try from `distance` yards converts, as the coaches read it: the
+        engine's own measured rate (`CONVERSION_MAKE_BY_DISTANCE`), interpolated between
+        whole yards and held at the ends. Used by every conversion decision; the try itself
+        is a real play."""
+        from constants import CONVERSION_MAKE_BY_DISTANCE as table
+        lo, hi = min(table), max(table)
+        d = max(float(lo), min(float(hi), float(distance)))
+        below = int(math.floor(d))
+        if below >= hi:
+            return table[hi]
+        frac = d - below
+        return table[below] + (table[below + 1] - table[below]) * frac
 
     def _conversionDesire(self, deficit: float, points: float, xp: float, one: float) -> float:
         """How much the trailing team wants a go-try worth `points` over the safe kick, as a
@@ -3661,8 +3863,88 @@ class Game:
         self.play.insights['_otWeights'] = weights
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
+    def _puntNeverComesBack(self) -> bool:
+        """A punt would hand a leader the ball with no time left for the punting team
+        to get it back: trailing at the end of the game (Q4, or the final frame) with no
+        more on the clock than the receiver can kneel away on a fresh series. Field position is then worth nothing, so the snap has to be a
+        shot at points.
+
+        Prod game 4892, final frame: Jetskis down 7 on the match, last drive-clock snap
+        on their own 48 with 0:22 left and no timeouts. They punted and the Pinecones
+        knelt it out. The kneel arithmetic is `_kneelOutDetail`'s: a kneel against a
+        timeout drains ~4s, a free one `kneelDrainSeconds`."""
+        kind, secs = self._periodEnd()
+        if kind != 'game' or self._clockMargin() >= 0:
+            return False
+        # Frames: only the FINAL frame. An earlier frame's ending is not the end of the
+        # match, and the points a short field concedes there still count in the total
+        # that breaks a frames tie.
+        if self._frameScoreDiff() is not None:
+            try:
+                if int(getattr(self, '_frameIndex', 0)) < self.format._frames(self) - 1:
+                    return False
+            except Exception:
+                return False
+        kneels = self.gameRules.downsPerSeries
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'):
+            kneels = min(kneels, int(self.gameRules.driveClockLimit))
+        ourTimeouts = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                       else self.awayTimeoutsRemaining)
+        stopped = min(ourTimeouts, kneels)
+        drainable = stopped * 4 + (kneels - stopped) * self.gameRules.kneelDrainSeconds
+        return secs <= drainable
+
+    def _driveClockPuntCall(self, scoreDiff: int, gameIQ: float) -> bool:
+        """On the Drive Clock's last snap, punt from the offense's own half rather than
+        snap into a turnover on downs at its own spot, which hands the defense a short
+        field. Sets the punt and returns True when it fires. The caller has already
+        established that this is the drive clock's last snap.
+
+        ⚠️ IT MUST ALSO RUN ON THE FINAL DOWN. It used to be early downs only ("4th is
+        the fourth-down caller's job"), but the drive-clock Hail Mary in `playCaller`
+        runs BEFORE the fourth-down caller and fired whenever the offense was tied or
+        trailing, in any quarter, from 30+ yards out, so a 4th-down punt never got a
+        look. Measured over 20 games at 70s/series: 18 of 26 expiries were in the
+        offense's own half and 15 of those were 4th-down heaves (4th & 6 from its own 26
+        in the first quarter). The Hail Mary is now barred from this territory too.
+
+        Under 'series' reset a first down refills the clock, so a short-yardage snap is
+        worth running for the conversion (`DRIVE_CLOCK_PUNT_MIN_TOGO`), and on a final
+        down `_fourthDownCaller`'s own go/punt model already weighs that. Under
+        'possession' a conversion cannot save the drive, so yardage does not matter.
+        """
+        from constants import (DRIVE_CLOCK_PUNT_MIN_YTE, DRIVE_CLOCK_PUNT_MIN_TOGO,
+                               DRIVE_CLOCK_PUNT_BASE, DRIVE_CLOCK_PUNT_IQ_SPAN)
+        if self.yardsToEndzone < DRIVE_CLOCK_PUNT_MIN_YTE:
+            return False
+        series = getattr(self.gameRules, 'driveClockReset', 'possession') == 'series'
+        if series and self.yardsToFirstDown < DRIVE_CLOCK_PUNT_MIN_TOGO:
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if (self._awakenedReadyFor(kicker, 'kick')
+                and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
+            return False   # a charged kicker takes the points instead
+        if (self.format.suppressPunt(self) or self._isFgDrainMode()
+                or self._isGarbageTime(scoreDiff)):
+            return False
+        if self._puntNeverComesBack():
+            return False
+        if _random.random() >= DRIVE_CLOCK_PUNT_BASE + DRIVE_CLOCK_PUNT_IQ_SPAN * gameIQ:
+            return False   # a poor staff can still give it up
+        self.play.insights['clockMgmt'] = {
+            'decision': 'punt',
+            'reason': 'Drive clock expiring in own territory, punt to flip field position',
+            'clockRemaining': self.gameClockSeconds,
+        }
+        self.play.playType = PlayType.Punt
+        return True
+
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
+        # Yards this down has to cover: the marker, or the goal line on a drive clock's
+        # last snap (`_decisionYardsToGo`), where a first down buys nothing.
+        ytg = self._decisionYardsToGo()
         # Frames: each frame is a mini-game you're trying to WIN, so every score-relative
         # decision here (FG-vs-go, sideline targeting, desperation) reasons off the CURRENT
         # FRAME's margin, not the running total. Total points only break a frames tie, so
@@ -3707,6 +3989,13 @@ class Game:
         if self._dartsDriveIsDead():
             self.play.insights['dartsDeadDrive'] = True
             self.play.playType = PlayType.Punt
+            return PlayType.Punt
+        # Drive Clock last snap under 'possession' reset: a conversion cannot save the
+        # drive, so from the offense's own half the only useful snap is a punt. Under
+        # 'series' the model below decides (a short conversion refills the clock).
+        if (getattr(self.gameRules, 'driveClockReset', 'possession') != 'series'
+                and self._driveClockLastSnap()
+                and self._driveClockPuntCall(scoreDiff, self._coachClockIQ(coach))):
             return PlayType.Punt
         # Set sideline targeting for any pass plays called in this method
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
@@ -3797,11 +4086,11 @@ class Game:
         if self.format.suppressPunt(self):
             if inFieldGoalRange and fgHelps:
                 self.play.playType = PlayType.FieldGoal
-            elif self.yardsToFirstDown <= 3:
+            elif ytg <= 3:
                 self.play.runPlay()
             else:
                 self.play.passPlay(self._selectPassPlay(
-                    'medium' if self.yardsToFirstDown <= 12 else 'long'))
+                    'medium' if ytg <= 12 else 'long'))
             return
 
         # ── THE NORMAL-GAME 4TH DOWN: GO, KICK OR PUNT, ON ONE MODEL ──
@@ -3827,7 +4116,7 @@ class Game:
                 'yardsToEndzone': self.yardsToEndzone,
                 'coachAggr': coach.aggressiveness if coach else None,
             }
-            if (chargedInRange and fgHelps and self.yardsToFirstDown > 2
+            if (chargedInRange and fgHelps and ytg > 2
                     and self.yardsToEndzone > 8):
                 # A charged awakened kicker takes the free three (unchanged rule).
                 self.play.insights['fourthDown']['decision'] = 'chargedKick'
@@ -3861,6 +4150,19 @@ class Game:
                 self.play.insights['fourthDown']['decision'] = 'punt'
                 self.play.playType = PlayType.Punt
             return
+
+        # ⚠️ A DRIVE CLOCK'S LAST SNAP INSIDE THE 5, IN THE BRANCH TREE BELOW (every format
+        # but standard: Frames on prod). The tree reads the yards to go as the goal line
+        # here (`_decisionYardsToGo`), and from the 3-5 that sends it to the field goal,
+        # since its go-for-it inside range is gated on 2 yards or fewer. On a real 4th & 3
+        # that is right; on a last snap at the 3 a touchdown (about half the time) is worth
+        # more than three. Measured over 40 Frames games: last snaps inside the 5 kicked 15
+        # of 18 times, against 1 of 28 before the last snap became a final down, when the
+        # early-down path simply ran a play. A leader late in range still takes the points.
+        if self._driveClockFinalSnap() and self.yardsToEndzone <= 5:
+            if not (inFieldGoalRange and leadingLate):
+                self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
+                return
 
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
@@ -3911,7 +4213,12 @@ class Game:
         # pull the trigger earlier; even the most conservative coach
         # stops punting once the clock dips under 15s.
         # (Frames: a frame out of reach either way ends like a half — `_periodEnd`.)
-        if _periodKind == 'half' and self.yardsToSafety > 35:
+        # ⚠️ FRAMES: A TIED FRAME'S LAST SNAPS ARE THE SAME CASE (fixed 2026-10-19). The next
+        # frame restarts at the 20 with the ball alternating, so a punt at the buzzer buys
+        # no field position, and a tie is worth half of a win (`_frameTieIsShort`). Prod
+        # season 11 week 1 had tied teams punting with 0:02, 0:07 and 0:14 left.
+        _tiedFrameEnd = (_periodKind == 'game' and scoreDiff == 0 and self._frameTieIsShort())
+        if (_periodKind == 'half' or _tiedFrameEnd) and self.yardsToSafety > 35:
             shotTimeThreshold = max(15, round(25 + aggrNorm * 10))
             if _periodSecs <= shotTimeThreshold:
                 if inFieldGoalRange:
@@ -3932,8 +4239,18 @@ class Game:
         # range — but only when fgHelps (computed above) and not protecting a late
         # lead; short-yardage / goal-line defer to the go-for-it logic.
         if (chargedInRange and fgHelps and not leadingLate
-                and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
+                and ytg > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
+            return
+        # ⚠️ EXCEPT ON A DRIVE CLOCK'S LAST SNAP FROM 30+ OUT, where going for it is a heave
+        # (`_finalSnapIsAHeave`): a team not behind punts. Prod game 5002: the Normals, up
+        # 5 with 3:17 left, threw a Hail Mary from the Caddies' 38 instead of pinning them.
+        # A team behind keeps the heave; a tied one too when a tie is short of a win.
+        if (self._finalSnapIsAHeave() and not inFieldGoalRange
+                and (scoreDiff > 0 or (scoreDiff == 0 and not self._frameTieIsShort()))
+                and not self.format.suppressPunt(self)):
+            self.play.insights['fourthDown']['decision'] = 'punt'
+            self.play.playType = PlayType.Punt
             return
         if self.yardsToEndzone <= 40 and not leadingLate:
             goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
@@ -3942,16 +4259,16 @@ class Game:
             # TD to win loses the game. Go for the first down / TD instead.
             if not fgHelps:
                 goForIt = True
-            if inFieldGoalRange and self.yardsToFirstDown <= 2:
+            if inFieldGoalRange and ytg <= 2:
                 # 4th-and-short can still favor going for the first down / TD.
                 if batched_randint(1, 10) <= goForItThreshold:
                     goForIt = True
             if goForIt:
-                if self.yardsToFirstDown <= 3:
+                if ytg <= 3:
                     self.play.runPlay()
                 else:
                     self.play.passPlay(self._selectPassPlay(
-                        'medium' if self.yardsToFirstDown <= 12 else 'long'))
+                        'medium' if ytg <= 12 else 'long'))
             else:
                 self.play.playType = PlayType.FieldGoal
             return
@@ -3968,7 +4285,7 @@ class Game:
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
                     self.play.playType = PlayType.FieldGoal
                     return
-                if self.yardsToFirstDown <= 1 and self.yardsToSafety > 50:
+                if ytg <= 1 and self.yardsToSafety > 50:
                     x = batched_randint(1, 10)
                     if x <= goForItThreshold:
                         self.play.runPlay()
@@ -3980,17 +4297,17 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
             # Deep in opponent territory: go for it on short yardage instead of punting
-            if self.yardsToEndzone <= 40 and self.yardsToFirstDown <= 3:
+            if self.yardsToEndzone <= 40 and ytg <= 3:
                 # Inside 40: almost always go for it on 4th and short
                 threshold = max(1, min(9, round(6 + aggrNorm * 3)))
                 x = batched_randint(1, 10)
                 if x <= threshold:
-                    if self.yardsToFirstDown <= 1:
+                    if ytg <= 1:
                         self.play.runPlay()
                     else:
                         self.play.passPlay(self._selectPassPlay('short'))
                     return
-            elif self.yardsToFirstDown <= 1 and self.yardsToSafety > 45:
+            elif ytg <= 1 and self.yardsToSafety > 45:
                 x = batched_randint(1, 10)
                 if x <= max(1, min(9, round(3 + aggrNorm * 3))):
                     self.play.runPlay()
@@ -4013,7 +4330,7 @@ class Game:
                         self.play.playType = PlayType.FieldGoal
                         return
                     # Bad coach blunder: goes for TD instead of makeable FG
-                    if self.yardsToFirstDown <= 5:
+                    if ytg <= 5:
                         self.play.passPlay(self._selectPassPlay('short'))
                     else:
                         self.play.passPlay(self._selectPassPlay('medium'))
@@ -4031,9 +4348,9 @@ class Game:
                             self.play.playType = PlayType.FieldGoal
                             return
                     # Go for TD
-                    if self.yardsToFirstDown <= 5:
+                    if ytg <= 5:
                         self.play.passPlay(self._selectPassPlay('short'))
-                    elif self.yardsToFirstDown <= 10:
+                    elif ytg <= 10:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
@@ -4044,7 +4361,7 @@ class Game:
                     if aggrNorm < -0.5:
                         self.play.playType = PlayType.FieldGoal
                         return
-                    if self.yardsToFirstDown <= 5:
+                    if ytg <= 5:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
@@ -4080,9 +4397,9 @@ class Game:
                 # Under 2.5 min: must go for it — punting is conceding
                 if secs < 150:
                     # Bad coaches may pick the wrong play tier, but they still go for it
-                    if self.yardsToFirstDown <= 3:
+                    if ytg <= 3:
                         self.play.passPlay(self._selectPassPlay('short'))
-                    elif self.yardsToFirstDown <= 10:
+                    elif ytg <= 10:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
@@ -4092,10 +4409,10 @@ class Game:
                 if secs <= 300:
                     if deficit <= self._maxPossession():
                         # Down 1 score: go for it on short/medium yardage
-                        if self.yardsToFirstDown <= 3:
+                        if ytg <= 3:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
-                        elif self.yardsToFirstDown <= 8:
+                        elif ytg <= 8:
                             self.play.passPlay(self._selectPassPlay('medium'))
                             return
                         else:
@@ -4104,10 +4421,10 @@ class Game:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
                     elif deficit <= 2 * self._maxPossession():
-                        if self.yardsToFirstDown <= 3:
+                        if ytg <= 3:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
-                        elif self.yardsToFirstDown <= 5:
+                        elif ytg <= 5:
                             if _random.random() < 0.7 + 0.2 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('medium'))
                                 return
@@ -4121,10 +4438,10 @@ class Game:
                         return
 
                 # 5+ min: standard trailing behavior
-                if deficit <= self._maxPossession() and self.yardsToFirstDown <= 2:
+                if deficit <= self._maxPossession() and ytg <= 2:
                     self.play.passPlay(self._selectPassPlay('short'))
                     return
-                elif deficit <= self._maxPossession() and self.yardsToFirstDown <= 5:
+                elif deficit <= self._maxPossession() and ytg <= 5:
                     # Aggressive coaches willing to attempt short yardage with time
                     if _random.random() < max(0, 0.1 + aggrMod):
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -4132,15 +4449,15 @@ class Game:
 
             # Q2 two-minute drill: go for it past midfield with under 60 sec
             elif _periodKind == 'half' and secs < 60 and self.yardsToSafety > 50:
-                if self.yardsToFirstDown <= 3:
+                if ytg <= 3:
                     self.play.passPlay(self._selectPassPlay('short'))
-                elif self.yardsToFirstDown <= 10:
+                elif ytg <= 10:
                     self.play.passPlay(self._selectPassPlay('medium'))
                 else:
                     self.play.passPlay(self._selectPassPlay('long'))
                 return
 
-            elif self.currentQuarter == 3 and deficit <= self._maxPossession() and self.yardsToFirstDown <= 2:
+            elif self.currentQuarter == 3 and deficit <= self._maxPossession() and ytg <= 2:
                 self.play.passPlay(self._selectPassPlay('short'))
                 return
             self.play.playType = PlayType.Punt
@@ -4153,11 +4470,11 @@ class Game:
         # defaults to the kick (high prob > the conversion gamble).
         if (_periodKind == 'game' and scoreDiff == 0 and inFieldGoalRange
                 and _periodSecs >= 30
-                and self.yardsToFirstDown <= 5
+                and ytg <= 5
                 and self.yardsToEndzone > 15
                 and fgProb < 0.92):
             goBias = max(0.0, aggrNorm)  # 0 (avg) to 1 (max aggressive)
-            if self.yardsToFirstDown <= 2:
+            if ytg <= 2:
                 goChance = 0.10 + goBias * 0.40  # avg=10%, aggressive=50%
             else:
                 goChance = 0.05 + goBias * 0.20  # avg=5%, aggressive=25%
@@ -4166,7 +4483,7 @@ class Game:
                 self.play.insights['fourthDown']['reason'] = (
                     'tied Q4 with time, aggressive push to advance FG'
                 )
-                if self.yardsToFirstDown <= 2:
+                if ytg <= 2:
                     self.play.runPlay()
                 else:
                     self.play.passPlay(self._selectPassPlay('short'))
@@ -4190,7 +4507,7 @@ class Game:
                     return
 
         elif self.yardsToEndzone <= 20 and inFieldGoalRange:
-            if self.yardsToFirstDown <= 1:
+            if ytg <= 1:
                 x = batched_randint(1, 10)
                 if x >= 7:
                     y = randint(1, 3)
@@ -4204,7 +4521,7 @@ class Game:
             return
 
         elif self.yardsToEndzone <= 35 and inFieldGoalRange:
-            if self.yardsToFirstDown <= 2:
+            if ytg <= 2:
                 x = batched_randint(1, 10)
                 if x <= 7:
                     self.play.playType = PlayType.FieldGoal
@@ -4237,7 +4554,7 @@ class Game:
 
         else:
             # Tied or trailing (outside Q4 urgency), out of FG range
-            if self.yardsToFirstDown == 1:
+            if ytg == 1:
                 if self.yardsToSafety >= 50 or (scoreDiff < -2 * self._oneScore() and self.currentQuarter >= 3):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(7, goForItThreshold - 1)):
@@ -4245,7 +4562,7 @@ class Game:
                         return
                 self.play.playType = PlayType.Punt
                 return
-            elif self.yardsToFirstDown == 2:
+            elif ytg == 2:
                 if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -3 * self._oneScore() and _periodKind == 'game' and _periodSecs < 600):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(5, goForItThreshold - 3)):
@@ -4254,7 +4571,7 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
             else:
-                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and _periodKind == 'game' and _periodSecs < 300):
+                if (self.yardsToSafety >= 55 and ytg <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and _periodKind == 'game' and _periodSecs < 300):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(4, goForItThreshold - 4)):
                         self.play.passPlay(self._selectPassPlay('medium'))
@@ -4282,7 +4599,7 @@ class Game:
         if q >= 5 or (q == 4 and secs <= 300) or (q == 2 and secs <= 60):
             return None
         byYtg = [float(np.interp(self.yardsToEndzone, FOURTH_GO_YTE, row)) for row in FOURTH_GO_TABLE]
-        base = float(np.interp(self.yardsToFirstDown, FOURTH_GO_YTG, byYtg))
+        base = float(np.interp(self._decisionYardsToGo(), FOURTH_GO_YTG, byYtg))
         base = min(0.995, max(0.002, base))
         shift = float(np.interp(scoreDiff, FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT))
         aggrNorm = ((coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE) if coach else 0.0
@@ -4341,9 +4658,11 @@ class Game:
         # IS the must-convert-soon down. At the default four this is exactly 1st / 2nd /
         # 3rd, as before.
         from constants import PLAY_CALL_BASE_ROWS
-        ytg = self.yardsToFirstDown
+        ytg = self._decisionYardsToGo()
         downs = int(getattr(self.gameRules, 'downsPerSeries', 4) or 4)
-        if self.down <= 1:
+        if self._driveClockFinalSnap():
+            rowKey = 3   # a drive clock's last snap plays as a must-convert down
+        elif self.down <= 1:
             rowKey = 1
         elif self.down >= downs - 1:
             rowKey = 3
@@ -4516,7 +4835,9 @@ class Game:
         # late). When close or ahead, the quick game applies.
         isHome = self.offensiveTeam is self.homeTeam
         deficit = (self.awayScore - self.homeScore) if isHome else (self.homeScore - self.awayScore)
-        q = self.currentQuarter
+        q, _secs, sitMargin = self._situationalClock()
+        if sitMargin is not None:
+            deficit = -sitMargin        # Frames: chasing the frame, not the total
         catchUp = (q >= 3 and deficit >= QUICKGAME_SUPPRESS_DEFICIT) or (q >= 4 and deficit >= QUICKGAME_LATE_DEFICIT)
         if catchUp:
             return weights
@@ -4549,6 +4870,36 @@ class Game:
         leadScale = float(np.interp(scoreDiff, LEAD_PROTECT_LEAD_POINTS, LEAD_PROTECT_LEAD_SCALE))
         return LEAD_PROTECT_SHIFT_MAX * math.exp(-max(0.0, secs) / LEAD_PROTECT_TAU_SECS) * leadScale
 
+    def _situationalClock(self):
+        """(quarter, secs, margin) that the late-game PLAY-CALLING shifts read: the trailing
+        desperation, the deficit and lead archetypes, the lead-protection floor, the Q2
+        drill and the quick-game catch-up check. Standard: the real quarter and game clock,
+        margin None (the caller's score margin stands).
+
+        ⚠️ FRAMES: THE FRAME, NOT THE QUARTER AND THE TOTAL (fixed 2026-10-19). These
+        shifts were the one end-of-period layer the 2026-10-09 frame conversion missed, so
+        "trailing in the last 2:00 → stop running" only fired at the end of frame 6, and
+        the lead and deficit shifts read the aggregate all through frames 4-6. Measured on
+        prod season 11 week 1: teams behind in a frame with under a minute left ran 24% of
+        the time (NFL, trailing by 1-8 in the last minute, 2021-23: 11%), including a team
+        down 7 at the 25 with 0:09 handing off. Now a frame ending reads as the end of Q4
+        on the frame clock with the frame-aware margin (`_clockMargin`); a frame the side
+        behind can no longer win reads as the end of a half (`FramesFormat.periodEnd`);
+        the rest of a frame reads as an early quarter, with no late-game shift at all.
+        Overtime is past all frames and reads as standard."""
+        q, secs = self.currentQuarter, self.gameClockSeconds
+        if q >= 5:
+            return q, secs, None
+        margin = self._frameDecisionDiff()
+        if margin is None:
+            return q, secs, None
+        kind, frameSecs = self._periodEnd()
+        if kind == 'game':
+            return 4, frameSecs, margin
+        if kind == 'half':
+            return 2, frameSecs, margin
+        return 1, frameSecs, margin
+
     def _leadProtectKeep(self, scoreDiff: int = None, coach=None) -> float:
         """The factor a leading team's pass options are multiplied by late in Q4, 0-1.
 
@@ -4558,16 +4909,19 @@ class Game:
         passes back in. Coach-scaled on a narrower band than `sit`: inside two minutes
         every NFL staff runs the clock, and averaging a poor clock manager's pass rate
         in at 40% strength dragged the whole league's late-lead rate up."""
-        if self.currentQuarter < 4:
+        q, secs, sitMargin = self._situationalClock()
+        if q < 4:
             return 1.0
-        if scoreDiff is None:
+        if sitMargin is not None:
+            scoreDiff = sitMargin       # Frames: protect a FRAME lead, not the total
+        elif scoreDiff is None:
             isHome = self.offensiveTeam is self.homeTeam
             scoreDiff = (self.homeScore - self.awayScore) * (1 if isHome else -1)
         if scoreDiff <= 0:
             return 1.0
         if coach is None:
             coach = getattr(self.offensiveTeam, 'coach', None)
-        shift = (self._protectLeadShift(scoreDiff, self.gameClockSeconds)
+        shift = (self._protectLeadShift(scoreDiff, secs)
                  * (0.7 + 0.3 * self._coachClockIQ(coach)))
         return math.exp(-shift)
 
@@ -4578,8 +4932,9 @@ class Game:
         A bad clock-management coach (clockIQ~0) applies only ~40% of the optimal
         situational shift; a great coach (clockIQ~1) applies the full adjustment.
         """
-        q = self.currentQuarter
-        secs = self.gameClockSeconds
+        q, secs, sitMargin = self._situationalClock()
+        if sitMargin is not None:
+            scoreDiff = sitMargin       # Frames: the frame (or, last frame, the match)
         # Scale factor: how much of the situational adjustment applies
         # clockIQ 0.0 → 0.4 (bad coach barely adjusts), 1.0 → 1.0 (full adjustment)
         clockIQ = self._coachClockIQ(coach)
@@ -4790,6 +5145,11 @@ class Game:
             _mul('long', 1.6)
             _mul('deep', deepBoost)      # shot before halftime
 
+        # A run that ends the half is not a play for points (`_runSpendsTheHalf`). Not a
+        # clock-IQ judgment, so flat.
+        if self._runSpendsTheHalf():
+            _flat('run', 0.1)
+
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
             _flat('run', 1.3); _flat('long', 0.2); _flat('deep', 0.1)
@@ -4868,6 +5228,11 @@ class Game:
         contributes a matchup delta to that play's weight. Coach offensiveMind scales
         how aggressively the coach exploits favourable matchups (60→neutral, 100→max).
         """
+        # Every pass on a drive clock's last snap from 30+ out is the heave, whichever
+        # tier the caller asked for (`_finalSnapIsAHeave`).
+        if self._finalSnapIsAHeave():
+            self.play.insights['playCall'] = 'hailMary'
+            return 'Play9'
         pools = {
             'short':  ['Play8', 'Play10', 'Play11', 'Play12', 'Play14'],
             'medium': ['Play3', 'Play6', 'Play7', 'Play13', 'Play15', 'Play16', 'Play17'],
@@ -5217,8 +5582,24 @@ class Game:
         }
         return newCall
 
+    def _finalSnapIsAHeave(self) -> bool:
+        """A plays drive clock's last snap from 30+ yards out: only a touchdown is worth
+        anything. A play short of the end zone ends the drive at its spot, so a completion
+        that does not score hands the opponent better field position than an incompletion.
+        The same 30 yards as `playCaller`'s Hail Mary.
+
+        Prod game 4904: Rocks down 2 on the match, last snap on the SLC 47 at 0:17 of the
+        final frame. The 4th-down tree picks its pass by the yards to go (the goal line
+        here) and capped it at 'long' to the sideline; a 10-yard out ended the game."""
+        return self._driveClockFinalSnap() and self.yardsToEndzone >= 30
+
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
+        if self._finalSnapIsAHeave():
+            self.play.insights['playCall'] = 'hailMary'
+            self.play.passPlay('Play9')
+            self.play.targetSideline = False
+            return
         playCall = _random.choices(
             ['run', 'short', 'medium', 'long', 'deep'],
             weights=[weights['run'], weights['short'], weights['medium'],
@@ -6084,7 +6465,7 @@ class Game:
             return False
         if self.play is None or getattr(self.play, 'isHoopShot', False):
             return False
-        if self.down < self.gameRules.downsPerSeries:
+        if not self._isFinalDown():
             return False        # the weighted path already asked on this down
         # A kneel or spike is a deliberate clock play; a resolved score is not ours to undo.
         if self.play.playType in (PlayType.Kneel, PlayType.Spike):
@@ -6189,8 +6570,12 @@ class Game:
                 if need - spend in landings:
                     return 'helpful'
             return None
-        # Tied: a single hoop point breaks the tie and takes the lead.
-        if scoreDiff == 0:
+        # Tied: a single hoop point breaks the tie and takes the lead. ⚠️ Includes a hair
+        # BELOW zero: the final frame's margin (`_framesMatchMargin`) sits an epsilon on
+        # the losing side of the first winning total when there is no tie point, i.e. any
+        # score at all wins it. Read as an exact deficit that is 0.001, which no band
+        # matches, and the point that wins the match came back None.
+        if -0.01 < scoreDiff <= 0:
             # OT: the go-ahead point ends it outright, so it is not merely helpful.
             if self._offensiveScoreWinsNow(
                     float(getattr(self.gameRules, 'sidelineGoalPoints', 1) or 1)):
@@ -6252,6 +6637,12 @@ class Game:
             maxFg = kicker.maxFgDistance - self.gameRules.fgSnapDistance
             if self.yardsToEndzone > maxFg:
                 snapsNeeded += 1
+        # A plays drive clock is a second budget: the hoops, and the kick the bridge
+        # leans on, each take a snap.
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays'
+                and self.driveClockRemaining < snapsNeeded + (1 if scoreDiff < 0 else 0)):
+            return False
         return self._estimateAvailablePlays() >= snapsNeeded
 
     def _hoopWorthTakingNow(self) -> bool:
@@ -6298,7 +6689,7 @@ class Game:
         # all; at five it holds through two downs and relaxes on the third. A literal 2
         # here would silently become "never hold" or "hold too long" the next time the
         # fans move the rule.
-        return self.down >= self.gameRules.downsPerSeries - 2
+        return self._seriesSnapsLeft() <= 3
 
     def _shouldAttemptHoopShot(self) -> bool:
         """Choice to throw at a sideline hoop instead of a normal play, when a fresh
@@ -6395,17 +6786,35 @@ class Game:
                         closeness = 1.0 - (yardsToCrossing / DARTS_HOOP_CLOSING_YARDS)
                         chance += DARTS_HOOP_LAST_CHANCE_LIFT * closeness
                 return _random.random() < max(0.0, min(1.0, chance))
-        # Final down: a hoop always forfeits the scoring play — never shoot.
-        if self.down >= self.gameRules.downsPerSeries:
+        # Final down: a hoop always forfeits the scoring play — never shoot. A plays
+        # drive clock's last snap counts too (`_seriesSnapsLeft`): a hoop spends a snap
+        # exactly as it spends a down.
+        if self._seriesSnapsLeft() <= 1:
             return False
         from constants import (SIDELINE_GOAL_ATTEMPT_INRANGE, SIDELINE_GOAL_ATTEMPT_STALL_MULT,
                                SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX,
                                SIDELINE_GOAL_DESPERATION_SECS, SIDELINE_GOAL_DESPERATION_CHANCE)
-        need = self._hoopPointsNeeded(scoreDiff)
+        # ⚠️ FRAMES: THE MARGIN AND THE DEADLINE ARE THE FRAME'S (fixed 2026-10-20). This
+        # read the TOTAL score and the Q4 game clock while `_isHurryUp` reads the frame, so
+        # at every frame ending but the last the two disagreed: a team tied in the frame was
+        # in hurry-up (guard below) with no late need to lift it, and a frame leader, not in
+        # hurry-up, got the base roll. Prod season 11, 16 Frames games, last 2:00 of a frame
+        # with a hoop in range: tied or down 1 shot 5% of snaps, leaders 45%.
+        # `_clockMargin` / `_periodEnd` are the frame margin and frame clock in Frames (the
+        # match standing in the final frame) and the score and game clock everywhere else.
+        margin = self._clockMargin()
+        need = self._hoopPointsNeeded(margin)
+        _endKind, _endSecs = self._periodEnd()
         late = (getattr(self, 'isOvertime', False)
-                or (self.currentQuarter >= 4 and self.gameClockSeconds <= SIDELINE_GOAL_DESPERATION_SECS))
+                or (_endKind == 'game' and _endSecs <= SIDELINE_GOAL_DESPERATION_SECS))
         critical = late and need == 'critical'
         helpfulLate = late and need == 'helpful'
+        # ⚠️ A LEADER LATE DOES NOT SHOOT. Every hoop shot stops the clock (a make is a
+        # score, a miss an incompletion), and the side ahead at a 'game' ending is the one
+        # the clock is working for (the frame-leader rule: never stop the clock). The base
+        # roll below was handing the trailing side a huddle's worth of time back.
+        if late and margin > 0:
+            return False
         # ⚠️ A LATE 'helpful' POINT LIFTS THE HURRY-UP GUARD, AND WITHOUT THAT ITS OWN
         # BRANCH BELOW IS UNREACHABLE BY CONSTRUCTION. In regulation `helpful` means the
         # offense is TIED (the point takes the lead) or a field goal alone cannot tie —
@@ -6428,7 +6837,7 @@ class Game:
         # play still needs, which is just as true late. Only a 'critical' need — where no
         # conventional score reaches at all — is worth that down.
         if not critical:
-            if self.down >= self.gameRules.downsPerSeries - 1:
+            if self._seriesSnapsLeft() <= 2:
                 return False
             if self._isHurryUp() and not helpfulLate:
                 return False
@@ -6441,7 +6850,7 @@ class Game:
             # field goal or a touchdown to fall back on, a 49% heave is worth declining
             # for a 70% tap one snap later; where it does not, take what is there. This
             # is the same split the guards above already make.
-            if helpfulLate and not (self._hoopPlanFits(scoreDiff)
+            if helpfulLate and not (self._hoopPlanFits(margin)
                                     and self._hoopWorthTakingNow()):
                 return False
             return _random.random() < SIDELINE_GOAL_DESPERATION_CHANCE
@@ -6722,9 +7131,11 @@ class Game:
         defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
         if GAMEPLAN_AVAILABLE and defGameplan is not None:
             sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            # Frames: the frame's ending and margin, like the per-play scheme this pre-rolls.
+            _sq, _ss, _sm = self._situationalClock()
             scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
-                                        100 - self.yardsToEndzone, sd,
-                                        self.currentQuarter, self.gameClockSeconds)
+                                        100 - self.yardsToEndzone, sd if _sm is None else _sm,
+                                        _sq, _ss)
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
@@ -6884,9 +7295,11 @@ class Game:
         defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
         if GAMEPLAN_AVAILABLE and defGameplan is not None:
             sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            # Frames: the frame's ending and margin, like the per-play scheme this pre-rolls.
+            _sq, _ss, _sm = self._situationalClock()
             scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
-                                        100 - self.yardsToEndzone, sd,
-                                        self.currentQuarter, self.gameClockSeconds)
+                                        100 - self.yardsToEndzone, sd if _sm is None else _sm,
+                                        _sq, _ss)
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
@@ -7080,7 +7493,8 @@ class Game:
                 return
 
         # Clock management — evaluated before any play selection on non-final downs
-        if self.down < self.gameRules.downsPerSeries:
+        # (a drive clock's last snap is a final down: `_isFinalDown`).
+        if not self._isFinalDown():
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
             # Each kneel ~40 sec; opponent timeouts only matter when game is close (≤8 pts)
             # Field-position guard: kneel loses 1 yard, so on own 1 (or goal line) it
@@ -7575,29 +7989,11 @@ class Game:
                     self.play.playType = PlayType.FieldGoal
                     return
 
-            # Drive Clock last snap, deep in own territory, can't convert: PUNT rather
-            # than snap into a turnover on downs at your own spot. In series-reset mode a
-            # long-yardage set (e.g. 15 to go) the offense can't reach just hands the
-            # defense a short field every drive; punting flips field position. Early downs
-            # only (4th is the fourth-down caller's job), out of FG range (the deep gate
-            # guarantees it), long to go, coach-IQ gated so a sharp staff concedes the
-            # field-position battle instead of the turnover. A poor staff still gives it up.
-            from constants import DRIVE_CLOCK_PUNT_MIN_YTE, DRIVE_CLOCK_PUNT_MIN_TOGO
-            if (_dcExpiring
-                    and self.down < self.gameRules.downsPerSeries
-                    and self.yardsToEndzone >= DRIVE_CLOCK_PUNT_MIN_YTE
-                    and self.yardsToFirstDown >= DRIVE_CLOCK_PUNT_MIN_TOGO
-                    and not self.format.suppressPunt(self)
-                    and not self._isFgDrainMode()
-                    and not self._isGarbageTime(scoreDiff)):
-                if _random.random() < (0.4 + 0.55 * gameIQ):
-                    self.play.insights['clockMgmt'] = {
-                        'decision': 'punt',
-                        'reason': 'Drive clock expiring deep in own territory, punt to flip field position',
-                        'clockRemaining': self.gameClockSeconds,
-                    }
-                    self.play.playType = PlayType.Punt
-                    return
+            # Drive Clock last snap in own territory: punt rather than hand the defense a
+            # short field (`_driveClockPuntCall`; the final down asks the same question
+            # from `_fourthDownCaller`).
+            if _dcExpiring and self._driveClockPuntCall(scoreDiff, gameIQ):
+                return
 
             # Drive Clock (seconds) preservation: critically low with a down to
             # spare — spike to stop the game clock (which pauses the drive clock),
@@ -7640,7 +8036,7 @@ class Game:
                     and timeoutsLeft == 0
                     and self._estimateAvailablePlays() >= 2
                     and self.clockRunning
-                    and self.down <= self.gameRules.downsPerSeries - 2
+                    and self._seriesSnapsLeft() >= 3
                     and self.yardsToEndzone > 5
                     and not self._isFgDrainMode()
                     and not self._isGarbageTime(scoreDiff)):
@@ -7667,7 +8063,13 @@ class Game:
             # into a 4th-down must-score).
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
-            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1
+            # ⚠️ COUNTED IN SNAPS, NOT DOWNS (`_seriesSnapsLeft`): a spike spends a plays
+            # drive clock's snap as well as a down. Prod game 4901, frame 5: Trains 1st &
+            # goal at the 5, down 3 in the frame, 1:05 left, two snaps on the clock. The
+            # down gate read 1st down as room to spike, and the spike took one of the two
+            # shots at the end zone, leaving only the tying kick. Off the drive clock the
+            # snaps left are the downs left, so nothing else changes.
+            spikeFgException = (self._seriesSnapsLeft() == 2
                                 and (_periodKind == 'half' or -self._fgValue() <= decisionDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
@@ -7678,7 +8080,7 @@ class Game:
             # _estimateAvailablePlays is frame-aware (reserves a closing FG snap off the frame
             # deadline in frames); >= 1 means room for the spike plus a real play. The
             # deliberate 3rd-down FG-setup spike keeps its own gate.
-            spikeDownOK = ((self.down <= self.gameRules.downsPerSeries - 2
+            spikeDownOK = ((self._seriesSnapsLeft() >= 3
                             and self._estimateAvailablePlays() >= 1)
                            or spikeFgException)
             if (_periodKind is not None
@@ -7692,7 +8094,8 @@ class Game:
                     # throwing to the sideline under a running clock, and measured at
                     # 1.43 wasted downs a game before this gate.
                     and self._deadBallStopsClock()
-                    and not self._isGarbageTime(decisionDiff)):
+                    and not self._isGarbageTime(decisionDiff)
+                    and not self._isFgSecuredDrain()):   # in range: run the clock, don't stop it
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
                 else:
@@ -7731,7 +8134,9 @@ class Game:
             if (isLateGame and (decisionDiff <= 0 or endOfHalfDrive) and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(decisionDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
-                    and secs <= toWindow):
+                    and secs <= toWindow
+                    # Already in comfortable range, tied or within a kick: score LAST.
+                    and not self._isFgSecuredDrain()):
                 if secs <= self.gameRules.timeoutClockThreshold:
                     # Inside 2:00 — high urgency. In FG range with a one-score/tied
                     # deficit, a competent coach stops the clock near-deterministically.
@@ -7807,7 +8212,7 @@ class Game:
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if _periodKind == 'half' and _periodSecs < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
+        if _periodKind == 'half' and _periodSecs < self.gameRules.timeoutClockThreshold and self._isFinalDown():
             if self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -7817,15 +8222,15 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if _periodKind == 'game' and _periodSecs < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
+        if _periodKind == 'game' and _periodSecs < self.gameRules.timeoutClockThreshold and self._isFinalDown():
             if (-self._fgValue() <= decisionDiff <= self._fgValue() and not self._framesFgFutile()) and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = _periodSecs >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
-                if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
+                if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self._decisionYardsToGo() <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     goForItChance = 0.45 + aggrNorm * 0.30
                     if _random.random() < goForItChance:
-                        if self.yardsToFirstDown <= 2:
+                        if self._decisionYardsToGo() <= 2:
                             self.play.runPlay()
                         else:
                             self.play.passPlay(self._selectPassPlay('short'))
@@ -7884,13 +8289,40 @@ class Game:
         _hmDiff = decisionDiff
         # The last play of Q4, or of a frame the offense is losing (`_periodEnd`): the
         # drive ends with the frame.
-        _gameHailMary = (_periodKind == 'game' and _hmDiff < 0
+        # Frames: a tied offense heaves too when a tie is worth less than a win.
+        _gameHailMary = (_periodKind == 'game'
+                         and (_hmDiff < 0 or (_hmDiff == 0 and self._frameTieIsShort()))
                          and _periodSecs <= 12)
-        _driveHailMary = _dcLastPlay and _hmDiff <= 0   # trailing or tied
-        if ((_gameHailMary or _driveHailMary)
+        # Trailing or tied, and NOT from the offense's own half: the possession is lost
+        # either way, so a heave from there trades a punt's field position for a throw
+        # that almost never scores (see the drive-clock punt above). A format that bars
+        # the punt keeps the heave.
+        from constants import DRIVE_CLOCK_PUNT_MIN_YTE as _DC_PUNT_YTE
+        _driveHailMary = (_dcLastPlay and _hmDiff <= 0
+                          and not self._driveClockFinalSnap()
+                          and (self.yardsToEndzone < _DC_PUNT_YTE
+                               or self.format.suppressPunt(self)))
+        # The last snap of the first half, out of field-goal range but inside this QB's
+        # heave: the half ends either way, so the heave is the only play that can score,
+        # at any score (the two-minute drill at the end of Q2 plays for points whoever
+        # leads). Prod game 4967: the Strangers, last snap of the half on their own 48,
+        # audibled into a run. NFL 2019-23, last 7s of Q2 from the opponent's 36-50: a
+        # quarter of the passes are heaves of 40+ air yards; the sim had no path to one.
+        # Past `hailMaryReach` the ball cannot reach the end zone, so it stays a normal play.
+        _halfHailMary = (_periodKind == 'half'
+                         and self._lastSnapBeforeBreak()
+                         and self.yardsToEndzone <= hailMaryReach(
+                             self.offensiveTeam.rosterDict.get('qb')))
+        # ⚠️ NOT on a plays clock's last snap: that is a final down (`_isFinalDown`), and
+        # `_fourthDownCaller` weighs the heave against the punt and the kick as 4th & goal
+        # from the spot. Heaving there whenever tied or trailing, in any quarter, threw
+        # it away from the opponent's 45 in the first quarter instead of punting.
+        if ((_gameHailMary or _driveHailMary or _halfHailMary)
                 and self.yardsToEndzone >= 30
                 and not self._isGarbageTime(_hmDiff)):
-            fgCanHelp = (_hmDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
+            # Before the break a field goal helps at any score.
+            fgCanHelp = ((_halfHailMary or _hmDiff >= -self._fgValue())
+                         and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
                 # A bold coach may gamble the final snap on a gadget (a flea-flicker
                 # deep shot) instead of a straight heave — occasional, gated by the
@@ -7924,6 +8356,7 @@ class Game:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'hailMary',
                     'reason': ('Drive clock expiring, heave for the score' if _driveHailMary
+                               else 'Last snap of the half, heave for the score' if _halfHailMary
                                else 'Desperation, need a miracle score'),
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
@@ -7934,8 +8367,9 @@ class Game:
                 self.play.targetSideline = False
                 return
 
-        # Final down — punt / FG / go-for-it decision
-        if self.down == self.gameRules.downsPerSeries:
+        # Final down — punt / FG / go-for-it decision (including a drive clock's last
+        # snap, whatever the down: `_isFinalDown`)
+        if self._isFinalDown():
             self._fourthDownCaller(scoreDiff, coach, isHome)
             # Rule 1: a charged awakened kicker prefers the sure 3 over a punt from
             # WITHIN its (capped) extended range. If the 4th-down logic chose to
@@ -8042,34 +8476,55 @@ class Game:
             return
         self._driveTeam = team
         self.driveStartYardsToEZ = self.yardsToEndzone
+        self._drivesBy[id(team)] = self._drivesBy.get(id(team), 0) + 1
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
+        # The handoff is happening for real now, so any preview noted for it is spent.
+        self._wpNextPossession = None
         # OT possession tracking: detect when each team's possession ends
         # offense = team giving up ball, defense = team receiving ball
-        if self.currentQuarter >= 5 and self.otFirstPossTeam is not None:
-            if offense is self.otFirstPossTeam and not self.otFirstPossComplete:
-                # First team's possession just ended
-                self.otFirstPossComplete = True
-                self.firstOtPossessionComplete = False  # not complete until second team also done
-            elif self.otFirstPossComplete and offense is not self.otFirstPossTeam:
-                # Second team's possession just ended — both teams have had their turn
-                self.otSecondPossComplete = True
-                self.firstOtPossessionComplete = True
-        
+        (self.otFirstPossComplete, self.firstOtPossessionComplete,
+         self.otSecondPossComplete) = self._otFlagsAfterPossessionEnds(offense)
+
         # Possession gate: the format decides who gets the ball on a possession change
         # (chess_clock keeps it with the giver when the receiver is locked out; innings
         # keeps it with the batting team until 3 outs). Default returns the defense, so
-        # standard/other formats flip normally. `newDriveYardsToEndzone` lets a format
-        # spot EVERY new possession at a fixed place (innings: the batting team's own 20).
+        # standard/other formats flip normally.
         receiver = self.format.possessionReceiver(self, offense, defense)
+        self._placeNewPossession(offense, defense, receiver, yards)
+        # New drive → both sideline-hoop pairs are available again (Sideline Goals).
+        self._hoopPairResult = {}
+
+    def _otFlagsAfterPossessionEnds(self, giver):
+        """(otFirstPossComplete, firstOtPossessionComplete, otSecondPossComplete) once
+        `giver`'s possession ends. Pure: `turnover()` applies it, and the WP preview of
+        the next possession applies it temporarily."""
+        first = self.otFirstPossComplete
+        firstOt = self.firstOtPossessionComplete
+        second = self.otSecondPossComplete
+        if self.currentQuarter >= 5 and self.otFirstPossTeam is not None:
+            if giver is self.otFirstPossTeam and not first:
+                # First team's possession just ended
+                first = True
+                firstOt = False  # not complete until second team also done
+            elif first and giver is not self.otFirstPossTeam:
+                # Second team's possession just ended — both teams have had their turn
+                second = True
+                firstOt = True
+        return first, firstOt, second
+
+    def _placeNewPossession(self, giver, taker, receiver, yards):
+        """Put `receiver` on offense for a fresh series. `newDriveYardsToEndzone` lets a
+        format spot EVERY new possession at a fixed place (innings: the batting team's
+        own 20); a giver that keeps the ball restarts at its own 20."""
         fixedStart = self.format.newDriveYardsToEndzone(self)
-        if receiver is offense:
-            self.offensiveTeam = offense
-            self.defensiveTeam = defense
+        if receiver is giver:
+            self.offensiveTeam = giver
+            self.defensiveTeam = taker
             yards = fixedStart if fixedStart is not None else (self.gameRules.fieldLength - 20)
         else:
-            self.offensiveTeam = defense
-            self.defensiveTeam = offense
+            self.offensiveTeam = taker
+            self.defensiveTeam = giver
             if fixedStart is not None:
                 yards = fixedStart
         self.yardsToEndzone = yards
@@ -8079,8 +8534,54 @@ class Game:
         self.yardsToFirstDown = self._freshSeriesDistance()
         # New possession → fresh drive clock (no-op unless the mechanic is on).
         self._resetDriveClock()
-        # New drive → both sideline-hoop pairs are available again (Sideline Goals).
-        self._hoopPairResult = {}
+
+    # Everything `_placeNewPossession` and the OT flags touch, i.e. what the WP preview
+    # must put back.
+    _POSSESSION_STATE = ('offensiveTeam', 'defensiveTeam', 'yardsToEndzone', 'yardsToSafety',
+                         'down', 'yardsToFirstDown', 'otFirstPossComplete',
+                         'firstOtPossessionComplete', 'otSecondPossComplete',
+                         'driveClockRemaining', 'driveClockExpiredThisPlay')
+
+    def _priceAtNextPossession(self, giver, taker, yards):
+        """Note the possession change the play about to be broadcast has caused, so its
+        win probability is priced at the possession the NEXT snap will actually have.
+
+        ⚠️ EVERY TURNOVER BRANCH BROADCASTS THE PLAY BEFORE `turnover()` RUNS (the field
+        graphic needs the play drawn from the old offense's side), and the broadcast is
+        where WP is resolved. Without this note an interception, a fumble, a turnover on
+        downs, a missed field goal or a punt was priced as if the team that just lost the
+        ball still had it, showing ~0 WPA, and the whole swing landed on the other team's
+        next snap. Measured over 300 games: +1.75 WPA on the snap after a turnover on
+        downs against +0.02 on the play itself, and the snap after was tagged BIG PLAY 67
+        times, often a kneel. Interceptors and strip artists also got no WPA credit.
+
+        Call it with the same arguments the `turnover()` that follows will get. It is
+        consumed by the next play to resolve its WP, and cleared by `turnover()`.
+        """
+        self._wpNextPossession = (giver, taker, yards)
+
+    def _withNextPossession(self, compute):
+        """Run `compute()` with the noted next possession in place, then put the current
+        state back. The preview never calls `possessionReceiver` (innings changes state
+        there); a format that cannot preview its receiver without side effects returns
+        None from `previewPossessionReceiver` and the play is priced as it stands."""
+        pending = getattr(self, '_wpNextPossession', None)
+        self._wpNextPossession = None
+        if pending is None:
+            return compute()
+        giver, taker, yards = pending
+        receiver = self.format.previewPossessionReceiver(self, giver, taker)
+        if receiver is None:
+            return compute()
+        saved = {name: getattr(self, name, None) for name in self._POSSESSION_STATE}
+        try:
+            (self.otFirstPossComplete, self.firstOtPossessionComplete,
+             self.otSecondPossComplete) = self._otFlagsAfterPossessionEnds(giver)
+            self._placeNewPossession(giver, taker, receiver, yards)
+            return compute()
+        finally:
+            for name, value in saved.items():
+                setattr(self, name, value)
 
     def _handleTurnoverOnDowns(self, lastPlayFormatted: bool, driveClockExpired: bool = False,
                                resultOverride: 'PlayResult' = None) -> None:
@@ -8116,6 +8617,7 @@ class Game:
                 self.highlights.insert(0, {'play': self.play})
                 self.leagueHighlights.insert(0, {'play': self.play})
             self.gameFeed.insert(0, {'play': self.play})
+            self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
             self.broadcastGameState(includeLastPlay=True)
         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
         self._pendingPossessionChange = True
@@ -8229,6 +8731,9 @@ class Game:
         # possession change: a fumble later in the frame printed "<team> kicks off"
         # (prod game 4073, frame 2).
         self._pendingKickoff = False
+        # A new frame is a new drive even when the same team starts it, or the per-drive
+        # scoring rate the try decisions read (`_opponentDriveOdds`) is inflated.
+        self._driveTeam = None
         # eventMessage so the frame marker goes out live over the WebSocket (else it only
         # shows on a REST re-fetch — same bug as the chess out-of-time turnover).
         self.broadcastGameState(includeLastPlay=False, eventMessage=frameEvent, isPossessionChange=True)
@@ -8330,10 +8835,14 @@ class Game:
                 self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                 self.broadcastGameState(includeLastPlay=True)
                 return
+            self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
             self.broadcastGameState(includeLastPlay=True)
+            self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
             self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
             self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
         else:
+            self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam,
+                                        self.yardsToSafety - returnYards)
             self.broadcastGameState(includeLastPlay=True)
             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety - returnYards)
 
@@ -9347,6 +9856,7 @@ class Game:
 
     def _processPlayerPostgame(self):
         """Process player stats after game: sync dicts, update confidence/ratings, compute derived stats"""
+        self._clearMomentumEffect()
         # Sync optimized stat_tracker data to legacy dicts for all players
         for player in self.homeTeam.rosterDict.values():
             if player:
@@ -9367,6 +9877,7 @@ class Game:
                 self._accumulatePostgameStats(player)
 
     def postgame(self):
+        self._clearMomentumEffect()
         if self.isRegularSeasonGame:
             self._accumulateOffenseStats(self.homeTeam, self.homeScore)
             self._accumulateOffenseStats(self.awayTeam, self.awayScore)
@@ -9830,6 +10341,9 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+                    if self.play.isFumbleLost or self.play.isInterception:
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam,
+                                                    max(1, self.yardsToSafety + self.play.yardage))
                     self.broadcastGameState(includeLastPlay=True)
                     lastPlayFormatted = True
                     # The play was executed inside playCaller() but the
@@ -9963,6 +10477,7 @@ class Game:
                     self.otFirstPossTeam = coinFlipWinner
                     self.turnover(coinFlipLoser, coinFlipWinner, possReset)
                     self.down = 1
+                    self._rebaseWinProbability()
 
                 elif oldQuarter == 5 and self.currentQuarter == 5:
                     # Additional OT period (still tied)
@@ -9998,6 +10513,7 @@ class Game:
                     })
                     self.turnover(coinFlipLoser, coinFlipWinner, possReset)
                     self.down = 1
+                    self._rebaseWinProbability()
                 
                 # Quarter start messages
                 if self.currentQuarter == 2 and self.format.usesQuarterBreaks():
@@ -10382,14 +10898,16 @@ class Game:
                     # no flag to explain it, which reads as a bug. Spread thin it is
                     # invisible and sums to the same clock.
                     if DEAD_BALL_ADMIN_SECONDS:
+                        self._inPreSnap = True
                         self.consumeGameTime(DEAD_BALL_ADMIN_SECONDS)
+                        self._inPreSnap = False
                         if self.gameClockSeconds <= 0:
                             break
                     preSnapTime = self.calculatePreSnapTime()
-                    # Frames: don't AWARD a frame while the pre-snap huddle drains the clock
-                    # (the snap hasn't happened yet). Deferring the award to the play's own
-                    # clock burn keeps a play — and its score — in the frame its drive was
-                    # in, instead of leaking into the next frame.
+                    # Frames: the pre-snap window may not reach the frame's buzzer — it stops
+                    # one second short, so the snap gets off inside the frame and the next
+                    # frame keeps its full length (FramesFormat.clampConsumption). The award
+                    # still waits for the settled board after the play.
                     self._inPreSnap = True
                     self.consumeGameTime(preSnapTime)
                     self._inPreSnap = False
@@ -10479,6 +10997,7 @@ class Game:
                         self.gameFeed.insert(0, {'play': self.play})
                         
                         # Broadcast comprehensive game state
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         
                         # Check if OT should end after score
@@ -10496,6 +11015,7 @@ class Game:
                         self.clockRunning = False  # Clock stops after turnover
                         self.formatPlayText()
                         self.gameFeed.insert(0, {'play': self.play})
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                         self._pendingPossessionChange = True
@@ -10672,7 +11192,9 @@ class Game:
                             self.broadcastGameState(includeLastPlay=True)
                             lastPlayFormatted = True
                             break
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
                         self.broadcastGameState(includeLastPlay=True)
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, 80)
                         self._attemptConversion(self.defensiveTeam, self.offensiveTeam,
                                                 trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
@@ -10708,6 +11230,7 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+                    self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, newYards)
                     self.broadcastGameState(includeLastPlay=True)
                     self.turnover(self.offensiveTeam, self.defensiveTeam, newYards)
                     self._pendingPossessionChange = True
@@ -10795,6 +11318,7 @@ class Game:
                     self.gameFeed.insert(0, {'play': self.play})
 
                     if self.play.yardage >= self.yardsToEndzone:
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
@@ -10818,11 +11342,15 @@ class Game:
                             self.broadcastGameState(includeLastPlay=True)
                             break
 
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         await self._pauseBetweenBeats()
+                        self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, possReset)
                         self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                     else:
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam,
+                                                    self.yardsToSafety + self.play.yardage)
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, (self.yardsToSafety + self.play.yardage))
                     self._pendingPossessionChange = True
@@ -10860,6 +11388,7 @@ class Game:
                                 if self.checkOvertimeEnd():
                                     break
                                 await self._pauseBetweenBeats()
+                                self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                                 self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
                                 self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                                 self._pendingPossessionChange = True
@@ -10917,11 +11446,13 @@ class Game:
                             self.highlights.insert(0, {'play': self.play})
                             self.leagueHighlights.insert(0, {'play': self.play})
                         self.gameFeed.insert(0, {'play': self.play})
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self.broadcastGameState(includeLastPlay=True)
                         if self.checkOvertimeEnd():
                             break
 
                         await self._pauseBetweenBeats()
+                        self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                         self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
 
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
@@ -10997,6 +11528,7 @@ class Game:
                                 break
 
                             await self._pauseBetweenBeats()
+                            self._priceAtNextPossession(self.defensiveTeam, self.offensiveTeam, possReset)
                             self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
 
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
@@ -11023,6 +11555,7 @@ class Game:
                                 self.gameFeed.insert(0, {'play': self.play})
                             self.highlights.insert(0, {'play': self.play})
                             self.leagueHighlights.insert(0, {'play': self.play})
+                            self._priceAtNextPossession(self.offensiveTeam, self.defensiveTeam, possReset)
                             self.broadcastGameState(includeLastPlay=True)
 
                             # Broadcast score update
@@ -11584,17 +12117,7 @@ class Game:
         inOvertime = self.currentQuarter >= 5
         lateGameMultiplier = 1.3 if (inTwoMinute or inOvertime) else 1.0
 
-        # Comeback urgency: a team trailing by 10+ in Q3 or later plays
-        # with measurable desperation — momentum events for the trailing
-        # side hit 1.15x. Pairs with the asymmetric gap dampener to keep
-        # comeback narratives alive; underdogs were winning ~10pp below
-        # pre-game WP without this push.
-        benefitingScore = self.homeScore if benefitingTeam is self.homeTeam else self.awayScore
-        opposingScore = self.awayScore if benefitingTeam is self.homeTeam else self.homeScore
-        deficit = opposingScore - benefitingScore
-        comebackUrgency = 1.15 if (self.currentQuarter >= 3 and deficit >= self._oneScore() + self._fgValue()) else 1.0
-
-        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier * comebackUrgency
+        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier
 
         if benefitingTeam is self.homeTeam:
             self.momentum += finalDelta
@@ -11607,43 +12130,58 @@ class Game:
             self.play.isMomentumShift = True
 
     def _applyMomentumEffect(self):
-        """Apply small per-play confidence/determination nudges based on momentum."""
-        # Diagnostic sampling — once per play call, regardless of neutral zone
+        """Hold each player's momentum offset at the level CURRENT momentum calls for.
+
+        ⚠️ A LEVEL, NOT A RUNNING TOTAL (audited 2026-10-18). It used to ADD a nudge on
+        every play momentum was outside the neutral zone and never take it back, so
+        confidence gained while a team had momentum stayed after the momentum was gone,
+        and half of it carried into the next game through `postgameChanges`. The offset
+        is now `MOMENTUM_*_AT_50 x momentum / 50`, re-targeted every play (only the
+        difference from what is already applied is added), so it fades as momentum
+        decays and is removed before the game ends (`_clearMomentumEffect`).
+
+        ⚠️ SYMMETRIC: the team without momentum loses exactly what the team with it gains.
+        The drag used to be 0.3x the boost, a net confidence injection worth about 0.8
+        points a game league-wide that had nothing to do with momentum.
+
+        Sized to keep the effect as large as it was on an average play (0.039 confidence,
+        0.023 determination in force per player). Measured over 1,500 games a side: holding
+        one team at +50 for a whole game moved its win rate ~1.6 points, inside the noise,
+        and drive-to-drive streakiness matched the NFL (+0.010 beyond chance); the meter
+        mostly tracks who is winning. It is a narrative system with a light touch."""
         absMom = abs(self.momentum)
+        # Diagnostic sampling — once per play call, regardless of neutral zone
         if absMom > self._peakAbsMomentum:
             self._peakAbsMomentum = absMom
         if absMom >= 30.0:
             self._playsAbove30Mom += 1
 
-        if absMom < MOMENTUM_NEUTRAL_ZONE:
-            return
+        level = (self.momentum / 50.0) if absMom >= MOMENTUM_NEUTRAL_ZONE else 0.0
+        for team, sign in ((self.homeTeam, 1.0), (self.awayTeam, -1.0)):
+            confTarget = sign * level * MOMENTUM_CONFIDENCE_AT_50
+            detTarget = sign * level * MOMENTUM_DETERMINATION_AT_50
+            for player in team.rosterDict.values():
+                if player is not None:
+                    self._setMomentumOffset(player, confTarget, detTarget)
 
-        effectMagnitude = MOMENTUM_EFFECT_BASE * (abs(self.momentum) / 50.0)
-        effectMagnitude = min(effectMagnitude, MOMENTUM_EFFECT_CAP)
+    def _setMomentumOffset(self, player, confTarget, detTarget):
+        """Move a player's applied momentum offset to (confTarget, detTarget). No
+        `source`, so the confidence shock absorbers stay out of it and the offset can be
+        removed exactly."""
+        applied = self._momentumApplied.get(id(player))
+        conf0, det0 = (applied[1], applied[2]) if applied else (0.0, 0.0)
+        if abs(confTarget - conf0) > 1e-9:
+            player.updateInGameConfidence(confTarget - conf0)
+        if abs(detTarget - det0) > 1e-9:
+            player.updateInGameDetermination(detTarget - det0)
+        self._momentumApplied[id(player)] = (player, confTarget, detTarget)
 
-        if self.momentum > 0:
-            benefiting = self.homeTeam
-            suffering = self.awayTeam
-        else:
-            benefiting = self.awayTeam
-            suffering = self.homeTeam
-
-        # Boost benefiting team
-        for player in benefiting.rosterDict.values():
-            if player is not None:
-                player.updateInGameConfidence(effectMagnitude * 0.6)
-                player.updateInGameDetermination(effectMagnitude * 0.4)
-
-        # Slight drag on suffering team. Was 0.5x the benefiting team's
-        # boost, but post-instrumentation showed favorites winning at
-        # +13pp over pre-game WP and underdogs at -10pp — the drag was
-        # compounding the favorite's advantage into a death spiral. 0.3x
-        # leaves the drag detectable without crushing the trailing team.
-        dragMagnitude = effectMagnitude * 0.3
-        for player in suffering.rosterDict.values():
-            if player is not None:
-                player.updateInGameConfidence(-dragMagnitude * 0.6, source='scoreboard')
-                player.updateInGameDetermination(-dragMagnitude * 0.4)
+    def _clearMomentumEffect(self):
+        """Take every momentum offset back out before postgame folds in-game confidence
+        into the persistent value, so momentum never carries into the next game."""
+        for player, _, _ in list(self._momentumApplied.values()):
+            self._setMomentumOffset(player, 0.0, 0.0)
+        self._momentumApplied = {}
 
     # ─── End Momentum System ────────────────────────────────────────────────
 
@@ -12961,6 +13499,44 @@ class Game:
         self._sidelineCutawaysFired += 1
         return eventDict
 
+    def _rebaseWinProbability(self):
+        """Move the WP baseline to the current state without charging the move to any
+        play. For swings that are nobody's doing: the overtime coin toss and kickoff
+        (the receiving team wins ~46% of overtimes, so a tied 50 becomes ~42 for the
+        team receiving at its own 20). Without this the first OT snap carried it as WPA
+        and was tagged BIG PLAY. The last play is set aside while pricing, since its
+        flags (a score, an extra point) describe the previous possession."""
+        savedPlay = getattr(self, 'play', None)
+        self.play = None
+        try:
+            wp = self.calculateWinProbability()
+            credit = self.calculateWinProbability(forAttribution=True)
+        finally:
+            self.play = savedPlay
+        self.homeTeamWinProbability = self.previousHomeWinProbability = wp['home']
+        self.awayTeamWinProbability = self.previousAwayWinProbability = wp['away']
+        self.previousHomeWpCredit = credit['home']
+        self.previousAwayWpCredit = credit['away']
+
+    def _isBigPlay(self, homeWpa, awayWpa):
+        """Does the just-resolved play earn the BIG PLAY tag (|WPA| >= 7.0 either side)?
+
+        ⚠️ A KNEEL OR A SPIKE NEVER DOES. Neither moves the ball or changes the score;
+        all either one does is run or stop the clock. Two things still give them large
+        swings late in Q4. First, the leader-with-the-ball pull in
+        `calculateWinProbability` ramps toward 99 as the clock drains, so every kneel
+        under 2:00 banks a slice of it. Second, the bigger one: turnover branches
+        broadcast BEFORE `turnover()` switches possession, so a trailing team's failed
+        last drive (turnover on downs, a punt, a kickoff after a late score) is priced
+        on the leader's NEXT snap, which is usually the first kneel. Measured over 150
+        games: a kneel was tagged big in 10% of games, with swings up to 55 WP points.
+        The WP chart still moves on those snaps; only the tag (and the momentum bonus
+        the tag fires) is withheld, since a kneel cannot create momentum anyway.
+        """
+        if getattr(self.play, 'playType', None) in (PlayType.Kneel, PlayType.Spike):
+            return False
+        return bool(abs(homeWpa) >= BIG_PLAY_WPA_THRESHOLD or abs(awayWpa) >= BIG_PLAY_WPA_THRESHOLD)
+
     def _resolvePlayWpa(self):
         """Compute win-probability + WPA for the just-resolved play, store it on the
         play, fire the WPA-derived momentum/clutch effects, attribute the WPA to the
@@ -12972,7 +13548,9 @@ class Game:
             return (self.homeTeamWinProbability, self.awayTeamWinProbability,
                     getattr(self.play, 'homeWpa', 0.0), getattr(self.play, 'awayWpa', 0.0))
 
-        winProb = self.calculateWinProbability()
+        winProb, attribWp = self._withNextPossession(lambda: (
+            self.calculateWinProbability(),
+            self.calculateWinProbability(forAttribution=True)))
         newHomeWp = winProb['home']
         newAwayWp = winProb['away']
         homeWpa = float(newHomeWp - self.previousHomeWinProbability)
@@ -12984,7 +13562,6 @@ class Game:
         # inflated season WPA (measured 9.8x a QB per snap, 5.3x after) without touching
         # the WP the fans see or the momentum/clutch effects below, which are the only
         # path from WP back into play outcomes.
-        attribWp = self.calculateWinProbability(forAttribution=True)
         _prevHomeCredit = getattr(self, 'previousHomeWpCredit', self.previousHomeWinProbability)
         _prevAwayCredit = getattr(self, 'previousAwayWpCredit', self.previousAwayWinProbability)
         homeWpaCredit = float(attribWp['home'] - _prevHomeCredit)
@@ -12995,7 +13572,7 @@ class Game:
         self.play.awayWinProbability = newAwayWp
         self.play.homeWpa = round(homeWpa, 2)
         self.play.awayWpa = round(awayWpa, 2)
-        self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+        self.play.isBigPlay = self._isBigPlay(homeWpa, awayWpa)
 
         # Momentum: big-play bonus to the team that benefited from the swing
         if self.play.isBigPlay:
@@ -13065,8 +13642,18 @@ class Game:
                 creditOff(play.receiver, offenseWpa * WPA_DROP_RECEIVER_SHARE)
                 creditOff(getattr(play, 'passer', None),
                           offenseWpa * (1.0 - WPA_DROP_RECEIVER_SHARE))
+            elif getattr(play, 'receiver', None) is not None and not getattr(play, 'isSack', False):
+                # ⚠️ A TARGETED INCOMPLETION OR INTERCEPTION SPLITS LIKE A COMPLETION. It used to
+                # go all on the QB while a completion gave him only WPA_PASS_QB_SHARE, so he took
+                # 100% of a failed throw and 60% of a good one. While WP barely charged for a
+                # lost down that was invisible; once the fitted model priced an incompletion
+                # (-1.86) and a pick (-8.36) at what they cost, QBs averaged -7.4 WPA a game
+                # while passing as a whole netted +8.3 and their receivers sat well positive.
+                # The ball went to this receiver, so he shares the result either way.
+                creditOff(getattr(play, 'passer', None), offenseWpa * WPA_PASS_QB_SHARE)
+                creditOff(play.receiver, offenseWpa * (1.0 - WPA_PASS_QB_SHARE))
             else:
-                # incompletion / sack / throwaway → all on the QB
+                # sack / throwaway: no target, all on the QB
                 creditOff(getattr(play, 'passer', None), offenseWpa)
         elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint):
             creditOff(getattr(play, 'kicker', None), offenseWpa)
@@ -13671,7 +14258,7 @@ class Game:
             if 'homeWpa' not in self.gameFeed[0]:
                 self.gameFeed[0]['homeWpa'] = round(homeWpa, 2)
                 self.gameFeed[0]['awayWpa'] = round(awayWpa, 2)
-                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+                self.gameFeed[0]['isBigPlay'] = self._isBigPlay(homeWpa, awayWpa)
                 self.gameFeed[0]['isClutchPlay'] = getattr(self.play, 'isClutchPlay', False)
                 self.gameFeed[0]['isChokePlay'] = getattr(self.play, 'isChokePlay', False)
                 self.gameFeed[0]['isMomentumShift'] = getattr(self.play, 'isMomentumShift', False)
@@ -13713,6 +14300,11 @@ class Game:
             # _offenseEffectiveSecs <= 60, so this drain is bounded to the current deadline.
             return ('setupFG', max(8, self._offenseEffectiveSecs() - target))
 
+        # In field-goal range, tied or within a kick, with 1:00-3:00 left: score LAST. A
+        # tied team bleeds the clock, a trailing one stops hurrying (`_isFgSecuredDrain`).
+        if self._isFgSecuredDrain():
+            return ('burnClock', 40) if self._clockMargin() == 0 else ('neutral', DEFAULT_BASE)
+
         # Target format: a score this possession WINS — push to finish (fast huddle)
         # instead of draining, UNLESS a conservative coach is protecting a comfortable
         # lead (then fall through to the burn-clock branches below). Aggressive coaches
@@ -13724,10 +14316,18 @@ class Game:
         # tempo REGARDLESS of the game clock or score: a fast huddle (visible hurry-up
         # in the feed) that also drains the drive clock far slower, so the offense
         # visibly races its own shot clock instead of turning it over.
+        # ⚠️ NOT FOR A LEADER AT THE END OF THE GAME ON A PLAYS CLOCK. A plays clock counts
+        # snaps, so a fast huddle saves none of it and only hands game time back, which
+        # is the one thing a leader late must not do. Prod game 5002: the Normals, up 5
+        # with 3:27 left, went no-huddle on the 7th snap of an 8-play drive. Everyone else
+        # keeps the hurry: dropping it league-wide slowed every drive's last two snaps
+        # and took ~4.6 points a game off scoring (3 seeds x 150 games).
         if self._driveClockActive():
             from constants import DRIVE_CLOCK_HURRY_FRAC
             _u = getattr(self.gameRules, 'driveClockUnit', 'seconds')
-            if (_u == 'plays' and self.driveClockRemaining <= 2) or \
+            _leaderLate = (self._periodEnd()[0] in ('game', 'overtime')
+                           and self._clockMargin() > 0)
+            if (_u == 'plays' and self.driveClockRemaining <= 2 and not _leaderLate) or \
                (_u == 'seconds' and self.driveClockRemaining <= DRIVE_CLOCK_HURRY_FRAC * self._driveClockLimitSecs()):
                 return ('hurryUp', 12)
 
@@ -13778,6 +14378,15 @@ class Game:
                 return ('burnClock', 40)              # ahead in the frame → run the frame out
             if not self._isGarbageTime(_fdiff):
                 return ('hurryUp', 12)                # behind/tied → race to win the frame
+        # ⚠️ BEHIND WITH 2:00-5:00 OF A FRAME LEFT, PICK UP THE PACE (fixed 2026-10-19), the
+        # standard Q4 "mid-late deficit" rule on the frame clock. The standard rule below is
+        # skipped in Frames, so nothing hurried a trailing team until 2:00: prod game 4691,
+        # Raccoons down 3 on total in the last frame (frames level), let 1:39 run off from
+        # 3:14 at a normal huddle. Not for a frame the side behind can no longer win (a
+        # 'half' ending) and not for the side ahead (the frame-leader rule).
+        if (_fdiff is not None and _fdiff < 0 and self._periodEnd()[0] == 'game'
+                and not self._isGarbageTime(_fdiff)):
+            return ('hurryUp', 15 if _fdiff <= -self._maxPossession() else 25)
 
         # About to score a go-ahead TD from the goal line: bleed the clock first so the
         # opponent has no time to answer. Must precede the trailing hurry-up below, which
@@ -13855,6 +14464,15 @@ class Game:
             'coachClockIQ': round(self._coachClockIQ(coach), 2),
         }
 
+    def _clampToFrameBuzzer(self, preSnapSecs: int) -> int:
+        """Frames: a huddle never runs into the frame's buzzer; the snap goes off with one
+        second left, whatever the play (the clock drain enforces the same cap, this keeps
+        the reported pre-snap time honest). Identity in every other format."""
+        toEnd = self._frameSecsRemaining()
+        if toEnd is not None and 0 < toEnd <= preSnapSecs:
+            return max(0, toEnd - 1)
+        return preSnapSecs
+
     def calculatePreSnapTime(self) -> int:
         """
         Calculate time consumed before snap (huddle, line up, snap count).
@@ -13876,6 +14494,7 @@ class Game:
             finalTime = self._noHuddlePreSnapSecs()
             if 0 < self.gameClockSeconds <= finalTime:
                 finalTime = max(0, self.gameClockSeconds - 1)
+            finalTime = self._clampToFrameBuzzer(finalTime)
             if hasattr(self, 'play') and self.play is not None and 'tempo' in self.play.insights:
                 self.play.insights['tempo']['noHuddle'] = True
                 self.play.insights['tempo']['finalSeconds'] = finalTime
@@ -13930,6 +14549,7 @@ class Game:
         if (self.play is not None and 0 < self.gameClockSeconds <= finalTime
                 and self.play.playType in (PlayType.FieldGoal, PlayType.Pass, PlayType.Run)):
             finalTime = max(0, self.gameClockSeconds - 1)
+        finalTime = self._clampToFrameBuzzer(finalTime)
 
         # Augment the tempo insight with the time math (recordTempoIntent
         # already set intent / baseTime / coachClockIQ).
@@ -14245,7 +14865,7 @@ class Game:
             if landing is not None and landing <= 10:
                 return '{}, downed at the {}'.format(base, landing)
             if retName and landing is not None:
-                text = '{}, fair catch by {} at the {}'.format(base, retName, landing)
+                text = '{}, fair catch by {} at {}'.format(base, retName, self._puntSpotText(landing))
             elif retName:
                 text = '{}, fair catch by {}'.format(base, retName)
             else:
@@ -14254,6 +14874,18 @@ class Game:
             text = base
 
         return text
+
+    def _puntSpotText(self, landing):
+        """Name a punt's landing spot the way a yard line reads. `landing` is yards from
+        the RECEIVING team's own goal (0-100), so a short punt can land past 50: that is
+        the KICKING team's side of the field. Printed raw it read "at the 60"."""
+        if landing < 50:
+            return 'the {}'.format(landing)
+        if landing == 50:
+            return 'midfield'
+        kicking = getattr(self.play, 'offense', None)
+        label = getattr(kicking, 'abbr', None) or getattr(kicking, 'name', None)
+        return 'the {} {}'.format(label, 100 - landing) if label else 'the {}'.format(100 - landing)
 
     def _shouldOnsideKick(self) -> bool:
         """
@@ -14306,7 +14938,43 @@ class Game:
             opts.append((r, float(r['points']), self._estimateConversionProb(scoringTeam, r['distance'])))
         return opts
 
-    def _conversionWinChance(self, margin: float, drives: int, options: list) -> float:
+    def _opponentDriveOdds(self, scoringTeam: FloosTeam.Team) -> tuple:
+        """How the scoring team's coach expects the opponent's drives to go, as
+        (nothing, field goal, touchdown) per drive.
+
+        Two things move it off the league rates (`CONVERSION_DRIVE_ODDS`):
+          * **How the defense has played THIS game.** The opponent's points per drive so
+            far, shrunk toward the league rate by `CONVERSION_DEFENSE_PRIOR_DRIVES` drives
+            of prior, scales its chance of scoring. A defense that has been stopping them
+            makes a tie, or a lead that a field goal erases, worth more; one that has been
+            shredded makes the coach go for it now.
+          * **The coach's temperament.** A conservative coach trusts the defense to make the
+            stop, an aggressive one does not (`CONVERSION_DEFENSE_TRUST_SWING`).
+        """
+        from constants import (CONVERSION_DRIVE_ODDS, CONVERSION_DEFENSE_PRIOR_DRIVES,
+                               CONVERSION_DEFENSE_TRUST_SWING)
+        pNone, pFg, pTdKick, pTdTwo = CONVERSION_DRIVE_ODDS
+        pTd = pTdKick + pTdTwo
+        opp = self.awayTeam if scoringTeam is self.homeTeam else self.homeTeam
+        td = float(getattr(self.gameRules, 'touchdownPoints', 6))
+        xp = float(getattr(self.gameRules, 'extraPointPoints', 1))
+        priorPpd = pFg * float(self._fgValue()) + pTd * (td + xp)
+        drives = self._drivesBy.get(id(opp), 0)
+        points = self._offensePointsBy.get(id(opp), 0)
+        k = CONVERSION_DEFENSE_PRIOR_DRIVES
+        ratio = ((k * priorPpd + points) / (k + drives)) / priorPpd if priorPpd > 0 else 1.0
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL)
+                       - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        ratio *= max(0.0, 1.0 + aggressNorm * CONVERSION_DEFENSE_TRUST_SWING)
+        scoring = pFg + pTd
+        scaled = min(0.95, scoring * ratio)
+        f = scaled / scoring if scoring > 0 else 0.0
+        return (1.0 - scaled, pFg * f, pTd * f)
+
+    def _conversionWinChance(self, margin: float, drives: int, options: list,
+                             oppOdds: tuple = None, overtime: bool = False,
+                             tieWorth: float = None) -> float:
         """Chance the scoring team wins from `margin` (negative = behind) with `drives`
         possessions left in regulation, the OPPONENT receiving first and the ball
         alternating after that.
@@ -14325,12 +14993,37 @@ class Game:
         fg = float(self._fgValue())
         pNone, pFg, pTdKick, pTdTwo = CONVERSION_DRIVE_ODDS
         pTd = pTdKick + pTdTwo
+        oNone, oFg, oTd = oppOdds if oppOdds is not None else (pNone, pFg, pTd)
         choices = [(pts, p) for _, pts, p in options]
         memo = {}
+        # ⚠️ A TIE IS SUDDEN DEATH, AND WHO GETS THE BALL FIRST MATTERS. The next score wins,
+        # so from a tie with us receiving we win with pUs / (1 - (1-pUs)(1-pThem)), and with
+        # them receiving (1-pThem) times that. In overtime the side due the next possession
+        # is known: the second team's tying try hands the ball to the first team, which is
+        # why a tie there is worth well under a coin flip unless the defense is trusted to
+        # get the stop. A tie at the end of regulation goes to an overtime that could start
+        # either way, so it takes the average, which is exactly 0.5 when the two sides
+        # score at the same rate.
+        pUs, pThem = pFg + pTd, oFg + oTd
+        _sdDenom = 1.0 - (1.0 - pUs) * (1.0 - pThem)
+        sdUsFirst = pUs / _sdDenom if _sdDenom > 0 else 0.5
+        sdThemFirst = (1.0 - pThem) * sdUsFirst
+
+        def tieValue(oursNext):
+            # ⚠️ A TIED FRAME IS HALF A FRAME, NOT OVERTIME. The sudden-death value below
+            # shrinks as the opponent's scoring rate grows, which is right for overtime and
+            # wrong for an earlier frame, where a tie is worth exactly half: valued as sudden
+            # death it read ~0.29 against a hot offense and a team down 1 in a frame went for
+            # two 56% of the time (NFL down 1 in Q4: 16%). Frames passes `tieWorth=0.5`.
+            if tieWorth is not None:
+                return tieWorth
+            if overtime:
+                return sdUsFirst if oursNext else sdThemFirst
+            return 0.5 * (sdUsFirst + sdThemFirst)
 
         def v(m, k, oursNext):
             if k <= 0:
-                return 1.0 if m > 0 else 0.5 if m == 0 else 0.0
+                return 1.0 if m > 0 else tieValue(oursNext) if m == 0 else 0.0
             key = (m, k, oursNext)
             if key in memo:
                 return memo[key]
@@ -14339,13 +15032,29 @@ class Game:
             afterTd = m + sign * td
             conv = [p * nxt(afterTd + sign * pts) + (1 - p) * nxt(afterTd) for pts, p in choices]
             best = (max(conv) if oursNext else min(conv)) if conv else nxt(afterTd)
-            out = pNone * nxt(m) + pFg * nxt(m + sign * fg) + pTd * best
+            if oursNext:
+                out = pNone * nxt(m) + pFg * nxt(m + sign * fg) + pTd * best
+            else:
+                out = oNone * nxt(m) + oFg * nxt(m + sign * fg) + oTd * best
             memo[key] = out
             return out
 
         return v(float(margin), int(drives), False)
 
-    def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list) -> dict:
+    def _overtimeDrivesAfterTry(self, scoringTeam: FloosTeam.Team) -> int:
+        """Possessions left in the game after this overtime try, for the win-value model.
+        The first team's touchdown leaves the opponent its guaranteed possession (1); the
+        second team's try is the last word (0): a lead wins, a tie goes to sudden death,
+        which the model scores as a coin flip."""
+        if (getattr(self, 'otPeriod', 0) <= 1
+                and scoringTeam is getattr(self, 'otFirstPossTeam', None)
+                and not getattr(self, 'otFirstPossComplete', False)):
+            return 1
+        return 0
+
+    def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list,
+                                 drives: int = None, margin: float = None,
+                                 secsLeft: float = None, tieWorth: float = None) -> dict:
         """Pick the conversion that leaves the best chance of winning.
 
         ⚠️ THE OLD CHART ONLY EVER LET A TRAILING TEAM GO, AND LET IT GO ALMOST
@@ -14369,36 +15078,71 @@ class Game:
         reaches for.
 
         The safest option is the default; another is taken only for a real edge, nearly
-        always for a clear one, with coach aggressiveness deciding the marginal ones."""
+        always for a clear one, with coach aggressiveness deciding the marginal ones.
+
+        `margin` / `secsLeft` override the scoreboard and the game clock: Frames passes the
+        margin that decides the frame or the match and the frame's own clock
+        (`_chooseFramesConversion`)."""
         from constants import (CONVERSION_SECS_PER_DRIVE, CONVERSION_VALUE_MIN_GAIN,
                                CONVERSION_VALUE_BASE, CONVERSION_VALUE_GAIN_SCALE)
         import random
         q = self.currentQuarter
-        quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
-        secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
-        drives = min(8, max(1, round(secsLeft / CONVERSION_SECS_PER_DRIVE)))
-        mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
-        theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
-        margin = float(mine - theirs)
+        if secsLeft is None:
+            quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
+            secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
+        if margin is None:
+            mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+            theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+            margin = float(mine - theirs)
+        margin = float(margin)
+        # `drives` given (overtime) is the exact count. Otherwise read it off the clock.
+        # ⚠️ A TRY WITH NO TIME LEFT IS THE LAST PLAY OF REGULATION. The clock split floors
+        # at one drive and the trailing branch at two, so a touchdown at 0:00 used to be
+        # valued as if the game went on, and a team that had just tied it took the 3 about
+        # half the time over the likelier 2.
+        # ⚠️ AND A FEW SECONDS IS NOT A DRIVE EITHER (2026-10-19). The split floored any time
+        # left at one full opponent drive (~36% to score), so a team up 2 with 0:01 left in
+        # a frame went for two to guard against a field goal that could not happen. Below
+        # CONVERSION_MIN_DRIVE_SECS the try is valued as the last word.
+        from constants import CONVERSION_MIN_DRIVE_SECS
+        if drives is None and secsLeft < CONVERSION_MIN_DRIVE_SECS:
+            drives = 0
+        fixedDrives = drives is not None
+        if not fixedDrives:
+            drives = min(8, max(1, round(secsLeft / CONVERSION_SECS_PER_DRIVE)))
         # ⚠️ A TEAM BEHIND PLAYS FOR THE POSSESSIONS IT NEEDS, clock permitting. The even
         # clock split gives a team down 18 with 5:49 left ONE more drive, from which no
         # conversion changes anything — so the model shrugged and kicked what is really a
         # free roll. A trailing side hurries and onside-kicks for more, so it plans on as
         # many own drives as the deficit needs, up to one per CONVERSION_TRAIL_SECS_PER_DRIVE
         # of clock (and always at least one: a stop, an onside kick). Opponent receives first.
-        if margin < 0:
+        if margin < 0 and not fixedDrives:
             from constants import CONVERSION_TRAIL_SECS_PER_DRIVE
             needed = math.ceil(-margin / (self._maxPossession() or 8.0))
             affordable = 1 + int(secsLeft // CONVERSION_TRAIL_SECS_PER_DRIVE)
             drives = max(drives, 2 * max(1, min(needed, affordable)))
-        stand = self._conversionWinChance(margin, drives, options)
+        oppOdds = self._opponentDriveOdds(scoringTeam)
+        overtime = self.currentQuarter >= 5
+        winChance = lambda m: self._conversionWinChance(m, drives, options,
+                                                        oppOdds=oppOdds, overtime=overtime,
+                                                        tieWorth=tieWorth)
+        stand = winChance(margin)
         valued = []
         for rung, pts, p in options:
-            win = p * self._conversionWinChance(margin + pts, drives, options) + (1 - p) * stand
+            win = p * winChance(margin + pts) + (1 - p) * stand
             valued.append((win, p, rung))
-        safest = max(valued, key=lambda t: t[1])          # the highest make chance
         best = max(valued, key=lambda t: (t[0], t[1]))
+        # ⚠️ THE CONSERVATIVE CALL IS THE BEST OF THE SAFER TRIES, NOT THE SAFEST TRY. It
+        # used to be the single most makeable option, which is right when that is the kick
+        # but not under the ladder: in overtime, down 3 after the touchdown, the most
+        # makeable try is the 2 and it loses even when made. A cautious coach there goes
+        # for the TIE (the 3), so the alternative is the most valuable try that is more
+        # likely to convert than the best one. With no such try the best one is the call.
+        saferTries = [t for t in valued if t[1] > best[1]]
+        safest = max(saferTries, key=lambda t: (t[0], t[1])) if saferTries else best
         gain = best[0] - safest[0]
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         # ⚠️ A CHASING TEAM MAXIMISES ITS CHANCES HOWEVER SMALL THEY ARE. Down 18 the win
         # chance is ~1% either way, so the absolute edge of a free roll is a rounding error
         # and a flat threshold kicked it — but 1% -> 2% doubles the team's chances. Behind,
@@ -14412,10 +15156,10 @@ class Game:
             gain = gain / max(0.02, 2.0 * safest[0])
         if best[2] is safest[2] or gain <= CONVERSION_VALUE_MIN_GAIN:
             return safest[2]
-        coach = getattr(scoringTeam, 'coach', None)
-        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = CONVERSION_VALUE_BASE + gain * CONVERSION_VALUE_GAIN_SCALE + aggressNorm * 0.15
-        return best[2] if random.random() < max(0.05, min(0.97, pct)) else safest[2]
+        # A clear edge is taken every time. The cap used to be 0.97, so 3% of plainly
+        # decided calls (down 3 at 0:00 with the 4 to win) took the 2 and lost.
+        return best[2] if random.random() < max(0.05, min(1.0, pct)) else safest[2]
 
     def _chooseConversion(self, scoringTeam: FloosTeam.Team) -> dict:
         """Pick the post-TD conversion rung (Conversion-Ladder-aware). Returns a
@@ -14440,19 +15184,31 @@ class Game:
         # kick, byte-identical to the old kick-vs-go decision.
         ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
         kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
-        fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
+        # ⚠️ WITH THE KICK GONE, THE DEFAULT IS THE TWO-POINT TRY (owner, 2026-10-15: "the 2
+        # pt conversion should essentially be the default like the 1pt kick usually is"). It
+        # used to be `_forcedGoRung`, which reached up the ladder by coach aggressiveness off
+        # a make-rate estimate calibrated before the goal-line work (it assumes 70% for the
+        # two-pointer, measured 45%), so a 90+ coach took the 3 or the 4 on every touchdown
+        # from the first quarter on. The rungs above it are now taken only where the score
+        # calls for them: Q4 and overtime, on win value.
+        fallback = (kick if (kickAllowed or not goRungs)
+                    else min(goRungs, key=lambda r: r['distance']))
         # Innings: no game clock (quarter is always 1), so the standard Q3/Q4 comeback gate
         # never fires. Going for the TOP rung is the only way to CONTINUE the at-bat, which is
-        # worth far more than a clock game's points-only gamble — so innings has its own policy.
+        # worth far more than a clock game's points-only gamble — so innings has its own policy,
+        # and keeps the aggressiveness-picked rung as the try it settles for.
         from constants import INNINGS_CONTINUATION_ENABLED
         if (INNINGS_CONTINUATION_ENABLED and goRungs
                 and getattr(self.format, 'key', '') == 'innings'):
-            return self._chooseInningsConversion(scoringTeam, goRungs, fallback)
+            inningsFallback = (fallback if (kickAllowed or not goRungs)
+                               else self._forcedGoRung(scoringTeam, goRungs))
+            return self._chooseInningsConversion(scoringTeam, goRungs, inningsFallback)
         # Frames: when the frames finish LEVEL the match falls to the total-points
         # tiebreak, so in the final frame the exact points margin is the whole game.
         # Returns None to defer to the standard policy whenever points aren't decisive.
         if goRungs and getattr(self.format, 'key', '') == 'frames':
-            _framesPick = self._chooseFramesConversion(scoringTeam, goRungs, fallback)
+            _framesPick = self._chooseFramesConversion(
+                scoringTeam, self._conversionOptions(scoringTeam, kickAllowed, goRungs, kick), fallback)
             if _framesPick is not None:
                 return _framesPick
         # Darts: a rung that lands on the target wins outright, and one that overshoots
@@ -14475,6 +15231,18 @@ class Game:
         # this sim, so on expected points alone (1.4 vs 0.95) the model goes for two on
         # nearly every touchdown when there is a lot of game left — correct for the sim's
         # odds, and nothing like football. Other formats keep the desire chart below.
+        # ⚠️ OVERTIME DECIDES ON WIN VALUE TOO, OVER THE POSSESSIONS OVERTIME ACTUALLY HAS.
+        # It used to take the default here, blind to the score, so the second team, down 3
+        # after its touchdown, went for two and lost even when it made it (and down 2 under
+        # the kick rules, kicked one and lost). In the first overtime the second team's try
+        # is the last word (a lead wins, a tie goes on to sudden death), and the first
+        # team's try is followed by exactly one opponent possession. A touchdown in sudden
+        # death ends the game before the try, so that case never gets here.
+        if (goRungs and self.currentQuarter >= 5
+                and getattr(self.format, 'key', 'standard') == 'standard'):
+            return self._chooseConversionByValue(
+                scoringTeam, self._conversionOptions(scoringTeam, kickAllowed, goRungs, kick),
+                drives=self._overtimeDrivesAfterTry(scoringTeam))
         if goRungs and self.currentQuarter <= 4 and getattr(self.format, 'key', 'standard') == 'standard':
             from constants import CONVERSION_VALUE_QUARTERS
             if self.currentQuarter in CONVERSION_VALUE_QUARTERS:
@@ -14599,63 +15367,96 @@ class Game:
         floor = DARTS_LAND_MAKE_FLOOR - aggressNorm * DARTS_LAND_AGGR_SWING + jitter
         return None if pLand >= floor else bank
 
-    def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
+    def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, options: list, fallback: dict):
         """Frames post-TD decision, or None to defer to the standard policy.
 
-        Frames is decided by FRAMES WON; total points only matter as the tiebreak when
-        the frames finish LEVEL (`FramesFormat.winnerSide`). So in the final frame, a
-        team that has just levelled the frames is playing a pure points game — and the
-        standard "you're within one score, take the kick" chart is exactly wrong there,
-        because there is no future possession to make the points up. It cost a real match:
-        a team levelled the frames 3-3 with a touchdown and lost the tiebreak by 1.8,
-        when the 4-point rung would have won it.
+        ⚠️ DECIDED ON WIN VALUE OVER THE MARGIN THAT DECIDES THE FRAME OR THE MATCH (fixed
+        2026-10-19). Reported from prod game 4675 (Midnights 48, Raccoons 47): last frame,
+        Raccoons a frame behind, a touchdown with 1:08 left put them ahead IN the frame, so
+        the frames would finish level and the total decide it, where they trailed 48-46.
+        This picked the try with the most EXPECTED POINTS (kick 0.95, two-pointer 0.94),
+        kicked, and lost by one, when only the two-pointer could tie. A tiebreak is a
+        threshold, not a points race. And when the frames would NOT finish level it
+        deferred to the comeback chart below, which reads the TOTAL: a team a frame behind,
+        down 1 in the last frame after its touchdown but ahead on aggregate, kicked to tie
+        the frame and lost the match.
 
-        Only decisive when the frames actually finish level. If either side is ahead on
-        frames the points are irrelevant (defer), and if the scoring team is already
-        ahead on the tiebreak the safe points are the right call (defer)."""
+        Now the standard engine's win-value model (`_chooseConversionByValue`) decides, fed
+        the margin that matters:
+          * the FINAL frame, any time left: the match standing as a points margin
+            (`_framesMatchMargin`), on the game clock;
+          * an earlier frame in its last `FRAMES_END_WINDOW_SECS` (`_periodEnd` 'game'): the
+            frame margin, on the frame clock (a tied frame is worth half, like overtime);
+          * the rest of a frame, and a frame the side behind can no longer win: the default
+            try, as a standard game kicks before Q4. Points there only matter as a distant
+            tiebreak."""
         fmt = self.format
         try:
             n = fmt._frames(self)
         except Exception:
             return None
-        # Only the LAST frame settles the tiebreak — earlier frames still have frames
-        # to win, and points there can be made up later.
-        if int(getattr(self, '_frameIndex', 0)) < n - 1:
-            return None
-
-        fh = float(getattr(self, '_framesWonHome', 0.0))
-        fa = float(getattr(self, '_framesWonAway', 0.0))
+        if self.currentQuarter >= 5:
+            return None          # overtime is past all frames: the standard policy
+        if int(getattr(self, '_frameIndex', 0)) >= n - 1:
+            margin = self._framesMatchMargin(scoringTeam)
+            if margin is None:   # decided whatever the try does
+                return fallback
+            return self._chooseConversionByValue(scoringTeam, options, margin=margin)
+        kind, frameSecs = self._periodEnd()
+        if kind != 'game':
+            return fallback
         from game_formats import framePoints
         curH, curA = framePoints(self)
-        if curH > curA:
-            fh += 1
-        elif curA > curH:
-            fa += 1
-        else:
-            fh += 0.5
-            fa += 0.5
-        if fh != fa:
-            return None      # frames decide the match — points don't come into it
+        frameMargin = (curH - curA) if scoringTeam is self.homeTeam else (curA - curH)
+        return self._chooseConversionByValue(scoringTeam, options, margin=frameMargin,
+                                             secsLeft=frameSecs, tieWorth=0.5)
 
-        # Frames finish LEVEL, so the match is decided by a RAW POINTS COMPARISON.
-        # Every point carries equal weight toward that total and there is no "safe
-        # enough" margin, so the right objective is EXPECTED POINTS rather than the
-        # standard chart's "am I behind, do I need to catch up". That chart returns the
-        # safe kick whenever the team is level or ahead — which is how a side that
-        # levelled the frames 3-3 settled for 1 point and lost the tiebreak by 1.8.
-        cands = list(goRungs) + ([fallback] if fallback not in goRungs else [])
+    def _framesMatchMargin(self, scoringTeam: FloosTeam.Team):
+        """FINAL frame: the scoring team's match standing, as a points margin the win-value
+        model can read (positive = winning, 0 = tied and headed to overtime, negative =
+        losing), or None when no score can change the result.
 
-        def prob(r):
-            if r.get('kind') == 'kick':
-                return self._estimateKickConversionProb(scoringTeam)
-            return self._estimateConversionProb(scoringTeam, r.get('distance', 2))
+        The final frame and the total move together (every point counts in both), and the
+        result is a step function of the total: frames won decide it, and with the frames
+        level the total does, a dead-level total going to overtime. So the standing is the
+        distance from the point where it flips. With a tie point (always total 0, frames
+        level) the margin IS the total margin; without one it sits half a point on the
+        losing side of the first winning total, so 0 is never reached and a make that
+        crosses it wins outright."""
+        from game_formats import framePoints
+        isHome = scoringTeam is self.homeTeam
+        mine = self.homeScore if isHome else self.awayScore
+        theirs = self.awayScore if isHome else self.homeScore
+        total = mine - theirs
+        curH, curA = framePoints(self)
+        offset = ((curH - curA) if isHome else (curA - curH)) - total   # frame = total + offset
+        fh = float(getattr(self, '_framesWonHome', 0.0))
+        fa = float(getattr(self, '_framesWonAway', 0.0))
+        usFrames, themFrames = (fh, fa) if isHome else (fa, fh)
 
-        def expected(r):
-            return float(r.get('points', 0)) * prob(r)
+        def outcome(t):
+            fm = t + offset
+            us = usFrames + (1.0 if fm > 0 else 0.5 if fm == 0 else 0.0)
+            them = themFrames + (1.0 if fm < 0 else 0.5 if fm == 0 else 0.0)
+            if us != them:
+                return 1 if us > them else -1
+            return 1 if t > 0 else 0 if t == 0 else -1
 
-        # Tie-break toward the SAFER (more makeable) option so a coin-flip between two
-        # equal-EV rungs doesn't reach for the long one.
-        return max(cands, key=lambda r: (round(expected(r), 3), prob(r)))
+        # The result can only change where the frame lean or the total crosses zero, so
+        # those two totals (and either side of them) are all that need testing. Scores
+        # are not always whole numbers (voted scoring rules), so nothing here assumes it.
+        eps = 1e-3
+        crit = sorted({0.0, float(-offset)})
+        probes = [crit[0] - 1000.0, crit[-1] + 1000.0]
+        for c in crit:
+            probes += [c - eps, c, c + eps]
+        if len({outcome(t) for t in probes}) == 1:
+            return None
+        if outcome(0.0) == 0:
+            return float(total)
+        winStart = min(c for c in crit if outcome(c + eps) == 1)
+        # Winning AT the threshold reads just above 0; winning only past it, just below.
+        return float(total - winStart) + (eps if outcome(winStart) == 1 else -eps)
 
     def _forcedGoRung(self, scoringTeam: FloosTeam.Team, goRungs: list) -> dict:
         """No-kick mode, NON-comeback pick: with the safe kick gone, a team going for it
@@ -15385,6 +16186,8 @@ class Game:
         """Consume game time. The game-clock effect is format-owned: standard drains
         the clock; play_limit no-ops (its clock is play-count driven); chess_clock
         drains the possessing team's budget and recomputes its synthetic clock."""
+        # Frames: nothing crosses the current frame's buzzer (FramesFormat.clampConsumption).
+        seconds = self.format.clampConsumption(self, seconds)
         self.format.consumeTime(self, seconds)
         # Drive Clock (seconds unit): the possession budget drains with the game clock,
         # so it naturally pauses whenever the game clock is stopped. Only for formats
@@ -15674,6 +16477,78 @@ class Game:
         if currentPlay is not None and getattr(currentPlay, 'playType', None) == PlayType.ExtraPoint:
             expectedPoints = 0
 
+        # The clock formats (standard, play limit) use the model fitted to the
+        # sim's own outcomes; formats where the score ends the game, and overtime, keep
+        # the earlier hand-built core (overtime then replaces it with its measured model).
+        if getattr(self.format, 'clockWinProbability', False) and self.currentQuarter <= 4:
+            homeWinProb = self._clockModelHomeWp(scoreDiff, total_seconds, eloHomeWp)
+        else:
+            homeWinProb = self._legacyCoreHomeWp(total_seconds, gameProgress, eloWeight, eloHomeWp,
+                                                 scoreDiff, expectedPoints, forAttribution)
+        awayWinProb = 100 - homeWinProb
+
+        # Format-specific win-condition possession pull (e.g. target's match point: a
+        # team on offense that can reach X this possession is pulled toward winning,
+        # ramped by how reachable X is). Regulation only; OT below handles the tie.
+        homeWinProb, awayWinProb = self.format.adjustWinProbability(
+            self, homeWinProb, awayWinProb, expectedPoints)
+
+        # ⚠️ REGULATION HAS ENDED TIED: overtime is next and nobody has the ball yet, so
+        # the honest number is the coin flip (the ELO prior at its end-of-regulation
+        # floor), not whatever field position the final snap left behind. It used to
+        # read 31-79% here and then snap to the overtime model on the first OT play,
+        # which tagged that play BIG PLAY in 3 of 4 overtimes. `scoreDiff` carries the
+        # expected PAT, so a tying touchdown with its try still to come is not caught.
+        if (self.currentQuarter == 4 and self.gameClockSeconds <= 0
+                and scoreDiff == 0 and not self.isGameOver()):
+            homeWinProb = 50.0 + eloWeight * (eloHomeWp - 50.0)
+            awayWinProb = 100 - homeWinProb
+
+        # Overtime win probability — replaces generic formula above. The measured model
+        # covers every overtime state the sim reaches; anything it does not recognize
+        # keeps the generic number.
+        if self.currentQuarter >= 5:
+            otHomeWp = self._overtimeHomeWp()
+            if otHomeWp is not None:
+                # Team strength tilts it by the ELO prior at its end-of-regulation floor
+                # weight, the same tilt the tied 0:00 handoff carries, so the move into
+                # overtime is continuous and equally rated teams read the measured rate.
+                homeWinProb = otHomeWp + eloWeight * (eloHomeWp - 50.0)
+            homeWinProb = max(0.1, min(99.9, homeWinProb))
+            awayWinProb = 100 - homeWinProb
+
+        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over).
+        # ⚠️ A TOUCHDOWN WITH ITS TRY STILL OWED IS NOT FINAL, whatever `isGameOver()` says
+        # about the scores in between: down 7 at 0:00 (or in overtime's answering
+        # possession), the touchdown leaves the scorer down 1 and the try decides it.
+        if not self.isGameOver() or self._tryStillOwed():
+            homeWinProb = max(0.1, min(99.9, homeWinProb))
+            awayWinProb = max(0.1, min(99.9, awayWinProb))
+        else:
+            if self.homeScore > self.awayScore:
+                homeWinProb = 100
+                awayWinProb = 0
+            elif self.awayScore > self.homeScore:
+                homeWinProb = 0
+                awayWinProb = 100
+            else:
+                homeWinProb = 50
+                awayWinProb = 50
+
+        return {
+            'home': round(homeWinProb, 1),
+            'away': round(awayWinProb, 1)
+        }
+    
+    def _legacyCoreHomeWp(self, total_seconds, gameProgress, eloWeight, eloHomeWp,
+                          scoreDiff, expectedPoints, forAttribution):
+        """The hand-built WP core: a logistic in (score + damped expected points) whose
+        steepness grows with game progress, blended with the ELO prior on a linear
+        schedule, plus a late-game possession pull. Kept for the formats where the
+        score ends the game (target, darts, frames' blend, innings' fallback) and as
+        overtime's fallback. Audited 2026-10-18 for the clock formats and replaced
+        there by `_clockModelHomeWp`: underconfident (75% won 84%), field position
+        nearly ignored, the ELO prior faded too fast, the first quarter inert."""
         # Adjust expected points based on who has possession
         if self.offensiveTeam == self.homeTeam:
             homeExpected = expectedPoints
@@ -15792,94 +16667,210 @@ class Game:
                 targetWp = 99 if homeLeading else 1
                 homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
                 awayWinProb = 100 - homeWinProb
+        return homeWinProb
 
-        # Format-specific win-condition possession pull (e.g. target's match point: a
-        # team on offense that can reach X this possession is pulled toward winning,
-        # ramped by how reachable X is). Regulation only; OT below handles the tie.
-        homeWinProb, awayWinProb = self.format.adjustWinProbability(
-            self, homeWinProb, awayWinProb, expectedPoints)
+    def _scoreEndsPossession(self) -> bool:
+        """The play just scored and the ball goes back with a kick: every score but a
+        made sideline goal, after which the scorer keeps the ball and plays on. Win
+        probability prices a scoring play at the possession after it, so reading a hoop
+        as a kickoff handed the ball to the other team for one play: in prod game 4983
+        every make moved win probability against the team that made it (3-8 points),
+        and the next snap swung it back."""
+        play = getattr(self, 'play', None)
+        return (play is not None and bool(getattr(play, 'scoreChange', False))
+                and not getattr(play, 'hoopMade', False))
 
-        # Overtime win probability — replaces generic formula above
-        if self.currentQuarter >= 5:
-            # Match checkOvertimeEnd: 2nd+ OT is sudden death outright; 1st OT becomes
-            # sudden death once both guaranteed possessions are done.
-            isSuddenDeath = self.otPeriod >= 2 or self.otSecondPossComplete
-            homeHasBall = self.offensiveTeam == self.homeTeam
+    def _wpClockFeatures(self, scoreDiff, total_seconds, eloHomeWp) -> dict:
+        """The state the fitted clock model reads, from the home team's side. `wp_fit.py`
+        records exactly this, so the fit and the engine cannot read the game differently.
 
-            if isSuddenDeath and scoreDiff != 0:
-                # Sudden death + someone is leading → game ends on next score or turnover on downs.
-                # Leading team is overwhelmingly likely to win (they can kneel it out or score).
-                leadBonus = min(40, abs(scoreDiff) * 10)  # wider lead = more certain
-                if scoreDiff > 0:
-                    # Home leads
-                    homeWinProb = 85 + leadBonus * 0.3
-                    if homeHasBall:
-                        homeWinProb += 5  # has possession too
-                else:
-                    # Away leads
-                    homeWinProb = 15 - leadBonus * 0.3
-                    if not homeHasBall:
-                        homeWinProb -= 5  # away has possession too
-            elif scoreDiff == 0:
-                # Tied in OT — next score wins (or will win after both possess).
-                # In FG range, WP should reflect the near-certainty of a made kick.
-                yte = self.yardsToEndzone
-                fgDist = yte + 17
-                # Shared with the kick the engine will actually roll — see
-                # Game.fgMakeProbability. These used to carry their own copy of the
-                # curve and silently drifted when the model changed.
-                kicker = self.offensiveTeam.rosterDict.get('k')
-                fgProb = self.fgMakeProbability(kicker, fgDist)
-                # Continuous scoring probability: union of two paths —
-                # FG probability (viable when in range, drops smoothly to
-                # ~0 outside of kicker range) and drive-TD probability
-                # (declines exponentially with yards-to-endzone). Using a
-                # smooth function here avoids large WP swings when the
-                # offense gains a few yards across an arbitrary threshold.
-                tdDriveProb = max(0.02, 0.25 * math.exp(-yte / 40.0))
-                scoringProb = (1 - (1 - fgProb) * (1 - tdDriveProb)) * 100
-
-                if isSuddenDeath:
-                    # Next score wins outright — scoring prob maps directly to WP
-                    offenseWp = max(52, scoringProb)
-                else:
-                    # First/second possession — both teams will get a drive, so
-                    # the current offense's drive position alone shouldn't swing
-                    # WP much. Keep the swing tight (~±8% off 50) so the first
-                    # OT play doesn't create a massive discontinuous jump from
-                    # end-of-regulation 50/50.
-                    offenseWp = 50 + (scoringProb - 50) * 0.15
-
-                if homeHasBall:
-                    homeWinProb = offenseWp
-                else:
-                    homeWinProb = 100 - offenseWp
-            # else: non-sudden-death with score diff — first possession scored,
-            # second team still gets a chance. Use the generic formula from above.
-
-            homeWinProb = max(0.1, min(99.9, homeWinProb))
-            awayWinProb = 100 - homeWinProb
-
-        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over)
-        if not self.isGameOver():
-            homeWinProb = max(0.1, min(99.9, homeWinProb))
-            awayWinProb = max(0.1, min(99.9, awayWinProb))
-        else:
-            if self.homeScore > self.awayScore:
-                homeWinProb = 100
-                awayWinProb = 0
-            elif self.awayScore > self.homeScore:
-                homeWinProb = 0
-                awayWinProb = 100
-            else:
-                homeWinProb = 50
-                awayWinProb = 50
-
+        ⚠️ A play that has just SCORED is priced for the possession after it. Every
+        scoring site notes the kickoff with `_priceAtNextPossession`, so the offense is
+        normally the receiving team already; if it is still the scorer (a path that did
+        not note it), the receiver is placed at its own 20 here. After a safety the team
+        that scored receives the free kick."""
+        offense = self.offensiveTeam
+        yte = float(self.yardsToEndzone)
+        down = int(self.down or 1)
+        ytg = float(self.yardsToFirstDown or 10)
+        play = getattr(self, 'play', None)
+        if self._scoreEndsPossession():
+            scorer = getattr(play, 'scoringTeam', None)
+            if scorer is not None:
+                receiver = (scorer if getattr(play, 'isSafety', False)
+                            else (self.awayTeam if scorer is self.homeTeam else self.homeTeam))
+                if receiver is not offense:
+                    offense = receiver
+                    yte = float(self.gameRules.fieldLength - 20)
+                    down = 1
+                    ytg = float(min(self.gameRules.firstDownDistance, yte))
+        p = min(99.5, max(0.5, float(eloHomeWp)))
         return {
-            'home': round(homeWinProb, 1),
-            'away': round(awayWinProb, 1)
+            'homeLead': float(scoreDiff),
+            # Before the opening kickoff nobody has the ball (`offensiveTeam` is None and
+            # the spot reads 0), so no side gets a possession's value. Reading it as the
+            # away team on the goal line put every kickoff about a touchdown toward the
+            # away team; the first snap then booked the correction as a 4-15 point home
+            # swing, often a BIG PLAY with its momentum bonus (prod week 22, all 16 games).
+            'hasBall': offense is not None,
+            'offenseIsHome': offense is self.homeTeam,
+            'yte': yte,
+            'downsLeft': max(0, int(self.gameRules.downsPerSeries) - down),
+            'ytg': ytg,
+            'timeLeft': max(0.0, float(total_seconds)) / 3600.0,
+            'strengthLogit': math.log(p / (100.0 - p)),
         }
-    
+
+    @staticmethod
+    def clockModelWp(features: dict) -> float:
+        """Home win chance (0-100) from `_wpClockFeatures`: the expected final margin
+        (lead + what the current possession is worth + team strength over the time
+        left) over a spread that shrinks with the square root of the time left. The
+        constants are fitted by `wp_fit.py` to the sim's own outcomes."""
+        value = float(np.interp(features['yte'], WP_FIELD_VALUE_YTE, WP_FIELD_VALUE))
+        left = features['downsLeft']
+        if left < len(WP_DOWN_PENALTY):
+            value += WP_DOWN_PENALTY[left] * min(features['ytg'], 15.0) / 10.0
+        if not features.get('hasBall', True):
+            value = 0.0
+        margin = (features['homeLead'] + (value if features['offenseIsHome'] else -value)
+                  + WP_STRENGTH_PER_LOGIT * features['strengthLogit'] * features['timeLeft'])
+        spread = WP_MARGIN_SIGMA * math.sqrt(features['timeLeft'] + WP_TIME_FLOOR)
+        return 50.0 * (1.0 + math.erf(margin / (spread * math.sqrt(2.0))))
+
+    def _clockModelHomeWp(self, scoreDiff, total_seconds, eloHomeWp) -> float:
+        """The fitted model, plus the one state it cannot see: a leader who can kneel the
+        clock out has already won (`_kneelOutDetail`, the same test the play caller uses
+        to take the kneel)."""
+        if not self._scoreEndsPossession():
+            offenseIsHome = self.offensiveTeam is self.homeTeam
+            try:
+                if self._kneelOutDetail(offenseIsHome) is not None:
+                    return 99.9 if offenseIsHome else 0.1
+            except Exception:
+                pass
+        return self.clockModelWp(self._wpClockFeatures(scoreDiff, total_seconds, eloHomeWp))
+
+    def _otTieValue(self) -> float:
+        """Chance (0-1) that a team which has just TIED an overtime goes on to win: it
+        kicks off, and the other team starts sudden death at its own 20."""
+        fresh = self.gameRules.fieldLength - 20
+        return 1.0 - float(np.interp(fresh, OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP)) / 100.0
+
+    def _otConversionValue(self, team, margin: float) -> float:
+        """Chance (0-1) that `team` wins after a touchdown that leaves it `margin` points
+        behind (negative = ahead) on a possession whose result is final once the try is
+        taken, unless it ties. The best of the tries the rules allow, at the engine's own
+        make rates; a tie is worth `_otTieValue`."""
+        if margin < 0:
+            return 1.0
+        tie = self._otTieValue()
+
+        def result(m):
+            return 1.0 if m < 0 else (tie if m == 0 else 0.0)
+
+        rungs = self._conversionRungs()
+        kick = next(r for r in rungs if r['kind'] == 'kick')
+        goRungs = [r for r in rungs if r['kind'] == 'go']
+        ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
+        best = result(margin)
+        for _, points, make in self._conversionOptions(team, kickAllowed, goRungs, kick):
+            best = max(best, make * result(margin - points) + (1 - make) * result(margin))
+        return best
+
+    def _overtimeAnswerWp(self, team, deficit: float, yte: float) -> float:
+        """Chance (0-100) that `team`, on its one guaranteed overtime possession and
+        trailing by `deficit`, wins from `yte` yards out. If the possession fails it loses.
+
+        The drive rates are measured (`OT_ANSWER_*`); what each score is worth follows
+        from the rules. Trailing by a field goal or less, the team kicks when it can: a
+        touchdown is valued through the try, a field goal wins outright or ties (then
+        sudden death with the other team receiving). Trailing by more, only a touchdown
+        keeps it alive. Measured over ~8,100 answering possessions; the model it replaced
+        read down 7 on the 5 at 14% against a measured 32%."""
+        tdPoints = float(getattr(self.gameRules, 'touchdownPoints', 6))
+        fg = self._fgValue()
+        touchdownValue = self._otConversionValue(team, deficit - tdPoints)
+        if deficit <= fg:
+            pTd = float(np.interp(yte, OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_TD))
+            pScore = float(np.interp(yte, OT_ANSWER_WP_YTE, OT_ANSWER_FG_DRIVE_SCORE))
+            fgValue = 1.0 if deficit < fg else self._otTieValue()
+            return pTd * touchdownValue + max(0.0, pScore - pTd) * fgValue
+        return float(np.interp(yte, OT_ANSWER_WP_YTE, OT_ANSWER_TD_DRIVE_TD)) * touchdownValue
+
+    def _overtimeStateHomeWp(self, offenseIsHome: bool, yte: float, homeScore: float,
+                             awayScore: float, firstComplete: bool, secondComplete: bool):
+        """Home win chance (0-100) for an overtime state with no try pending, or None for
+        one the measured model does not cover."""
+        diff = homeScore - awayScore
+        suddenDeath = self.otPeriod >= 2 or secondComplete
+        if diff != 0 and suddenDeath:
+            # Both guaranteed possessions are done (or it is sudden death) and someone
+            # leads: that is the result.
+            return 100.0 if diff > 0 else 0.0
+        if diff == 0:
+            # "Next score wins" once the first team's possession has ended without a
+            # score (the second team's guaranteed possession, then sudden death); before
+            # that the other team is still owed a possession.
+            nextScoreWins = suddenDeath or firstComplete
+            xs, ys = ((OT_NEXT_SCORE_WP_YTE, OT_NEXT_SCORE_WP) if nextScoreWins
+                      else (OT_FIRST_POSS_WP_YTE, OT_FIRST_POSS_WP))
+            offenseWp = float(np.interp(yte, xs, ys))
+            return offenseWp if offenseIsHome else 100.0 - offenseWp
+        offenseTrails = (diff < 0) == offenseIsHome
+        if firstComplete and offenseTrails:
+            team = self.homeTeam if offenseIsHome else self.awayTeam
+            offenseWp = self._overtimeAnswerWp(team, abs(diff), yte)
+            return offenseWp if offenseIsHome else 100.0 - offenseWp
+        return None
+
+    def _overtimeHomeWp(self):
+        """Home win chance (0-100) in overtime before the team-strength tilt, or None to
+        keep the generic formula.
+
+        A touchdown whose try is still owed is valued as the scorer's best try over the
+        states it leads to: the other team receiving at its own 20, the scorer's
+        possession over. Without this the answering team's touchdown, still a point down
+        with the try to come, read as a finished game: both guaranteed possessions look
+        done and the scores differ."""
+        if not self._tryStillOwed():
+            return self._overtimeStateHomeWp(self.offensiveTeam is self.homeTeam,
+                                             self.yardsToEndzone, self.homeScore,
+                                             self.awayScore, self.otFirstPossComplete,
+                                             self.otSecondPossComplete)
+        scorer = self.play.scoringTeam
+        other = self.awayTeam if scorer is self.homeTeam else self.homeTeam
+        if self.offensiveTeam is scorer:
+            first, _, second = self._otFlagsAfterPossessionEnds(scorer)
+        else:
+            # Already priced at the next possession (`_priceAtNextPossession`).
+            first, second = self.otFirstPossComplete, self.otSecondPossComplete
+        fresh = self.gameRules.fieldLength - 20
+
+        def scorerWpAfter(points):
+            hs = self.homeScore + (points if scorer is self.homeTeam else 0)
+            aw = self.awayScore + (points if scorer is self.awayTeam else 0)
+            homeWp = self._overtimeStateHomeWp(other is self.homeTeam, fresh, hs, aw, first, second)
+            if homeWp is None:
+                return None
+            return homeWp if scorer is self.homeTeam else 100.0 - homeWp
+
+        noTry = scorerWpAfter(0)
+        if noTry is None:
+            return None
+        rungs = self._conversionRungs()
+        kick = next(r for r in rungs if r['kind'] == 'kick')
+        goRungs = [r for r in rungs if r['kind'] == 'go']
+        ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
+        best = noTry
+        for _, points, make in self._conversionOptions(scorer, kickAllowed, goRungs, kick):
+            made = scorerWpAfter(points)
+            if made is not None:
+                best = max(best, make * made + (1 - make) * noTry)
+        return best if scorer is self.homeTeam else 100.0 - best
+
     def calculateExpectedPoints(self) -> float:
         """
         Calculate expected points from current field position and down/distance.
@@ -15888,7 +16879,7 @@ class Game:
         """
         # After any scoring play, field position is stale (ball is about to be
         # placed for a kickoff). Return neutral EP so it doesn't inflate the WP.
-        if hasattr(self, 'play') and self.play and getattr(self.play, 'scoreChange', False):
+        if self._scoreEndsPossession() or self.offensiveTeam is None:
             return 0.0
 
         # Field position value (0 = own goal line, 100 = opponent goal line)
@@ -15991,6 +16982,10 @@ class Game:
         # makes a missed XP show as a real negative WPA event).
         if hasattr(self, 'play') and self.play is not None:
             self.play.scoringTeam = team
+        # Points the OFFENSE put up (a return touchdown or a safety belongs to the defense
+        # and says nothing about how the other side's defense played).
+        if team is self.offensiveTeam:
+            self._offensePointsBy[id(team)] = self._offensePointsBy.get(id(team), 0) + points
         # Points can be fractional (rule-vote float FG/TD values); round the running
         # totals so float summation never leaves noise (24.000000000000004) on the
         # scoreboard, box score, standings, or a frame's points.
@@ -16507,13 +17502,16 @@ class Play():
                 n = fmt._frames(game)
                 frameLen = fmt._regSeconds(game) / n if n else 0
                 elapsed = fmt._elapsed(game)
-                self.frame = min(n, int(elapsed / frameLen) + 1) if frameLen else 1
+                # The frame the game is IN (`_frameIndex`), not the one elapsed time points
+                # at: a conversion after a touchdown on the frame's buzzer belongs to the
+                # frame that touchdown ended, and read "Frame 2 · 10:00" by elapsed time.
+                self.frame = min(n, int(getattr(game, '_frameIndex', 0)) + 1) if frameLen else 1
                 # Elapsed at which THIS frame ends — lets stampFrameClock recompute the time
                 # LEFT in the frame the play occurred in after the play burns the clock, so the
                 # feed's frame time is post-play like timeRemaining (a play that runs the frame
                 # out reads 0:00; the frame NUMBER stays the one the play happened in).
                 self._frameEndElapsed = self.frame * frameLen if frameLen else None
-                self.frameClock = game.formatTime(int(max(0, frameLen - (elapsed % frameLen)))) if frameLen else '0:00'
+                self.frameClock = game.formatTime(int(max(0, self._frameEndElapsed - elapsed))) if frameLen else '0:00'
             except Exception:
                 self.frame = None
                 self.frameClock = None
@@ -17140,10 +18138,13 @@ class Play():
         elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
+            # Frames: the defense reads the frame's ending and margin, as the play caller
+            # does (`_situationalClock`; the real quarter, clock and score elsewhere).
+            _sq, _ss, _sm = self.game._situationalClock()
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
-                100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds,
+                100 - self.game.yardsToEndzone, offScoreDiff if _sm is None else _sm,
+                _sq, _ss,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
@@ -18361,11 +19362,15 @@ class Play():
         risk a tackle in bounds (which leaves the clock running). Outside a
         late-game clock situation, it's the original play-type chance."""
         g = self.game
-        late = (g.currentQuarter >= 4) and g.gameClockSeconds <= 120
+        # Frames: a frame's ending and the frame margin (`_situationalClock`).
+        _sq, _ss, _sm = g._situationalClock()
+        late = (_sq >= 4) and _ss <= 120
         if not late or carrier is None:
             return (batched_randint(1, 100) > baseOobChance, None, 0)
         offHome = self.offense is g.homeTeam
         scoreDiff = (g.homeScore - g.awayScore) if offHome else (g.awayScore - g.homeScore)
+        if _sm is not None:
+            scoreDiff = _sm
         nearSideline = batched_randint(1, 100) <= baseOobChance  # could the play reach the sideline?
         iq = max(0.0, min(1.0, (getattr(carrier.gameAttributes, 'instinct', 80) - 60) / 40.0))
         aware = batched_randint(1, 100) <= 40 + iq * 60          # IQ gates situational awareness
@@ -18911,11 +19916,7 @@ class Play():
         # (a touchdown); if the end zone is out of the QB's range the ball falls
         # short of it (and is almost certainly incomplete / caught short).
         if passType is PassType.hailMary:
-            arm = 75
-            if self.passer is not None:
-                arm = getattr(getattr(self.passer, 'gameAttributes', None), 'armStrength', 75)
-            maxHeave = 50 + (arm - 70) * 0.4   # ~46 yds (weak arm) → ~62 yds (elite)
-            return max(0, int(min(self.yardsToEndzone, maxHeave)))
+            return max(0, int(min(self.yardsToEndzone, hailMaryReach(self.passer))))
 
         from constants import PASS_DEPTH_MEANS as _PDM
         passTypeParams = {
@@ -18988,10 +19989,13 @@ class Play():
         elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
+            # Frames: the defense reads the frame's ending and margin, as the play caller
+            # does (`_situationalClock`; the real quarter, clock and score elsewhere).
+            _sq, _ss, _sm = self.game._situationalClock()
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
-                100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds,
+                100 - self.game.yardsToEndzone, offScoreDiff if _sm is None else _sm,
+                _sq, _ss,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
@@ -19328,12 +20332,20 @@ class Play():
             # STAGE 2: QB selects target based on vision and discipline
             # Desperation: QB must force a throw when throwing away would end the drive
             # or the game unfavorably (4th down while trailing, time expiring while trailing)
-            isTrailing = (self.offense == self.game.homeTeam and self.game.homeScore < self.game.awayScore) or \
-                         (self.offense == self.game.awayTeam and self.game.awayScore < self.game.homeScore)
-            isTied = self.game.homeScore == self.game.awayScore
+            # ⚠️ FRAMES: TRAILING MEANS IN THE FRAME, AND LATE MEANS THE FRAME'S END (fixed
+            # 2026-10-20). This read the TOTAL score and the Q4 clock, so a team behind in
+            # the frame but ahead overall threw it away on fourth down. Prod game 4759: the
+            # Beans, down 4-8 in frame 3 with 0:43 left but up 19-17 overall, went for it
+            # on 4th & 9 and the QB threw it away. `_situationalClock` is the real quarter,
+            # clock and score in every other format.
+            _sq, _ss, _sm = self.game._situationalClock()
+            if _sm is None:
+                _sm = (self.game.homeScore - self.game.awayScore) * (1 if self.offense == self.game.homeTeam else -1)
+            isTrailing = _sm < 0
+            isTied = _sm == 0
             isFourthDown = self.game.down == self.game.gameRules.downsPerSeries
-            isTimeExpiring = self.game.gameClockSeconds <= 30
-            isLateGame = self.game.currentQuarter >= 4
+            isTimeExpiring = _ss <= 30
+            isLateGame = _sq >= 4
             mustThrow = isFourthDown and (isTrailing or (isTied and self.game.currentQuarter >= 5))
             if not mustThrow and isLateGame and isTimeExpiring and isTrailing:
                 mustThrow = True

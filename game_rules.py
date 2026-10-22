@@ -37,7 +37,7 @@ def _defaultConversionLadder() -> List[Dict[str, Any]]:
         from constants import CONVERSION_LADDER_RUNGS
         return [dict(r) for r in CONVERSION_LADDER_RUNGS]
     except Exception:
-        return [{"points": 3, "distance": 5}, {"points": 4, "distance": 10}, {"points": 5, "distance": 15}]
+        return [{"points": 3, "distance": 3}, {"points": 4, "distance": 10}, {"points": 5, "distance": 15}]
 
 
 @dataclass

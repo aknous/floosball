@@ -426,14 +426,16 @@ class SeasonEvent:
     
     @staticmethod
     def weekEnd(seasonNumber: int, weekNumber: int, results: List[Dict],
-                nextGameStartTime: str = None) -> Dict[str, Any]:
-        """Create a week end event"""
+                nextGameStartTime: str = None, weekText: str = None) -> Dict[str, Any]:
+        """Create a week end event. weekText names a playoff round ("Floos Bowl")."""
+        text = weekText or f'Week {weekNumber}'
         event = {
             'event': EventType.WEEK_END.value,
             'seasonNumber': seasonNumber,
             'weekNumber': weekNumber,
+            'weekText': text,
             'results': results,
-            'message': f"Week {weekNumber} complete"
+            'message': f"{text} complete"
         }
         if nextGameStartTime:
             event['nextGameStartTime'] = nextGameStartTime
@@ -481,12 +483,20 @@ class LeagueNewsEvent:
     """Factory for league-wide news events (clinches, eliminations, championships)"""
 
     @staticmethod
-    def leagueNews(text: str) -> Dict[str, Any]:
-        return {
+    def leagueNews(text: str, category: Optional[str] = None,
+                   eventType: Optional[str] = None) -> Dict[str, Any]:
+        """category/eventType let a consumer pick news out without reading the text
+        (the Discord bot posts 'standings' news: clinches, top seeds, eliminations)."""
+        event = {
             'event': EventType.LEAGUE_NEWS.value,
             'text': text,
             'timestamp': datetime.now().isoformat()
         }
+        if category:
+            event['category'] = category
+        if eventType:
+            event['eventType'] = eventType
+        return event
 
 
 class AchievementEvent:
