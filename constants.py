@@ -350,6 +350,10 @@ DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tag
 # defensive production (offense-dominant); MVP/All-Pro run off it.
 PERF_OFFENSE_WEIGHT = 0.7    # offensive-production share of the overall performance rating
 PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall performance rating
+# Offensive performance ratings are RATES (performance_rating.py). A rate over few plays is
+# shrunk toward the position's rate by this many games of the position's median volume, so
+# a two-game sample cannot outrank a full season; over a 28-game season it barely moves.
+PERF_RATE_PRIOR_GAMES = 1.0
 # Unified MVP (flat): production composite (two-way, via perfZ of the OVERALL rating)
 # + clutch WPA on each side. Defensive production lives inside perfZ now (via the
 # overall composite), so there's no separate box defValue term — only the clutch
@@ -371,11 +375,20 @@ MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch;
 # group) — the box (production) term of defValue, blended with individual
 # defensive WPA. Coverage value is invisible to the box, so CB/S lean hard on
 # ints/PBUs to capture it (and the WPA term picks up clutch coverage swings).
+# ⚠️ NO TACKLES FOR LB / CB / S (2026-10-22). The sim credits those tackles by what the
+# defense GAVE UP: the safety gets one on every run of 5+ yards and every completion of
+# 15+ (on top of the real tackler), the covering corner one on every completion against
+# him, and the linebacker is the primary tackler on most runs. Measured on prod seasons
+# 9-11, safety tackles correlated +0.81 to +0.89 with team yards allowed and made 72-83%
+# of the safety score, so the safety and linebacker DEFENSIVE RATINGS ROSE as the defense
+# got worse (+0.41 to +0.60 with yards allowed). Season 11's Straycat Doughty read a 100
+# off 568 tackles and was 3rd on the MVP ballot; without them he is 12th. Tackles for
+# loss stay (a stop at or behind the line). DE tackles measured near-neutral and stay.
 DEF_BOX_WEIGHTS = {
     'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
-    'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
-    'CB': {'passBreakups': 2.0, 'ints': 3.0, 'tackles': 0.5, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.0},
-    'S':  {'ints': 2.5, 'passBreakups': 2.0, 'tackles': 1.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.5},
+    'LB': {'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
+    'CB': {'passBreakups': 2.0, 'ints': 3.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.0},
+    'S':  {'ints': 2.5, 'passBreakups': 2.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.5},
 }
 
 # Momentum system
