@@ -929,6 +929,16 @@ def _opennessToSeparation(openness: float, depth: str = 'short') -> float:
     return float(np.interp(np.interp(openness, simQ, qs), qs, nflQ))
 
 
+def hailMaryReach(passer) -> float:
+    """How far this QB can heave it, in yards past the line: ~46 (weak arm) to ~62
+    (elite). The heave is thrown at the end zone, so a goal line beyond this is out of
+    reach and the ball falls short of it."""
+    arm = 75
+    if passer is not None:
+        arm = getattr(getattr(passer, 'gameAttributes', None), 'armStrength', 75)
+    return 50 + (arm - 70) * 0.4
+
+
 def _rnd(value) -> int:
     """Unbiased round to int, replacing int() on every random yardage draw.
 
@@ -2327,6 +2337,40 @@ class Game:
         jitter = batched_randint(-NO_HUDDLE_JITTER, NO_HUDDLE_JITTER)
         return max(NO_HUDDLE_PRESNAP_FLOOR, NO_HUDDLE_PRESNAP_SECS + iqOffset + jitter)
 
+    def _runSpendsTheHalf(self) -> bool:
+        """The end of the first half, with points still in reach, no timeout and too
+        little time for a run tackled in bounds to be followed by another snap: the run
+        ends the half. A pass can still get out of bounds or set up a kick; a run cannot.
+
+        This is the case `_lastSnapBeforeBreak` does not catch: the clock is STOPPED now
+        (an incompletion, a catch out of bounds), so it sees time for a snap, but a run
+        restarts the clock and the next snap then pays a full running-clock huddle.
+
+        "In reach" is this kicker's range or this QB's heave (`hailMaryReach`), whichever
+        is farther. The cost after the run is the running-clock snap `_lastSnapBeforeBreak`
+        charges: the run's live ball, the next huddle, administration and the final snap.
+
+        NFL 2019-23, last 20s of Q2: runs are 4% of plays from the opponent's 36-50 and
+        10% inside the 35; the sim ran 22% and 29% (with the half-ending heave, 8%)."""
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
+                               LAST_SNAP_LIVE_SECS)
+        kind, _ = self._periodEnd()
+        if kind != 'half' or not self._deadBallStopsClock():
+            return False
+        timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                        else self.awayTimeoutsRemaining)
+        if timeoutsLeft > 0:
+            return False
+        roster = self.offensiveTeam.rosterDict
+        kicker = roster.get('k')
+        fgReach = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        if self.yardsToEndzone > max(fgReach, hailMaryReach(roster.get('qb'))):
+            return False
+        huddle = (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                  else LAST_SNAP_HUDDLE_SECS)
+        need = LAST_SNAP_LIVE_SECS + huddle + DEAD_BALL_ADMIN_SECONDS + FINAL_SNAP_SECS
+        return self._offenseEffectiveSecs() < need
+
     def _lastSnapBeforeBreak(self) -> bool:
         """Is this the last snap the offense gets before the half or the game ends?
 
@@ -2776,6 +2820,10 @@ class Game:
         # frames 3 and 6.
         _kind, secs = self._periodEnd(forDefense=True)
         if _kind is None:
+            return
+        # Nothing left to stop. Prod game 4976: the Vanguards knelt out the last two
+        # seconds and the Sodas called a timeout at 0:00, after the game was over.
+        if secs <= 0:
             return
         if not self.clockRunning:
             return
@@ -5086,6 +5134,11 @@ class Game:
             _mul('medium', 1.4)
             _mul('long', 1.6)
             _mul('deep', deepBoost)      # shot before halftime
+
+        # A run that ends the half is not a play for points (`_runSpendsTheHalf`). Not a
+        # clock-IQ judgment, so flat.
+        if self._runSpendsTheHalf():
+            _flat('run', 0.1)
 
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
@@ -8239,14 +8292,27 @@ class Game:
                           and not self._driveClockFinalSnap()
                           and (self.yardsToEndzone < _DC_PUNT_YTE
                                or self.format.suppressPunt(self)))
+        # The last snap of the first half, out of field-goal range but inside this QB's
+        # heave: the half ends either way, so the heave is the only play that can score,
+        # at any score (the two-minute drill at the end of Q2 plays for points whoever
+        # leads). Prod game 4967: the Strangers, last snap of the half on their own 48,
+        # audibled into a run. NFL 2019-23, last 7s of Q2 from the opponent's 36-50: a
+        # quarter of the passes are heaves of 40+ air yards; the sim had no path to one.
+        # Past `hailMaryReach` the ball cannot reach the end zone, so it stays a normal play.
+        _halfHailMary = (_periodKind == 'half'
+                         and self._lastSnapBeforeBreak()
+                         and self.yardsToEndzone <= hailMaryReach(
+                             self.offensiveTeam.rosterDict.get('qb')))
         # ⚠️ NOT on a plays clock's last snap: that is a final down (`_isFinalDown`), and
         # `_fourthDownCaller` weighs the heave against the punt and the kick as 4th & goal
         # from the spot. Heaving there whenever tied or trailing, in any quarter, threw
         # it away from the opponent's 45 in the first quarter instead of punting.
-        if ((_gameHailMary or _driveHailMary)
+        if ((_gameHailMary or _driveHailMary or _halfHailMary)
                 and self.yardsToEndzone >= 30
                 and not self._isGarbageTime(_hmDiff)):
-            fgCanHelp = (_hmDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
+            # Before the break a field goal helps at any score.
+            fgCanHelp = ((_halfHailMary or _hmDiff >= -self._fgValue())
+                         and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
                 # A bold coach may gamble the final snap on a gadget (a flea-flicker
                 # deep shot) instead of a straight heave — occasional, gated by the
@@ -8280,6 +8346,7 @@ class Game:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'hailMary',
                     'reason': ('Drive clock expiring, heave for the score' if _driveHailMary
+                               else 'Last snap of the half, heave for the score' if _halfHailMary
                                else 'Desperation, need a miracle score'),
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
@@ -19813,11 +19880,7 @@ class Play():
         # (a touchdown); if the end zone is out of the QB's range the ball falls
         # short of it (and is almost certainly incomplete / caught short).
         if passType is PassType.hailMary:
-            arm = 75
-            if self.passer is not None:
-                arm = getattr(getattr(self.passer, 'gameAttributes', None), 'armStrength', 75)
-            maxHeave = 50 + (arm - 70) * 0.4   # ~46 yds (weak arm) → ~62 yds (elite)
-            return max(0, int(min(self.yardsToEndzone, maxHeave)))
+            return max(0, int(min(self.yardsToEndzone, hailMaryReach(self.passer))))
 
         from constants import PASS_DEPTH_MEANS as _PDM
         passTypeParams = {
