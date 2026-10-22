@@ -8770,29 +8770,38 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
     finally:
         session.close()
 
-    # ---- walk-year players, and who cannot be kept ----
+    # ---- walk-year players, and who may leave ----
+    # ⚠️ THE GM'S OWN RE-SIGN DECISION, PROJECTED (`SeasonManager.projectedResigns`, owner
+    # 2026-10-22). This used to keep each team's two highest-rated walk-year players,
+    # which ignores position: the Strangers showed their 91 kicker as kept over an 80
+    # receiver the GM values at nearly twice as much. It is a projection, so a player
+    # the GM is not expected to re-sign MAY leave (`mayLeave`); the decision is made at
+    # the start of the offseason. Falls back to the rating guess only if the projection
+    # is unavailable.
+    projected = {}
+    try:
+        projected = sm.projectedResigns() if sm is not None else {}
+    except Exception as e:
+        logger.debug(f"re-sign projection unavailable: {e}")
     expiring = []
     for team in getattr(tm, 'teams', None) or []:
         walkers = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
                    if p is not None and (getattr(p, 'termRemaining', 99) or 99) <= 1
                    and not getattr(p, 'willRetire', False)]
-        # ⚠️ THE STORY IS WHO THE CLUB CANNOT KEEP. `RESIGN_LIMIT_PER_OFFSEASON` is 2, so
-        # a club with three expiring players is losing one for nothing whatever it wants.
         overLimit = max(0, len(walkers) - int(RESIGN_LIMIT_PER_OFFSEASON))
-        # ⚠️ ENUMERATE THE SORTED LIST. This iterated the sorted order and then asked
-        # `walkers.index(p)` — the position in the UNSORTED list — so `cannotKeep` landed on
-        # whoever happened to sit first in the roster dict rather than on the weakest, which
-        # is the one thing the flag claims to mean.
         for rank, p in enumerate(sorted(walkers,
                                         key=lambda x: getattr(x, 'playerRating', 0))):
+            pid = getattr(p, 'id', None)
+            mayLeave = ((not projected[pid]) if pid in projected
+                        else overLimit > 0 and rank < overLimit)
             expiring.append({
-                "playerId": getattr(p, 'id', None), "name": p.name,
+                "playerId": pid, "name": p.name,
                 "position": p.position.name,
                 "rating": round(getattr(p, 'playerRating', 0), 1),
                 "team": teamBlob(getattr(team, 'id', None)),
-                # True for the WEAKEST of an over-limit club's walk-years — the ones the
-                # re-sign slots will not stretch to.
-                "cannotKeep": overLimit > 0 and rank < overLimit,
+                "mayLeave": mayLeave,
+                # The old name, for clients that still read it. Same value.
+                "cannotKeep": mayLeave,
             })
 
     # ---- the block ----

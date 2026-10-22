@@ -2830,6 +2830,11 @@ def rookieDraftEnabled() -> bool:
 # overwhelming, break the kicker's valuation outright, and move every contract in the league.
 # Swapping the two that are in the wrong order fixes the ordering, matches the measurement,
 # and leaves the spread -- and therefore the economy -- where it was.
+# How long the Front Office desk's re-sign projection (`SeasonManager.projectedResigns`)
+# is reused before the GM brain is asked again. Its inputs (fan ratings, the draft order,
+# the free-agent pool) move slowly within a day.
+FO_DESK_PROJECTION_TTL_SECS = 600
+
 POSITION_VALUE = {
     'QB': 1.00,
     'RB': 0.78,
