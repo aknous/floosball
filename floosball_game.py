@@ -2594,8 +2594,8 @@ class Game:
         # often there (it keys off `clockRunning`, which a running clock leaves true
         # almost permanently), so the pointless version is the common one.
         # ⚠️ NEVER ON A DRIVE CLOCK'S LAST SNAP: the drive ends whatever happens, so there
-        # is no clock worth stopping.
-        if self._driveClockFinalSnap():
+        # is no clock worth stopping (unless a first down saves it: free snaps).
+        if self._driveClockOnlyTdSaves():
             return False
         if self._isNoHuddle() and self._deadBallStopsClock():
             return True
@@ -3206,10 +3206,35 @@ class Game:
         self.driveClockExpiredThisPlay = False
 
     def _driveClockRefillOnFirstDown(self) -> None:
-        """A first down refills the drive clock ONLY in 'series' reset mode; in
-        'possession' mode it keeps draining across the whole drive."""
+        """A first down refills the drive clock in 'series' reset mode; in 'possession'
+        mode it keeps draining across the whole drive, except that a plays clock does
+        not count the snap that gained it (`_refundDriveClockSnap`)."""
         if self._driveClockActive() and getattr(self.gameRules, 'driveClockReset', 'possession') == 'series':
             self._resetDriveClock()
+        else:
+            self._refundDriveClockSnap()
+
+    def _driveClockFreeSnaps(self) -> bool:
+        """A PLAYS drive clock does not count a snap that gains a first down or makes a
+        sideline goal (`DRIVE_CLOCK_FREE_SNAPS`, owner 2026-10-23). Under "8 plays, whole
+        drive" 75% of scores were field goals: a drive chipped away at ~6 yards a snap and
+        ran out around the opponent's 25. With these snaps free a drive ends on the clock
+        only when it stalls, so the clock punishes going nowhere rather than going slowly.
+        Not the seconds unit, whose clock is game time."""
+        from constants import DRIVE_CLOCK_FREE_SNAPS
+        return (DRIVE_CLOCK_FREE_SNAPS and self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays')
+
+    def _refundDriveClockSnap(self) -> None:
+        """Give back the snap just ticked off a plays drive clock, when that snap is free
+        (`_driveClockFreeSnaps`). Runs after the tick, so it never lifts the clock past
+        its limit, and it revives a clock the snap had emptied: converting on the last
+        play keeps the drive alive."""
+        if not self._driveClockFreeSnaps():
+            return
+        limit = float(getattr(self.gameRules, 'driveClockLimit', 8))
+        self.driveClockRemaining = min(limit, self.driveClockRemaining + 1)
+        self.driveClockExpiredThisPlay = False
 
     def _tickDriveClockPlays(self) -> None:
         """Decrement the drive clock by one snap — only in the 'plays' unit
@@ -3262,6 +3287,12 @@ class Game:
                 and getattr(self.gameRules, 'driveClockReset', 'possession') == 'possession'
                 and self.driveClockRemaining <= 1)
 
+    def _driveClockOnlyTdSaves(self) -> bool:
+        """A drive clock's last snap on which only a touchdown counts: nothing short of the
+        end zone saves the drive. False when the snap that gains a first down is free
+        (`_driveClockFreeSnaps`): the last snap is then a real final down to the marker."""
+        return self._driveClockFinalSnap() and not self._driveClockFreeSnaps()
+
     def _isFinalDown(self) -> bool:
         """The last snap of the series: the rule's final down, or a drive clock's last
         snap (`_driveClockFinalSnap`)."""
@@ -3281,7 +3312,7 @@ class Game:
         """Yards the play CALL has to cover: the first-down marker, or the goal line on a
         drive clock's last snap, where reaching the marker buys nothing. Decisions only:
         play resolution keeps reading `yardsToFirstDown`."""
-        if self._driveClockFinalSnap():
+        if self._driveClockOnlyTdSaves():
             return self.yardsToEndzone
         return self.yardsToFirstDown
 
@@ -3918,7 +3949,8 @@ class Game:
                                DRIVE_CLOCK_PUNT_BASE, DRIVE_CLOCK_PUNT_IQ_SPAN)
         if self.yardsToEndzone < DRIVE_CLOCK_PUNT_MIN_YTE:
             return False
-        series = getattr(self.gameRules, 'driveClockReset', 'possession') == 'series'
+        series = (getattr(self.gameRules, 'driveClockReset', 'possession') == 'series'
+                  or self._driveClockFreeSnaps())
         if series and self.yardsToFirstDown < DRIVE_CLOCK_PUNT_MIN_TOGO:
             return False
         kicker = self.offensiveTeam.rosterDict.get('k')
@@ -3992,8 +4024,10 @@ class Game:
             return PlayType.Punt
         # Drive Clock last snap under 'possession' reset: a conversion cannot save the
         # drive, so from the offense's own half the only useful snap is a punt. Under
-        # 'series' the model below decides (a short conversion refills the clock).
+        # 'series', or a plays clock whose first-down snap is free, the model below
+        # decides (a short conversion saves the drive).
         if (getattr(self.gameRules, 'driveClockReset', 'possession') != 'series'
+                and not self._driveClockFreeSnaps()
                 and self._driveClockLastSnap()
                 and self._driveClockPuntCall(scoreDiff, self._coachClockIQ(coach))):
             return PlayType.Punt
@@ -4757,17 +4791,20 @@ class Game:
         return weights
 
     def _applyDriveClockMods(self, weights: dict, coach) -> dict:
-        """Drive-clock shot selection: when the possession shot-clock is winding down
-        and the offense still has ground to cover, bias toward CHUNK plays (medium/long/
-        deep) and away from run/short — it must gain yards fast, not just snap fast. The
-        existing hurry-up (_isHurryUp) already makes plays QUICKER; this makes them BIGGER,
-        so together they behave like a 2-minute drill against the drive clock. Keyed on
-        yards-needed-per-remaining-snap and coach-clock-IQ gated (a sharp staff reaches
-        efficiently; a poor one barely reacts). No-op when the drive clock is off."""
+        """Drive-clock shot selection: the offense plans the WHOLE drive around the pace
+        the clock demands. Yards still needed divided by the snaps left is the pace it
+        must keep; the normal mix gains about `DRIVE_CLOCK_NORMAL_YDS_PER_SNAP`, so when
+        the pace is above that, chipping away cannot get there and the call leans toward
+        chunk plays (medium/long/deep) and away from run/short, from the first snap of the
+        drive rather than only once the clock is nearly gone. Needing twice the normal pace
+        (`DRIVE_CLOCK_CHUNK_CEILING`) is the full lean. The yards needed are the end zone
+        under 'possession' reset and the first-down marker under 'series' (a first down
+        refills the clock there). Scaled by the coach: planning (offensiveMind) and clock
+        sense (clockManagement), averaged. No-op when the drive clock is off."""
         if not self._driveClockActive() or self.driveClockRemaining <= 0:
             return weights
-        from constants import (DRIVE_CLOCK_SECS_PER_SNAP, DRIVE_CLOCK_PRESSURE_SNAPS,
-                               DRIVE_CLOCK_CHUNK_THRESHOLD, DRIVE_CLOCK_CHUNK_CEILING)
+        from constants import (DRIVE_CLOCK_SECS_PER_SNAP, DRIVE_CLOCK_NORMAL_YDS_PER_SNAP,
+                               DRIVE_CLOCK_CHUNK_CEILING)
         unit = getattr(self.gameRules, 'driveClockUnit', 'seconds')
         # Snaps left on the drive clock: exact in 'plays', estimated from the hurry-up
         # tempo in 'seconds'.
@@ -4775,16 +4812,20 @@ class Game:
             snapsLeft = float(self.driveClockRemaining)
         else:
             snapsLeft = max(1.0, self.driveClockRemaining / DRIVE_CLOCK_SECS_PER_SNAP)
-        if snapsLeft > DRIVE_CLOCK_PRESSURE_SNAPS:
-            return weights   # plenty of possession left — call it straight
         yards = getattr(self, 'yardsToEndzone', 50) or 50
+        if getattr(self.gameRules, 'driveClockReset', 'possession') == 'series':
+            yards = min(yards, getattr(self, 'yardsToFirstDown', yards) or yards)
         yardsPerSnapNeeded = yards / max(1.0, snapsLeft)
-        if yardsPerSnapNeeded <= DRIVE_CLOCK_CHUNK_THRESHOLD:
-            return weights   # checkdowns/runs still get there (e.g. goal-to-go)
-        urgency = min(1.0, (yardsPerSnapNeeded - DRIVE_CLOCK_CHUNK_THRESHOLD) /
-                           max(1.0, DRIVE_CLOCK_CHUNK_CEILING - DRIVE_CLOCK_CHUNK_THRESHOLD))
-        # Coach-clock-IQ gate, mirroring _applySituationalMods' `sit` scaling.
-        scale = (0.4 + 0.6 * self._coachClockIQ(coach)) * urgency
+        if yardsPerSnapNeeded <= DRIVE_CLOCK_NORMAL_YDS_PER_SNAP:
+            return weights   # the normal mix keeps pace (e.g. goal-to-go)
+        urgency = min(1.0, (yardsPerSnapNeeded - DRIVE_CLOCK_NORMAL_YDS_PER_SNAP) /
+                           max(1.0, DRIVE_CLOCK_CHUNK_CEILING - DRIVE_CLOCK_NORMAL_YDS_PER_SNAP))
+        if coach is None:
+            planning = 0.5
+        else:
+            mind = max(0.0, min(1.0, (getattr(coach, 'offensiveMind', 80) - 60) / 40))
+            planning = 0.5 * (mind + self._coachClockIQ(coach))
+        scale = (0.4 + 0.6 * planning) * urgency
 
         def _mul(key, m):
             weights[key] = weights.get(key, 0) * (1 + (m - 1) * scale)
@@ -5591,7 +5632,7 @@ class Game:
         Prod game 4904: Rocks down 2 on the match, last snap on the SLC 47 at 0:17 of the
         final frame. The 4th-down tree picks its pass by the yards to go (the goal line
         here) and capped it at 'long' to the sideline; a 10-yard out ended the game."""
-        return self._driveClockFinalSnap() and self.yardsToEndzone >= 30
+        return self._driveClockOnlyTdSaves() and self.yardsToEndzone >= 30
 
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
@@ -10933,6 +10974,10 @@ class Game:
                 # Drive Clock (plays unit): one snap spent (seconds unit drains via
                 # consumeGameTime). No-op unless the mechanic is on.
                 self._tickDriveClockPlays()
+                # A made sideline goal is a free snap (the hoop resolved inside the play
+                # call, before this tick, so the refund comes after it).
+                if getattr(self.play, 'hoopMade', False):
+                    self._refundDriveClockSnap()
                 # ⚠️ THESE TWO STATS ARE POSITIONAL, NOT LITERAL. "Third down" means the
                 # last chance to keep the series alive normally and "fourth down" means
                 # the one that ends it — but `downsPerSeries` is mutable (3 to 5), so the

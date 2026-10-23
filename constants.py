@@ -4424,21 +4424,32 @@ DRIVE_CLOCK_PRESETS = [
     {"key": "dc_70s_series", "label": "70 seconds, resets each first down",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
                "driveClockReset": "series", "driveClockLimit": 70}},
-    {"key": "dc_8plays_possession", "label": "8 plays, whole drive",
+    {"key": "dc_8plays_possession", "label": "8 plays, whole drive (first downs and sideline goals don't count)",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
                "driveClockReset": "possession", "driveClockLimit": 8}},
 ]
+# A PLAYS drive clock does not count a snap that gains a first down or makes a sideline
+# goal (`Game._driveClockFreeSnaps`, owner 2026-10-23). Measured with chunk-pace play
+# calling, 100 games x 2 seeds at 8 plays: field goals 72% -> 49-52% of offensive scores
+# (no drive clock ~40%), TDs 1.6 -> 2.5 per team-game, clock expiries 0.41 -> 0.15. A
+# behavior of the plays unit rather than a rule field, so a persisted "8 plays" override
+# picks it up without a re-vote.
+DRIVE_CLOCK_FREE_SNAPS = True
 # Wire the presets into the vote candidate (declared above with presets=None to
 # avoid a forward-reference).
 RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 
-# Drive-clock SHOT SELECTION (play-caller awareness): as the possession clock winds
-# down the offense must gain yards FAST, not just snap fast, so bias toward chunk
-# plays. `_applyDriveClockMods` keys off yards-needed-per-remaining-snap.
+# Drive-clock SHOT SELECTION (play-caller awareness): the offense plans the drive
+# around the pace the clock demands, yards still needed / snaps left
+# (`_applyDriveClockMods`). It used to react only with 3 or fewer snaps left, so a drive
+# chipped away at the normal pace (~6 yds a snap), ran out of snaps around the opponent's
+# 25 and kicked: under "8 plays, whole drive" 75% of scores were field goals.
 DRIVE_CLOCK_SECS_PER_SNAP = 18.0        # est. seconds/snap in hurry-up (12s huddle + play)
-DRIVE_CLOCK_PRESSURE_SNAPS = 3.0        # only bias once <= this many snaps of budget remain
-DRIVE_CLOCK_CHUNK_THRESHOLD = 8.0       # yds/snap below which checkdowns/runs still suffice
-DRIVE_CLOCK_CHUNK_CEILING = 20.0        # yds/snap at which urgency saturates (full bias)
+# What the normal mix gains per snap: ~40% runs at ~4.5 a carry, ~60% throws at ~7.0 a
+# dropback. A pace above this cannot be kept by chipping away.
+DRIVE_CLOCK_NORMAL_YDS_PER_SNAP = 6.0
+# Twice the normal pace: only chunk plays get there, so the lean is full.
+DRIVE_CLOCK_CHUNK_CEILING = 12.0
 
 # Drive-clock behavior thresholds are FRACTIONS of the configured seconds-limit, so
 # they scale to any preset instead of being hardcoded for the 120s default. Under a
