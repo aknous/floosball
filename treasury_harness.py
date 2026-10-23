@@ -1,10 +1,14 @@
 """Treasury harness: what does a team's money buy? (docs/TREASURY_PAYROLL_PLAN.md §8)
 
-Two modes, both on a COPY of a prod snapshot.
+Three modes, all on a COPY of a prod snapshot.
 
   project   No sim. Applies the offseason payment run to the snapshot's real treasuries
             (plus a projected season-end deposit) and prints what every team would build,
             beside what the old one-project-a-season rule would have built.
+
+  gate      No sim. Prices gate revenue and the donation match on the snapshot's real
+            fans: active fans, their participation, the weekly gate, and a season of it
+            beside what fans actually gave.
 
   arms      Plays several seasons from the snapshot, once per run, in `fast` timing, with
             extra treasury income handed to the even-id half of the league before every
@@ -135,6 +139,89 @@ def cmdProject(args):
     gained = [g for _, g in rows]
     print(f"  net levels gained this offseason: total {sum(gained)}, "
           f"teams gaining 3+: {sum(g >= 3 for g in gained)}, gaining 0 or less: {sum(g <= 0 for g in gained)}")
+    s.close()
+    if not args.keep:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ─── gate ─────────────────────────────────────────────────────────────────────
+
+def cmdGate(args):
+    """Price gate revenue and the donation match on the snapshot's real fans: each team's
+    active fans and their participation in the last finished week, the weekly gate that
+    implies, and a season of it beside what fans actually gave this season."""
+    work = os.path.join(SCRATCH, 'gate')
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    shutil.copy(args.db, os.path.join(work, 'floosball.db'))
+    os.environ['DATABASE_DIR'] = work
+    import logging
+    logging.disable(logging.INFO)
+    sys.path.insert(0, REPO)
+    from database.connection import init_db, get_session
+    init_db()
+    from database.models import Team, TeamFacility, User
+    from managers import facilitiesManager as FM, gateRevenue as G
+    from constants import GATE_FAN_EXPONENT, GATE_SHARES_PER_WEEK, DONATION_MATCH_RATE
+
+    c = sqlite3.connect(os.path.join(work, 'floosball.db'))
+    season = c.execute("SELECT current_season FROM simulation_state").fetchone()[0]
+    week = c.execute("SELECT MAX(week) FROM games WHERE season=? AND status='final' AND is_playoff=0",
+                     (season,)).fetchone()[0] or 1
+    # What fans gave this season, by the team they back now.
+    given = defaultdict(int)
+    for tid, amt in c.execute(
+            "SELECT u.favorite_team_id, -SUM(t.amount) FROM currency_transactions t "
+            "JOIN users u ON u.id = t.user_id WHERE t.season=? AND t.transaction_type IN "
+            "('facility_contribution','season_end_tax') AND u.favorite_team_id IS NOT NULL "
+            "GROUP BY u.favorite_team_id", (season,)):
+        given[tid] = amt or 0
+    deposits = projectedDeposits(c)
+    c.close()
+
+    s = get_session()
+    shareUnit = FM.computeShareUnit(s, season - 1)
+    # ⚠️ The activity window is measured against the wall clock, and the snapshot is old
+    # by however long it has sat on disk; read it against the moment the snapshot was taken.
+    latest = s.query(User.last_login_at).order_by(User.last_login_at.desc()).first()[0]
+    import datetime as _dt
+    G.activityCutoff = lambda: latest - _dt.timedelta(days=G.SUPPORTER_ACTIVITY_WINDOW_DAYS)
+    fans = G.activeFansByTeam(s)
+    allFans = [u for us in fans.values() for u in us]
+    activity = G.participationByUser(s, allFans, season, week)
+    stadium = {t: l for t, l in s.query(TeamFacility.team_id, TeamFacility.level).filter_by(facility_key='stadium')}
+    favs = defaultdict(int)
+    for (tid,) in s.query(User.favorite_team_id).filter(User.favorite_team_id.isnot(None)):
+        favs[tid] += 1
+    teams = {t.id: t.name for t in s.query(Team).all()}
+    print(f"Season {season}, participation read from week {week}; share unit {shareUnit:,.0f}F; "
+          f"gate = {GATE_SHARES_PER_WEEK} x unit x weight^{GATE_FAN_EXPONENT} x Stadium; "
+          f"match {DONATION_MATCH_RATE:g}:1 on the first {G.matchFor(10**9, 0, shareUnit)[0]:,}F a fan gives\n")
+    print(f"  {'TEAM':14s} {'FANS':>4s} {'ACTIVE':>6s} {'WEIGHT':>6s} {'STD':>3s} {'GATE/WK':>8s} "
+          f"{'GATE/SEASON':>11s} {'GIVEN S' + str(season):>10s} {'+DEPOSIT':>9s} {'MATCH':>7s}")
+    rows = []
+    for tid in sorted(teams, key=lambda t: -len(fans.get(t, []))):
+        us = fans.get(tid, [])
+        weights = [G.fanWeight(activity.get(u, 0)) for u in us]
+        wk = G.gateAmount(weights, stadium.get(tid, 0), shareUnit)
+        # The match: each fan's donations this season plus their projected deposit,
+        # matched on the cap. Approximated per team from the team totals.
+        donors = len(us) or 1
+        perFan = (given[tid] + deposits.get(tid, 0)) / donors if us else 0
+        match = sum(G.matchFor(perFan, 0, shareUnit)[1] for _ in us)
+        rows.append((tid, len(us), wk * 28, given[tid] + deposits.get(tid, 0), match))
+        print(f"  {teams[tid][:14]:14s} {favs[tid]:4d} {len(us):6d} {sum(weights):6.2f} {stadium.get(tid, 0):3d} "
+              f"{wk:8,d} {wk * 28:11,d} {given[tid]:10,d} {deposits.get(tid, 0):9,d} {match:7,d}")
+    totalGate = sum(r[2] for r in rows)
+    totalGiven = sum(r[3] for r in rows)
+    print(f"\n  a season of gate revenue league-wide: {totalGate:,}F, against {totalGiven:,}F fans gave "
+          f"(incl. projected deposits) and {sum(r[4] for r in rows):,}F of match (approximate: "
+          f"assumes a team's giving is spread evenly over its active fans)")
+    print(f"  teams with no active fan: {sum(1 for r in rows if r[1] == 0)}")
+    one = G.gateAmount([1.0], 0, shareUnit) * 28
+    oneTop = G.gateAmount([G.fanWeight(2)], 0, shareUnit) * 28
+    print(f"  one active fan, Stadium 0: {one:,}F a season ({oneTop:,}F playing two games); "
+          f"two fans: {G.gateAmount([1.0, 1.0], 0, shareUnit) * 28:,}F")
     s.close()
     if not args.keep:
         shutil.rmtree(work, ignore_errors=True)
@@ -356,6 +443,9 @@ def main():
     p = sub.add_parser('project')
     p.add_argument('--db', required=True)
     p.add_argument('--keep', action='store_true')
+    g = sub.add_parser('gate')
+    g.add_argument('--db', required=True)
+    g.add_argument('--keep', action='store_true')
     a = sub.add_parser('arms')
     a.add_argument('--db', required=True)
     a.add_argument('--seasons', type=int, default=3, help='seasons to play, counting the current one')
@@ -367,7 +457,7 @@ def main():
     a.add_argument('--json')
     a.add_argument('--keep', action='store_true')
     args = ap.parse_args()
-    return cmdProject(args) if args.cmd == 'project' else cmdArms(args)
+    return {'project': cmdProject, 'gate': cmdGate, 'arms': cmdArms}[args.cmd](args)
 
 
 if __name__ == '__main__':

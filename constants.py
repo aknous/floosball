@@ -2200,6 +2200,36 @@ FACILITY_SHARE_CAP_PERCENTILE = 95.0
 # Below this many earning users a percentile is computed from too few points to mean
 # anything, and clipping would just lower the unit rather than de-skew it.
 FACILITY_SHARE_CAP_MIN_USERS = 8
+
+# ── Gate revenue and the league donation match (docs/TREASURY_PAYROLL_PLAN.md §4) ──────
+# The league pays each team's Treasury every regular-season week for its ACTIVE fans
+# (the Supporter rule: logged in within SUPPORTER_ACTIVITY_WINDOW_DAYS). No user Floobits
+# are spent. Gate revenue is meant to be a team's MAIN income and donations the top-up,
+# so a few active fans who never play fantasy can fund a competitive team (G3).
+#   gate = GATE_SHARES_PER_WEEK x shareUnit x (sum of fan weights) ** GATE_FAN_EXPONENT
+#          x GATE_STADIUM_MULT[stadium level]
+# ⚠️ PROVISIONAL SIZES (2026-10-22): the harness sets the base, the exponent and the
+# Stadium curve against G2/G3. At a 5,453F share unit, 0.02 is ~109F a week, ~3,050F a
+# season, for one fan at weight 1.0 and a level-0 Stadium.
+GATE_REVENUE_ENABLED = True
+GATE_SHARES_PER_WEEK = 0.02
+# 0.85 (owner, 2026-10-23): a second fan adds ~80% of the first. At 0.6 it added only 51%,
+# so one fantasy donor out-funded a second fan joining, against G3. Still concave, so the
+# first fan is worth the most and 17 fans do not earn 17x one.
+GATE_FAN_EXPONENT = 0.85
+# A fan's weight: 1.0 for being active, plus a boost for taking part in the site's games
+# that week, indexed by how many of the activities they did (owner, 2026-10-22): manual
+# pick-em picks (auto-picks don't count), a fielded fantasy lineup, cards in the Showcase.
+# Tops out at two, so no single game is required and nobody has to do everything.
+GATE_PARTICIPATION_BOOST = [0.0, 0.35, 0.5]
+GATE_STADIUM_MULT = [1.0, 1.08, 1.16, 1.26, 1.38, 1.5]   # by Stadium level 0-5
+# The league matches each fan's donations to their team (direct facility contributions
+# and the season-end deposit) at DONATION_MATCH_RATE, on the first
+# DONATION_MATCH_CAP_SHARES of a share unit each season (owner, 2026-10-22). Small donors
+# get the biggest boost; nobody's money is turned away. Proposal 2:1 on ~1,000F.
+DONATION_MATCH_ENABLED = True
+DONATION_MATCH_RATE = 2.0
+DONATION_MATCH_CAP_SHARES = 0.18
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 

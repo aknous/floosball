@@ -749,6 +749,37 @@ class FacilityVote(Base):
         return f"<FacilityVote(team={self.team_id}, user={self.user_id}, {self.facility_key}, S{self.season})>"
 
 
+class TreasuryIncome(Base):
+    """League money paid into a team's Treasury (docs/TREASURY_PAYROLL_PLAN.md §4).
+
+    kind 'gate': one row per team per regular-season week, the gate revenue its active
+    fans brought in (`amount`, with the fan count and weights in `detail_json`). Unique
+    per (team, season, week, kind), which is what makes a re-run of a week a no-op.
+    kind 'match': one row per matched donation; `user_id` is the donor and `basis` the
+    part of their donation that was matched, summed per fan per season against the cap.
+    """
+    __tablename__ = "treasury_income"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)       # 'gate' | 'match'
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    basis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    detail_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_treasury_income_team_season", "team_id", "season"),
+        Index("idx_treasury_income_user_season", "user_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<TreasuryIncome({self.kind}, team={self.team_id}, S{self.season}W{self.week}, {self.amount})>"
+
+
 class FacilityRanking(Base):
     """A fan's ranked ballot of their team's facilities (owner, 2026-10-22).
 

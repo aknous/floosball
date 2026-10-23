@@ -1609,6 +1609,12 @@ class SeasonManager:
         # fans; credits a dividend to those whose team played this week.
         self._accrueSupporterDividends(self.currentSeason.seasonNumber, week)
 
+        # Gate revenue (docs/TREASURY_PAYROLL_PLAN.md §4): the league pays each team's
+        # Treasury for its active fans. Regular season only. After the card effects bank
+        # the week, since a fielded lineup is one of the participation signals.
+        if not in_playoffs:
+            self._accrueGateRevenue(self.currentSeason.seasonNumber, week)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
@@ -10717,6 +10723,32 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Supporter dividend accrual failed (s{season} w{week}): {e}")
 
+    def _accrueGateRevenue(self, season: int, week: int) -> None:
+        """Pay this week's gate revenue into every team's Treasury. Idempotent per team
+        per week, so the week-end replay after a restart pays nothing twice."""
+        try:
+            from database.connection import get_session
+            from managers import facilitiesManager, gateRevenue
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                shareUnit = facilitiesManager.computeShareUnit(
+                    session, season - 1, numTeams=max(1, len(teams)))
+                paid = gateRevenue.accrueWeeklyGate(session, season, week, shareUnit,
+                                                    [t.id for t in teams])
+                session.commit()
+                if paid:
+                    logger.info(f"Gate revenue s{season} w{week}: {sum(paid.values())}F "
+                                f"to {len(paid)} team(s)")
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Gate revenue accrual failed (s{season} w{week}): {e}")
+
     def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
         """Award Floobits to top leaderboard performers for the week."""
         from constants import (
@@ -12283,6 +12315,7 @@ class SeasonManager:
                 contributed = 0
                 totalCollected = 0
                 teamFundingAccum = {}  # teamId -> total collected
+                depositsByUser = []    # (userId, teamId, amount), for the league match
                 for user in users:
                     pct = getattr(user, 'team_funding_pct', DEFAULT_FUNDING_PCT)
                     if pct is None:
@@ -12309,11 +12342,23 @@ class SeasonManager:
                     contributed += 1
                     totalCollected += contribution
                     teamFundingAccum[favTeamId] = teamFundingAccum.get(favTeamId, 0) + contribution
+                    depositsByUser.append((user.id, favTeamId, contribution))
+
+                # The league matches each fan's deposit (docs/TREASURY_PAYROLL_PLAN.md §4),
+                # straight into the Treasury, against the same per-season cap as their
+                # direct contributions.
+                from managers import facilitiesManager, gateRevenue
+                matchShare = facilitiesManager.computeShareUnit(session, completedSeason - 1)
+                matchedTotal = 0
+                for uid, tid, amt in depositsByUser:
+                    matchedTotal += gateRevenue.matchDonation(
+                        session, uid, tid, completedSeason, amt, matchShare, 'season_end')
+                if matchedTotal:
+                    logger.info(f"Season-end deposits matched by the league: {matchedTotal}F")
 
                 # Update existing TeamFunding records (created at season start)
                 records = session.query(TeamFunding).filter_by(season=completedSeason).all()
                 recordMap = {r.team_id: r for r in records}
-                from managers import facilitiesManager
                 for teamId, amount in teamFundingAccum.items():
                     rec = recordMap.get(teamId)
                     if rec:
@@ -12512,6 +12557,10 @@ class SeasonManager:
 
             currencyRepo.spendFunds(userId, amount, 'facility_contribution',
                                     description=desc, season=season)
+            # The league match lands in the Treasury whatever bar the fan funded.
+            from managers import gateRevenue
+            matched = gateRevenue.matchDonation(session, userId, teamId, season, amount,
+                                                shareUnit, target)
             if target == 'upkeep':
                 fac.upkeep_funded = (fac.upkeep_funded or 0) + amount
             elif target == 'project':
@@ -12543,6 +12592,7 @@ class SeasonManager:
             return {
                 'teamId': teamId, 'amount': amount, 'target': target,
                 'soloFunded': soloFunded,
+                'matched': matched,
                 'projectBuilt': builtKey is not None,
                 'builtFacilityKey': builtKey,
                 'builtLevel': builtLevel,

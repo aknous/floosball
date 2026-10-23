@@ -56,7 +56,8 @@ Independent of everything else, and the cheapest way to make money turn into win
 A second treasury income stream that comes from fans **showing up**, not from fans' wallets.
 
 - **Gate revenue is the main income stream; donations are the top-up** (owner, 2026-10-22). Size it so a few active fans who never play fantasy can afford a competitive roster on gate revenue alone. A fantasy player's bigger donations then speed a team up but are never what makes it competitive (G3).
-- Each week, each **active** fan of a team (the Supporter activity window, `SUPPORTER_ACTIVITY_WINDOW_DAYS` 14) earns the team a gate-and-merch payment, paid by the league into the treasury. No user Floobits are spent. "Active" should be easy to reach: any visit counts, not only fantasy.
+- **Ships with payroll, not before it** (owner, 2026-10-23). On its own it roughly triples the money coming into treasuries, and the harness shows facilities stop paying off at about 10,000F a team a season, so the rest would pile up with nothing to buy.
+- Each week, each **active** fan of a team (the Supporter activity window, `SUPPORTER_ACTIVITY_WINDOW_DAYS` 14; kept at 14 over a 30-day window, owner 2026-10-23) earns the team a gate-and-merch payment, paid by the league into the treasury. No user Floobits are spent. "Active" should be easy to reach: any visit counts, not only fantasy.
 
 ### Participation boost (owner, 2026-10-22)
 A fan who takes part in the site's games that week is worth more at the gate than one who only visits. No single game is required, and nobody has to do everything.
@@ -72,7 +73,8 @@ A fan who takes part in the site's games that week is worth more at the gate tha
 - Shown on the team page as each fan's contribution ("You're adding 1.5x to the gate this week"), with the activities that count listed.
 
 ### Gate formula
-- **Concave in fan count:** `gate = base x (sum of fan weights)^p` with p around 0.5-0.7, so 17 fans do not earn 17 times what 1 fan earns. A fanless team's first fan is worth the most.
+- **Concave in fan count:** `gate = base x (sum of fan weights)^p` with **p = 0.85** (owner, 2026-10-23), so 17 fans do not earn 17 times what 1 fan earns and a fanless team's first fan is worth the most. A second fan adds about 80% of the first. At 0.6 a second fan added only 51%, so a single fantasy donor (Extras' one fan gave 10,500F in season 11) out-funded a second fan joining, against G3.
+- **Priced on the season-11 snapshot at p = 0.85** (`treasury_harness.py gate`, provisional base 0.02 shares a week): one active fan brings in 3,052F a season (4,312F playing two games), two fans 5,516F. League-wide, 101,000F of gate a season plus ~44,000F of match against 64,000F fans gave. Only 16 of 32 teams have an active fan in the 14-day window.
 - **The Stadium raises gate revenue** per level. This gives the Stadium a second job and lets a facility pay for part of its own upkeep.
 - Share-denominated like everything else, so it tracks the league's economy.
 - Not inflationary for users: treasury money only buys facilities and payroll.
@@ -208,9 +210,10 @@ Use the `FLOOS_FACILITY_FORCE` lesson: compare arms on the same league; never in
 1. G5's N: how many wins the top-funded quarter should gain over the bottom.
 2. ~~Facilities: unlimited levels per offseason, or a per-facility cap.~~ Settled 2026-10-22: one upgrade per facility per season, funded in the order of the fans' ranked ballots (§3).
 3. ~~No debt, forced release, or league cover when funding stops.~~ Settled 2026-10-22: facilities absorb unpaid upkeep at the payment run, and a payroll shortfall found at season end forces cuts then (§5). Protected: fan favorites, the team's top two, prospects the GM projects as stars. As a last resort, protected players are cut from least to most valuable.
-4. ~~Whether fans vote on the split between upkeep and new projects.~~ Settled 2026-10-22: players are signed first in the offseason, the season-start run pays payroll, upkeep, then projects in the fans' ranked order, and a GM may sacrifice a facility level for a big signing (§5). The harness sets how the GM prices a level against a player.
-5. Gate revenue exponent and Stadium multiplier (set by the harness against G2/G3).
+4. ~~Whether fans vote on the split between upkeep and new projects.~~ Settled 2026-10-22: players are signed first in the offseason, the payment run after the FA draft pays payroll, upkeep, then projects in the fans' ranked order, and a GM may sacrifice a facility level for a big signing (§5). The harness sets how the GM prices a level against a player.
+5. ~~Gate revenue exponent~~ Settled 2026-10-23: p = 0.85, the 14-day activity window, and gate revenue ships with payroll (§4). The Stadium multiplier is still set by the harness against G2/G3.
 6. Participation boost sizes (proposal 1.35x for one activity, 1.5x for two). League match rate and amount (proposal 2:1 on the first 1,000F) set by the harness.
+7. **League baseline (`FUNDING_BASELINE_PER_TEAM`, 200F): decided with payroll** (owner, 2026-10-22). Sized then to what a team needs to afford a roster at league minimum salaries (G4, G6), plus upkeep. **Flat for every team, not needs-based** (owner, 2026-10-23): a top-up only for teams short of a minimum roster would shrink as fan money came in, so a fanless team's first fan would mostly replace league money instead of adding to it (against G1 and G2). Flat, every Floobit a fan brings lands on top. Until payroll lands, teams without fans keep decaying toward the facility set 200F can hold (see the harness results above); Phase 2 does not change the baseline.
 
 ## 10. Later: the merch shop
 

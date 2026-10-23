@@ -1358,6 +1358,31 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Gate revenue + the donation match ledger (docs/TREASURY_PAYROLL_PLAN.md §4).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS treasury_income ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL DEFAULT 0, "
+                "kind VARCHAR(8) NOT NULL, "
+                "user_id INTEGER, "
+                "basis INTEGER NOT NULL DEFAULT 0, "
+                "amount INTEGER NOT NULL DEFAULT 0, "
+                "detail_json TEXT, "
+                "created_at DATETIME)"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_treasury_income_team_season ON treasury_income(team_id, season)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_treasury_income_user_season ON treasury_income(user_id, season)"))
+            # One gate row per team per week: a re-run of the week is a no-op.
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_treasury_income_gate "
+                              "ON treasury_income(team_id, season, week) WHERE kind = 'gate'"))
+            conn.commit()
+            logger.info("  Migration: ensured treasury_income")
+        except Exception:
+            conn.rollback()
+
         # ---- Trading: picks, trades, and a trade id on the recap log ----
         # ⚠️ INLINE, BECAUSE ALEMBIC DOES NOT RUN ON DEPLOY. These are what runs in prod.
         try:
