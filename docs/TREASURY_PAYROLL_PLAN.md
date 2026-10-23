@@ -187,6 +187,22 @@ Replays seasons on a fresh prod snapshot under these rules and reports wins by f
 
 Use the `FLOOS_FACILITY_FORCE` lesson: compare arms on the same league; never infer facility or payroll value from a cross-team regression.
 
+### Built: `treasury_harness.py` (2026-10-22)
+`project` applies the payment run to a snapshot's real treasuries without running the sim; `arms` plays several seasons per run with extra income given to the even-id half of the league before each payment run (`FLOOS_TREASURY_INJECT`), against a control arm with none. Payroll and gate revenue checks get added as those phases land.
+
+**First results, facilities alone (Phase 1), on the season-11 prod snapshot** (week 24, share unit 5,453F; 4 seasons x 8 runs per arm):
+
+| Extra income per even team, each season | Wins over control, S12 | S13 | S14 | Even-team levels by S14 (of 25) |
+|---|---|---|---|---|
+| 0 (control) | | | | 12.6 |
+| 10,000F | +0.75 | +3.08 | +3.03 | 22.6 |
+| 30,000F | +1.03 | +1.84 | +3.22 | 22.8 |
+
+- **Money buys about 3 wins a season through facilities, building over 2-3 seasons** (one upgrade per facility per year). That is the multi-season arc G2 asks for. About 0.3 wins per level.
+- **It saturates fast.** 10,000F a season already reaches nearly every level; 30,000F buys the same levels and the rest sits idle (even-team treasuries reach 74,000F by S14). With facilities alone, extra money stops mattering above roughly 10,000F a season, so G1 needs payroll.
+- **Noise:** S11 is played before any extra income, yet its arms differ from control by -0.3 to -0.4, and the 10k and 30k arms disagree by 1.2 wins in S13 at identical levels. Read effects under about 1 win as noise.
+- **Fanless teams decay under both rules.** At this share unit a set of four level-2 facilities costs about 327F a season in upkeep against a 200F baseline, so 14 of 32 teams gain nothing at the season-11 run and several lose a level. The baseline size (open decision) matters for facilities already.
+
 ## 9. Open decisions (owner)
 
 1. G5's N: how many wins the top-funded quarter should gain over the bottom.

@@ -108,6 +108,13 @@ expect("the latest vote becomes the first choice", seeded and seeded[0] == KEYS[
 expect("an existing ranking is not overwritten", FM.getRanking(s, 1, users[0]) == mine)
 s.close()
 
+print("5. the harness income switch (FLOOS_TREASURY_INJECT)")
+parsed = FM.parseTreasuryInjection("all=5, even=100, 7=3")
+expect("a team id beats even/odd beats all",
+       (FM.treasuryInjectionFor(7, parsed), FM.treasuryInjectionFor(4, parsed),
+        FM.treasuryInjectionFor(9, parsed)) == (3, 100, 5))
+expect("unset means nothing is added", FM.treasuryInjectionFor(4, FM.parseTreasuryInjection("")) == 0)
+
 shutil.rmtree(_tmp, ignore_errors=True)
 print()
 if failures:

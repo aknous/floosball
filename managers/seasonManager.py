@@ -12215,6 +12215,10 @@ class SeasonManager:
                     return
                 shareUnit = facilitiesManager.computeShareUnit(
                     session, season - 1, numTeams=max(1, len(teams)))
+                injected = facilitiesManager.applyTreasuryInjection(session, teams)
+                if injected:
+                    logger.info(f"Facility payment run: FLOOS_TREASURY_INJECT added "
+                                f"{sum(injected.values())}F across {len(injected)} team(s)")
                 logs = facilitiesManager.applyPaymentRun(session, teams, season, shareUnit)
                 row.value = f"done:{season}"
                 session.commit()

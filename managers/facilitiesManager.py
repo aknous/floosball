@@ -507,6 +507,52 @@ def teamOrder(session, teamId: int, levels: dict) -> list:
     return combinedOrder(levels, teamBallots(session, teamId))
 
 
+def parseTreasuryInjection(spec: str) -> dict:
+    """Parse FLOOS_TREASURY_INJECT: comma-separated `even=N`, `odd=N`, `all=N` or
+    `<teamId>=N`, applied in that order of specificity (a team id beats even/odd beats
+    all). Returns {'all': n, 'even': n, 'odd': n, 'ids': {teamId: n}}."""
+    out = {'all': 0, 'even': None, 'odd': None, 'ids': {}}
+    for tok in (spec or '').split(','):
+        tok = tok.strip()
+        if not tok or '=' not in tok:
+            continue
+        k, v = tok.split('=', 1)
+        k, v = k.strip().lower(), int(float(v))
+        if k in ('all', 'even', 'odd'):
+            out[k] = v
+        else:
+            out['ids'][int(k)] = v
+    return out
+
+
+def treasuryInjectionFor(teamId: int, parsed: dict) -> int:
+    if teamId in parsed['ids']:
+        return parsed['ids'][teamId]
+    side = 'even' if teamId % 2 == 0 else 'odd'
+    if parsed[side] is not None:
+        return parsed[side]
+    return parsed['all']
+
+
+def applyTreasuryInjection(session, teamObjs: list) -> dict:
+    """Calibration switch for `treasury_harness.py` (FLOOS_TREASURY_INJECT): credit each
+    team's Treasury with a fixed amount right before the payment run, so the harness can
+    give half the league more money and measure what it buys. Off unless set. Returns
+    {teamId: amount added}."""
+    import os
+    spec = os.environ.get('FLOOS_TREASURY_INJECT')
+    if not spec:
+        return {}
+    parsed = parseTreasuryInjection(spec)
+    added = {}
+    for team in teamObjs:
+        amt = treasuryInjectionFor(team.id, parsed)
+        if amt:
+            addTreasury(session, team.id, amt)
+            added[team.id] = amt
+    return added
+
+
 def applyPaymentRun(session, teamObjs: list, season: int, shareUnit: float) -> list:
     """Run the offseason payment run for every team and PERSIST the result (facility
     levels, project funding/builds, Treasury leftover, in-memory team.facilities).
