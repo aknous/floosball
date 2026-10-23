@@ -3231,8 +3231,8 @@ LAST_WINDOW_PROMOTE_ENABLED = True
 # trade ASSET precisely because that spread let the richest club fund the entire market;
 # as a COST the same spread constrains the poor instead of empowering the rich. A club
 # cannot buy a player with Treasury, only ROSTER SPACE, and a club that churns talent
-# pays for it — Treasury's other claim is facility upkeep (`resolveSeasonEnd` spends it
-# at season end), so cutting freely costs a facility level later. No extra rule needed.
+# pays for it — Treasury's other claim is facility upkeep (`resolvePaymentRun` spends it
+# in the offseason payment run), so cutting freely costs a facility level later. No extra rule needed.
 #
 # ⚠️ FLOORED AT ZERO, NEVER A DEBT: a club that cannot pay simply cannot cut. Letting the
 # fee go negative hands a broke club unlimited roster churn, the opposite of the intent.

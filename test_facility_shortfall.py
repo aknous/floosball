@@ -5,7 +5,7 @@ A SHORTFALL BUYS THE MOST IT CAN, AND NEVER PAYS PART OF A BILL.
 `upkeep_funded` to 0 every season — so Floobits poured into a shortfall the pot cannot
 close are gone, and bought nothing.
 
-The waterfall used to pay highest-level-first in full-shortfall order, which in a genuine
+The upkeep step used to pay highest-level-first in full-shortfall order, which in a genuine
 shortfall spent the whole pot on the most expensive bill and let it decay anyway. Measured
 on production: Pinecones, 200F against 383F owed, put all 200F into a 247F locker room,
 lost it regardless, and lost the three cheaper facilities too — 136F would have saved all
@@ -15,7 +15,7 @@ The choice is now made over SUBSETS: the affordable set preserving the most valu
 full, with everything else paid nothing. Value = the cost to rebuild the level at risk, so
 a level-3 building outranks a level-1 in real Floobits rather than by counting levels.
 """
-from managers.facilitiesManager import resolveSeasonEnd, upkeepCostFloobits, upgradeCostFloobits
+from managers.facilitiesManager import resolvePaymentRun, upkeepCostFloobits, upgradeCostFloobits
 
 SU = 5485.0
 
@@ -29,7 +29,7 @@ PINECONES = [('locker_room', 3), ('training', 2), ('recovery', 1), ('scouting', 
 
 
 def testTheProductionShortfallLosesOneLevelNotFour():
-    res = resolveSeasonEnd(_fac(PINECONES), [], 200, SU, 6)
+    res = resolvePaymentRun(_fac(PINECONES), [], 200, SU)
     decayed = sorted(f['key'] for f in res['facilities'] if not f['upkeepMet'])
     assert decayed == ['locker_room'], decayed
     # 136F buys training + recovery + scouting; the 247F locker room is unaffordable.
@@ -40,19 +40,19 @@ def testTheProductionShortfallLosesOneLevelNotFour():
 def testNoPartialPaymentIsEverMade():
     """Every facility is paid its FULL bill or nothing at all — part of a bill is worth 0."""
     for pot in (0, 27, 50, 136, 200, 300, 383, 1000):
-        res = resolveSeasonEnd(_fac(PINECONES), [], pot, SU, 6)
+        res = resolvePaymentRun(_fac(PINECONES), [], pot, SU)
         for f in res['facilities']:
             paid, cost = f['upkeepPaid'], f['upkeepCost']
             assert paid == 0 or paid >= cost, (pot, f['key'], paid, cost)
 
 
 def testAffordingEverythingStillPaysEverything():
-    res = resolveSeasonEnd(_fac(PINECONES), [], 10_000, SU, 6)
+    res = resolvePaymentRun(_fac(PINECONES), [], 10_000, SU)
     assert all(f['upkeepMet'] for f in res['facilities'])
 
 
 def testAPotOfZeroSpendsNothingAndDecaysEverythingThatCosts():
-    res = resolveSeasonEnd(_fac(PINECONES), [], 0, SU, 6)
+    res = resolvePaymentRun(_fac(PINECONES), [], 0, SU)
     assert res['leftover'] == 0
     decayed = {f['key'] for f in res['facilities'] if not f['upkeepMet']}
     # stadium is level 0 — its upkeep is 0, so it is met for free and cannot decay.
@@ -70,7 +70,7 @@ def testValueBeatsCount():
     pot = upkeepCostFloobits(5, SU)          # exactly enough for the lv5 alone
     twoCheap = upgradeCostFloobits(2, SU) * 2
     oneRich = upgradeCostFloobits(4, SU)
-    res = resolveSeasonEnd(fac, [], pot, SU, 6)
+    res = resolvePaymentRun(fac, [], pot, SU)
     saved = {f['key'] for f in res['facilities'] if f['upkeepMet']}
     if oneRich > twoCheap:
         assert saved == {'a'}, (saved, oneRich, twoCheap)
@@ -84,18 +84,27 @@ def testFanFundedUpkeepCostsThePotNothing():
     for f in fac:
         if f['key'] == 'locker_room':
             f['upkeep_funded'] = upkeepCostFloobits(3, SU)   # fans pre-paid it
-    res = resolveSeasonEnd(fac, [], 200, SU, 6)
+    res = resolvePaymentRun(fac, [], 200, SU)
     assert all(f['upkeepMet'] for f in res['facilities']), \
         [f['key'] for f in res['facilities'] if not f['upkeepMet']]
 
 
-def testAFacilityUnderConstructionStillWaivesUpkeep():
-    """The pre-existing waiver must survive the rewrite."""
-    projects = [{'id': 1, 'facility_key': 'locker_room', 'target_level': 4,
-                 'cost_shares': 0.42, 'funded': 0, 'opened_season': 6}]
-    res = resolveSeasonEnd(_fac(PINECONES), projects, 0, SU, 6)
+def testAFacilityFansBuiltThisYearWaivesUpkeep():
+    """The waiver survives for a facility fans built mid-season (under construction
+    the year it completed)."""
+    res = resolvePaymentRun(_fac(PINECONES), [], 0, SU, waivedKeys={'locker_room'})
     lr = next(f for f in res['facilities'] if f['key'] == 'locker_room')
     assert lr['upkeepMet'] and lr['upkeepCost'] == 0
+
+
+def testAnOpenProjectNoLongerWaivesUpkeep():
+    """With ranked ballots every facility always has an open project, so an open
+    project cannot be what waives a bill, or nothing would ever pay upkeep."""
+    projects = [{'id': 1, 'facility_key': 'locker_room', 'target_level': 4,
+                 'cost_shares': 0.42, 'funded': 0}]
+    res = resolvePaymentRun(_fac(PINECONES), projects, 0, SU)
+    lr = next(f for f in res['facilities'] if f['key'] == 'locker_room')
+    assert not lr['upkeepMet'] and lr['upkeepCost'] > 0
 
 
 if __name__ == '__main__':

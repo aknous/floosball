@@ -2662,7 +2662,7 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None, moves=None):
     keep churning it.
 
     ⚠️ It reconnects the two economies deliberately: Treasury's other claim is facility
-    upkeep, and `resolveSeasonEnd` spends it at season end. A club that cuts freely
+    upkeep, and `resolvePaymentRun` spends it in the offseason. A club that cuts freely
     in-season loses a facility level in the offseason. No extra rule needed.
 
     ⚠️ AND A CLUB THAT CANNOT PAY CANNOT CUT — floored at zero, never a debt, because a

@@ -38,7 +38,14 @@ Independent of everything else, and the cheapest way to make money turn into win
   - Each fan orders all five facilities by priority. The ballot **persists across seasons** until the fan changes it, so it takes one visit to keep it current and occasional fans are not left out.
   - The team's combined ranking is a points count: a fan's first choice gets 5 points, second 4, down to 1 for fifth. Ties break toward the facility the team is weakest in. A team with one fan follows that fan's list.
   - With no ballots, the fallback order is weakest facility first.
-  - The season-start payment run (§5) walks the combined ranking after payroll and upkeep: fund the top facility's project, and if money is left, open and fund the next one, skipping any facility already upgraded this season or at level 5, until the money runs out or every facility has had its upgrade.
+  - The payment run (§5, right after the FA draft) walks the combined ranking after payroll and upkeep: fund the top facility's project, and if money is left, move to the next one, skipping any facility already upgraded this year or at level 5, until the money runs out or every facility has had its upgrade. A facility that decayed in the same run rebuilds the level it lost.
+  - **Every facility below level 5 always has its next level open** (`ensureOpenProjects`), so fans can fund any facility directly.
+- **Direct funding stays** (owner, 2026-10-22). A fan-funded level builds the moment it is fully funded, unless the facility already had its upgrade this year. A year runs from one payment run to the next:
+  - a level fans build mid-season is that facility's upgrade for the year: the next run skips it and waives its upkeep (it was under construction);
+  - a facility the run upgraded can't be built again by fans until after the next run; their money waits on the bar;
+  - after this season's run, every fan build waits for season start (`buildPendingProjects`), so no facility gets two upgrades between runs;
+  - the team page says when a fully funded bar will build: now, at the payment run, or next season.
+- **An open project no longer waives upkeep.** It did when a project was a deliberate vote; with every facility always open it would waive every bill. Only a level fans built this year is waived.
   - Migration: an existing single vote becomes that fan's first choice, with the rest of their list filled in by the fallback order.
   - Replaces `castFacilityVote` / `tallyFacilityVotes` / `resolveFacilityVote` and the frontend vote control with a ranking control.
 - **Visibility:** the team page shows what each facility is doing right now, e.g. "roster 2% fatigued, league average 9%" (Recovery), the home-game edge (Stadium), the in-game edge (Locker Room).
@@ -102,22 +109,22 @@ Players get first claim on the money and facilities get what is left, and teams 
 
 1. **Season end: income only.** The season-end contribution comes in and the season's gate revenue is already in hand. Nothing is spent, except forced cuts (below).
 2. **Offseason: players.** Re-signs and the FA draft check affordability against the full balance.
-3. **Season start: the payment run.** Pay payroll, then facility upkeep, then new projects in the fans' ranked order (§3). Facilities built here are active from week 1, the same as a level built in the offseason today.
+3. **Right after the FA draft: the payment run** (owner, 2026-10-22; moved from season start). Pay payroll, then facility upkeep, then new projects in the fans' ranked order (§3). Running it before offseason training keeps today's timing for the Training facility: a level built here develops this offseason's players. Only Scouting and the Appeal gate wait a year, since the draft and re-signs have already happened. In-game facilities are active from week 1 either way.
 
 This replaces a separate payroll reserve: because signings happen before any project is funded, nothing has to be set aside for them.
 
-⚠️ The payment run lives on the `startNewSeason` path, which is also the mid-season resume path on every deploy, so it must be gated by a once-per-season marker or a restart pays twice.
+Built as offseason step `facility_payment` (`seasonManager._runFacilityPayment`), gated by the step marker and by its own `facility_payment_due` app_setting, written at season end and flipped to `done:N` in the run's own commit, so a restart cannot pay twice. A season that ended under the old season-end waterfall has no marker and its run is skipped.
 
 ### Budget
 - Payroll is a flow: a team can afford what its balance plus expected income (gate + recent donations) covers. Saved-up treasury is a war chest a team can spend down to win now.
 - **Affordability is checked at signing.** A team signs or re-signs a player only if its balance plus a cautious income estimate covers all its committed salaries for the rest of every contract **and the upkeep of its current facility levels**. Counting upkeep stops a signing from knocking facilities down by accident. A shortfall can then only come from income really dropping (fans leaving, gate revenue falling), not from overspending.
-- **A GM can sacrifice a facility level to sign a big player** (owner, 2026-10-22). When a signing doesn't fit, the GM may count a facility's upkeep as available, accepting that the facility drops a level at season start. The money freed is the upkeep saved by holding that facility one level lower for the contract's term. The GM does it only when the player is worth more than the level: it compares the player's value with the wins that level is worth, priced off the measured facility effects (Facilities Economy in CLAUDE.md). It sacrifices the level that costs the least value for the money it needs, ties going to the facility the fans ranked lowest. Fans see it: a news item ("The Waffles let the Stadium slip to sign X") and a line on the team page.
+- **A GM can sacrifice a facility level to sign a big player** (owner, 2026-10-22). When a signing doesn't fit, the GM may count a facility's upkeep as available, accepting that the facility drops a level at the payment run. The money freed is the upkeep saved by holding that facility one level lower for the contract's term. The GM does it only when the player is worth more than the level: it compares the player's value with the wins that level is worth, priced off the measured facility effects (Facilities Economy in CLAUDE.md). It sacrifices the level that costs the least value for the money it needs, ties going to the facility the fans ranked lowest. Fans see it: a news item ("The Waffles let the Stadium slip to sign X") and a line on the team page.
 - **No debt.** The balance never goes negative.
 
 ### When a team can't make payroll (owner, 2026-10-22)
-The check runs at **season end**, before the offseason, so the FA draft can fill any slot it opens. Payment happens at season start, but by then the FA draft is over, and a cut made there would leave a slot empty.
+The check runs at **season end**, before the offseason, so the FA draft can fill any slot it opens. Payment happens after the FA draft, and a cut made there would leave a slot empty.
 
-1. **Facilities give way first.** At season start, payroll is paid before upkeep, so a team short of money pays its players and lets facilities go unpaid: each unpaid facility drops a level under the existing rule. Losing a level raises no money; it is the cost of skipping upkeep.
+1. **Facilities give way first.** At the payment run, payroll is paid before upkeep, so a team short of money pays its players and lets facilities go unpaid: each unpaid facility drops a level under the existing rule. Losing a level raises no money; it is the cost of skipping upkeep.
 2. **If the season-end balance cannot cover next season's committed payroll**, even with nothing spent on upkeep, the team **cuts players at season end** to close the gap.
    - **The GM chooses who goes:** the fewest players, with the least value lost, whose salaries close the gap. Usually one expensive player, sometimes two cheaper ones if that costs less. Not "always the highest salary", which could cost a team its best player when a cheaper cut would do.
    - **No cut fee** on a forced cut.
@@ -184,7 +191,7 @@ Use the `FLOOS_FACILITY_FORCE` lesson: compare arms on the same league; never in
 
 1. G5's N: how many wins the top-funded quarter should gain over the bottom.
 2. ~~Facilities: unlimited levels per offseason, or a per-facility cap.~~ Settled 2026-10-22: one upgrade per facility per season, funded in the order of the fans' ranked ballots (§3).
-3. ~~No debt, forced release, or league cover when funding stops.~~ Settled 2026-10-22: facilities absorb unpaid upkeep at season start, and a payroll shortfall found at season end forces cuts then (§5). Protected: fan favorites, the team's top two, prospects the GM projects as stars. As a last resort, protected players are cut from least to most valuable.
+3. ~~No debt, forced release, or league cover when funding stops.~~ Settled 2026-10-22: facilities absorb unpaid upkeep at the payment run, and a payroll shortfall found at season end forces cuts then (§5). Protected: fan favorites, the team's top two, prospects the GM projects as stars. As a last resort, protected players are cut from least to most valuable.
 4. ~~Whether fans vote on the split between upkeep and new projects.~~ Settled 2026-10-22: players are signed first in the offseason, the season-start run pays payroll, upkeep, then projects in the fans' ranked order, and a GM may sacrifice a facility level for a big signing (§5). The harness sets how the GM prices a level against a player.
 5. Gate revenue exponent and Stadium multiplier (set by the harness against G2/G3).
 6. Participation boost sizes (proposal 1.35x for one activity, 1.5x for two). League match rate and amount (proposal 2:1 on the first 1,000F) set by the harness.
@@ -195,4 +202,4 @@ An in-game shop (Floobits, not real money) selling team-themed cosmetics for fan
 
 ## Files this will touch
 
-`managers/facilitiesManager.py` (waterfall, projects, gate revenue), `managers/seasonManager.py` (`_runFacilitySeasonEnd` moves to season start, the season-end payroll check, `_applySeasonEndTax`, weekly gate accrual), `managers/playerManager.py` (FA draft, re-sign execution, contracts), `managers/frontOfficeBrain.py` (re-sign / board valuation, `appealDemand` docstring), `database/models.py` + `connection.py` (salary column, inline migrations), `constants.py`, the team / player API payloads, and the frontend team and player pages.
+`managers/facilitiesManager.py` (payment run, projects, ranked ballots, gate revenue), `managers/seasonManager.py` (`_runFacilityPayment` after the FA draft, the season-end payroll check, `_applySeasonEndTax`, weekly gate accrual), `managers/playerManager.py` (FA draft, re-sign execution, contracts), `managers/frontOfficeBrain.py` (re-sign / board valuation, `appealDemand` docstring), `database/models.py` + `connection.py` (salary column, inline migrations), `constants.py`, the team / player API payloads, and the frontend team and player pages.

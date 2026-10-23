@@ -346,6 +346,9 @@ class SeasonManager:
 
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
+        # Every facility's next level open for funding, and anything fans funded in full
+        # while it was blocked builds now (one upgrade per facility per year).
+        self._syncFacilityProjects(seasonNumber)
 
         # Dev-only: spread teams across all 4 funding tiers so single-user
         # testing produces a realistic tier distribution. Set DEV_SPREAD_TIERS=1
@@ -554,16 +557,12 @@ class SeasonManager:
         # season-start values so in-season mechanics couldn't drift.
         self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
-        # Facilities (Markets→Facilities): first resolve the fan vote — the
-        # Run the season-end waterfall FIRST (Treasury pays upkeep, then the
-        # projects that were OPEN and fundable all season; offseason construction
-        # builds funded projects and decays unmaintained facilities). THEN resolve
-        # the vote, opening the winner as a fresh project — so it goes through an
-        # Active Projects season of funding before next season's waterfall can
-        # complete it, instead of being built instantly by this season's Treasury.
-        # Costs are share-denominated off the PRIOR season's faucet.
-        self._runFacilitySeasonEnd(self.currentSeason.seasonNumber)
-        self._resolveFacilityVotes(self.currentSeason.seasonNumber)
+        # Facilities: NOTHING is spent at season end any more. The money waits for the
+        # offseason payment run after the FA draft (`_runFacilityPayment`), so players get
+        # first claim on it (docs/TREASURY_PAYROLL_PLAN.md §5). Mark this season's run as
+        # due; the run only fires for a season that ended under this code, so a deploy
+        # landing mid-offseason after the OLD season-end waterfall cannot charge twice.
+        self._markFacilityPaymentDue(self.currentSeason.seasonNumber)
 
         # Close game stats file
         self._closeGameStatsFile()
@@ -7079,6 +7078,16 @@ class SeasonManager:
 
             self._markOffseasonStepComplete('fa_draft')
 
+        # STEP 6.75: The facility payment run (owner, 2026-10-22). After the FA draft so
+        # players get first claim on the treasury, before training so a Training level
+        # built here develops this offseason's players. Idempotent on its own marker
+        # (committed with the run), so a restart between the run and this step marker
+        # cannot pay twice.
+        if not self._isOffseasonStepComplete('facility_payment'):
+            logger.info("Step 6.75: Facility payment run")
+            self._runFacilityPayment(self.currentSeason.seasonNumber)
+            self._markOffseasonStepComplete('facility_payment')
+
         # ── PHASE: training ──────────────────────────────────
         # Players just signed by FA are now under their new team's coach +
         # market tier — training runs with that context.
@@ -12169,13 +12178,62 @@ class SeasonManager:
         except ImportError:
             pass
 
-    def _resolveFacilityVotes(self, completedSeason: int) -> None:
-        """Resolve the season's facility vote per team — the plurality-winning
-        facility gets an upgrade/build project opened into the queue (Phase 3).
-        Runs AFTER the waterfall so the new project opens fresh for next season's
-        funding (it shows in Active Projects and is funded over the coming season
-        rather than built instantly by this season's Treasury). Reads post-waterfall
-        levels. No votes → no new project (Treasury just accumulates)."""
+    _FACILITY_PAYMENT_KEY = 'facility_payment_due'   # = facilitiesManager.PAYMENT_RUN_KEY
+
+    def _markFacilityPaymentDue(self, completedSeason: int) -> None:
+        """Season end: record that this season's facility payment run is owed."""
+        try:
+            from game_rules import _writeAppSetting
+            _writeAppSetting(self._FACILITY_PAYMENT_KEY, str(completedSeason))
+        except Exception as e:
+            logger.error(f"Could not mark the facility payment run due: {e}")
+
+    def _runFacilityPayment(self, season: int) -> None:
+        """The offseason facility payment run: the Treasury pays upkeep, then funds
+        projects in each team's ranked order (fans' ballots), at most one upgrade per
+        facility per year; unpaid facilities decay. Costs are share-denominated off the
+        PRIOR season's faucet (the rates fans funded against during the season).
+
+        ⚠️ RUNS ONLY WHEN THIS SEASON'S RUN IS DUE, and marks it done in the same commit.
+        A season that ended under the old code already paid its season-end waterfall, so
+        it has no 'due' marker and is skipped rather than charged twice.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import AppSetting
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                row = session.query(AppSetting).filter_by(key=self._FACILITY_PAYMENT_KEY).first()
+                if row is None or row.value != str(season):
+                    logger.info(f"Facility payment run: none due for season {season} "
+                                f"(marker={row.value if row else None}), skipping")
+                    return
+                shareUnit = facilitiesManager.computeShareUnit(
+                    session, season - 1, numTeams=max(1, len(teams)))
+                logs = facilitiesManager.applyPaymentRun(session, teams, season, shareUnit)
+                row.value = f"done:{season}"
+                session.commit()
+                logger.info(f"Facility payment run: shareUnit={shareUnit:.0f}, "
+                            f"{len(logs)} team(s) had decay/builds")
+                for name, lines in logs:
+                    logger.info(f"  {name}: {'; '.join(lines)}")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Facility payment run failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _syncFacilityProjects(self, season: int) -> None:
+        """Season start: every facility below the top level has its next level open for
+        funding, and a project fans funded in full while its facility was blocked builds
+        now. Idempotent, so the mid-season resume path can call it on every boot."""
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
             return
         try:
@@ -12186,51 +12244,20 @@ class SeasonManager:
             teams = teamManager.teams if teamManager else []
             session = get_session()
             try:
-                opened = 0
                 for team in teams:
                     levels = {f.facility_key: f.level for f in
                               session.query(TeamFacility).filter_by(team_id=team.id).all()}
-                    proj = facilitiesManager.resolveFacilityVote(
-                        session, team.id, completedSeason, levels)
-                    if proj is not None:
-                        opened += 1
-                        logger.info(f"Facility vote: {getattr(team, 'name', team.id)} → "
-                                    f"{proj.facility_key} Lv{proj.target_level}")
-                session.commit()
-                if opened:
-                    logger.info(f"Facility votes resolved: {opened} project(s) opened")
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Facility vote resolution failed: {e}")
-            finally:
-                session.close()
-        except ImportError:
-            pass
-
-    def _runFacilitySeasonEnd(self, completedSeason: int) -> None:
-        """Season-end facility waterfall + offseason construction (Markets→
-        Facilities). Treasury (already credited with the deposit) pays upkeep,
-        then the oldest open project; funded projects build, unmaintained
-        facilities decay. Costs are share-denominated off the PRIOR season's
-        faucet (the rates fans funded against during the season)."""
-        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
-            return
-        try:
-            from database.connection import get_session
-            from managers import facilitiesManager
-            teamManager = self.serviceContainer.getService('team_manager')
-            teams = teamManager.teams if teamManager else []
-            session = get_session()
-            try:
+                    if levels:
+                        facilitiesManager.ensureOpenProjects(session, team.id, levels, season)
                 shareUnit = facilitiesManager.computeShareUnit(
-                    session, completedSeason - 1, numTeams=max(1, len(teams)))
-                logs = facilitiesManager.applySeasonEnd(session, teams, completedSeason, shareUnit)
+                    session, season - 1, numTeams=max(1, len(teams)))
+                built = facilitiesManager.buildPendingProjects(session, teams, season, shareUnit)
                 session.commit()
-                logger.info(f"Facility season-end: shareUnit={shareUnit:.0f}, "
-                            f"{len(logs)} team(s) had decay/builds")
+                for name, key, lvl in built:
+                    logger.info(f"Facility built at season start: {name} {key} → Lv{lvl}")
             except Exception as e:
                 session.rollback()
-                logger.error(f"Facility season-end failed: {e}")
+                logger.error(f"Facility project sync failed: {e}")
             finally:
                 session.close()
         except ImportError:
@@ -12290,7 +12317,7 @@ class SeasonManager:
                         rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
                         rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
                     # Dual-feed: the season-end deposit also funds the new facility
-                    # Treasury (the waterfall spends it next). Transitional — the old
+                    # Treasury (the offseason payment run spends it). Transitional — the old
                     # TeamFunding ledger above still drives the Market label until cutover.
                     facilitiesManager.addTreasury(session, teamId, amount)
 
@@ -12402,12 +12429,12 @@ class SeasonManager:
         """Contribute Floobits toward a team's facilities (Markets→Facilities).
 
         target:
-          - 'treasury' (default) → the general Treasury pool (the season-end
-            waterfall spends it on upkeep then the oldest open project).
+          - 'treasury' (default) → the general Treasury pool (the offseason
+            payment run spends it on upkeep, then projects in the fans' ranked order).
           - 'upkeep' (+facilityKey) → that facility's upkeep bar — pre-protects
-            it so the waterfall doesn't have to cover it.
-          - 'project' (+projectId) → an open project's bar — accelerates it past
-            the FIFO waterfall.
+            it so the payment run doesn't have to cover it.
+          - 'project' (+projectId) → an open project's bar — funds that facility
+            directly, ahead of the ranked order.
 
         Deducts from the user (favorite team only) and credits the chosen bar.
         Returns the new balance + the team's Treasury. Raises ValueError on failure.
@@ -12487,10 +12514,15 @@ class SeasonManager:
                 proj.funded = (proj.funded or 0) + amount
                 # Immediate build: if this contribution completes the project, apply it
                 # NOW — the facility level jumps and its perks go live from the team's
-                # next game, instead of waiting for the season-end resolution. Upkeep on
-                # a facility built this way is waived for the rest of this season.
+                # next game, instead of waiting for the payment run. Upkeep on a facility
+                # built this way is waived at the next payment run.
                 projectCostF = facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit)
-                if (proj.funded or 0) >= projectCostF:
+                # One upgrade per facility per year: a facility the payment run upgraded
+                # last offseason, or that fans already built this season, keeps the money
+                # and builds at the next opportunity instead (`projectBuildTiming`).
+                if ((proj.funded or 0) >= projectCostF
+                        and not facilitiesManager.midSeasonBlocked(
+                            session, teamId, proj.facility_key, season)):
                     teamManager = self.serviceContainer.getService('team_manager')
                     teamObj = teamManager.getTeamById(teamId) if teamManager else None
                     builtLevel = facilitiesManager.buildProjectNow(session, teamId, proj, teamObj, season)

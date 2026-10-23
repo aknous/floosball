@@ -7987,29 +7987,34 @@ def get_team_facilities(team_id: int):
         facRows = session.query(TeamFacility).filter_by(team_id=team_id).all()
         levels = {f.facility_key: f.level for f in facRows}
         openProjRows = session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()
-        upgradingKeys = {p.facility_key for p in openProjRows}
+        # A facility fans built this year has its upkeep WAIVED at the next payment run.
+        builtThisYear = facilitiesManager.fanBuiltThisYear(session, team_id, season)
+        order = facilitiesManager.teamOrder(session, team_id, levels)
         facilities = []
         for f in facRows:
             cfg = FACILITY_CATALOG.get(f.facility_key, {})
-            # A facility under active upgrade has its upkeep WAIVED this season.
-            upgrading = f.facility_key in upgradingKeys
+            waived = f.facility_key in builtThisYear
             facilities.append({
                 'key': f.facility_key,
                 'name': cfg.get('name', f.facility_key),
                 'level': f.level,
                 'maxLevel': FACILITY_MAX_LEVEL,
                 'effect': cfg.get('effect'),
-                'upgrading': upgrading,
-                'upkeepCost': 0 if upgrading else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
+                'upgrading': waived,          # kept for older clients: "upkeep waived"
+                'builtThisYear': waived,
+                'upkeepCost': 0 if waived else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
                 'upkeepFunded': f.upkeep_funded or 0,
                 'upgradeCost': facilitiesManager.upgradeCostFloobits(f.level, shareUnit),
             })
-        projects = [{
+        projects = sorted([{
             'id': p.id, 'facilityKey': p.facility_key, 'kind': p.kind,
             'targetLevel': p.target_level,
             'cost': facilitiesManager.projectCostFloobits(p.cost_shares, shareUnit),
             'funded': p.funded, 'openedSeason': p.opened_season,
-        } for p in openProjRows]
+            'rank': order.index(p.facility_key) + 1 if p.facility_key in order else None,
+            # 'now' | 'payment_run' | 'next_season': when a fully funded bar builds
+            'buildsAt': facilitiesManager.projectBuildTiming(session, team_id, p.facility_key, season),
+        } for p in openProjRows], key=lambda x: x['rank'] or 99)
         return build_success_response({
             'teamId': team_id,
             'treasury': facilitiesManager.getTreasury(session, team_id),
@@ -8017,6 +8022,8 @@ def get_team_facilities(team_id: int):
             'shareUnit': round(shareUnit),
             'facilities': facilities,
             'projects': projects,
+            'order': order,
+            'paymentRunDone': facilitiesManager.paymentRunDone(session, season),
         })
     finally:
         session.close()
@@ -8096,65 +8103,69 @@ def get_league_facilities():
         session.close()
 
 
-@app.get("/api/teams/{team_id}/facilities/vote")
-def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
-    """Facility vote ballot: the facilities eligible to be the team's next
-    project (not maxed, not already in progress) + the current user's vote.
-    Tallies are hidden while the season is live (anti-bandwagon)."""
+@app.get("/api/teams/{team_id}/facilities/ranking")
+def get_facility_ranking(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """The team's facility build order from its fans' ranked ballots, and the
+    current user's own ranking (owner, 2026-10-22). The payment run funds the
+    facilities in `order`, one upgrade per facility per year."""
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     from database.connection import get_session
-    from database.models import TeamFacility, FacilityProject
+    from database.models import TeamFacility
     from managers import facilitiesManager
+    from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
     sm = floosball_app.seasonManager
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     session = get_session()
     try:
         levels = {f.facility_key: f.level for f in
                   session.query(TeamFacility).filter_by(team_id=team_id).all()}
-        openKeys = {p.facility_key for p in
-                    session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()}
-        candidates = facilitiesManager.voteCandidates(levels, openKeys)
-        # enrich each candidate with what winning it would cost: the build (to reach
-        # the target level) and the upkeep it would then carry each season.
+        ballots = facilitiesManager.teamBallots(session, team_id)
+        order = facilitiesManager.combinedOrder(levels, ballots)
         shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
-        tallies = facilitiesManager.tallyFacilityVotes(session, team_id, season)
-        for c in candidates:
-            c['cost'] = facilitiesManager.upgradeCostFloobits(c['currentLevel'], shareUnit)
-            c['upkeep'] = facilitiesManager.upkeepCostFloobits(c['targetLevel'], shareUnit)
-            c['votes'] = tallies.get(c['key'], 0)
-        myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
+        facilities = []
+        for key in order:
+            lvl = levels.get(key, 0)
+            facilities.append({
+                'key': key, 'name': FACILITY_CATALOG[key].get('name', key),
+                'level': lvl, 'maxLevel': FACILITY_MAX_LEVEL,
+                'maxed': lvl >= FACILITY_MAX_LEVEL,
+                'cost': facilitiesManager.upgradeCostFloobits(lvl, shareUnit),
+                'upkeep': facilitiesManager.upkeepCostFloobits(min(lvl + 1, FACILITY_MAX_LEVEL), shareUnit),
+            })
+        mine = facilitiesManager.getRanking(session, team_id, user.id) if user else None
         return build_success_response({
             'teamId': team_id, 'season': season,
-            'candidates': candidates, 'myVote': myVote,
+            'order': order, 'ballots': len(ballots),
+            'facilities': facilities,
+            'myRanking': facilitiesManager.normalizeBallot(mine, levels) if mine else None,
         })
     finally:
         session.close()
 
 
-@app.post("/api/teams/{team_id}/facilities/vote")
-def post_facility_vote(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
-    """Cast/change the user's facility vote (one per fan/team/season). Favorite
-    team only. body: {facilityKey}."""
+@app.post("/api/teams/{team_id}/facilities/ranking")
+def post_facility_ranking(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Save the user's ranked ballot: every facility key, in priority order. Favorite
+    team only. Persists across seasons until changed. body: {ranking: [keys]}."""
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    facilityKey = payload.get("facilityKey")
-    if not facilityKey:
-        raise HTTPException(status_code=400, detail="'facilityKey' is required")
+    ranking = payload.get("ranking")
     from database.connection import get_session
-    from database.models import User as _UserModel
+    from database.models import User as _UserModel, TeamFacility
     from managers import facilitiesManager
-    sm = floosball_app.seasonManager
-    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     session = get_session()
     try:
         dbUser = session.query(_UserModel).filter_by(id=user.id).first()
         if not dbUser or dbUser.favorite_team_id != team_id:
-            raise HTTPException(status_code=400, detail="You can only vote for your favorite team")
-        facilitiesManager.castFacilityVote(session, team_id, user.id, facilityKey, season)
+            raise HTTPException(status_code=400, detail="You can only rank your favorite team's facilities")
+        facilitiesManager.setRanking(session, team_id, user.id, ranking)
         session.commit()
+        levels = {f.facility_key: f.level for f in
+                  session.query(TeamFacility).filter_by(team_id=team_id).all()}
         return build_success_response({
-            'teamId': team_id, 'season': season, 'myVote': facilityKey,
+            'teamId': team_id, 'myRanking': ranking,
+            'order': facilitiesManager.teamOrder(session, team_id, levels),
         })
     except ValueError as e:
         session.rollback()
