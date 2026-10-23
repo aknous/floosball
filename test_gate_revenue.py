@@ -16,7 +16,7 @@ from database.connection import init_db, get_session
 init_db()
 from managers import gateRevenue as G, facilitiesManager as FM
 from database.models import (User, TeamFacility, TeamTreasury, TreasuryIncome, PickEmPick,
-                             WeeklyCardBonus, ShowcaseSlot)
+                             WeeklyCardBonus, ShowcaseSlot, CurrencyTransaction)
 from constants import (GATE_PARTICIPATION_BOOST, GATE_FAN_EXPONENT, DONATION_MATCH_RATE,
                        DONATION_MATCH_CAP_SHARES)
 
@@ -59,9 +59,15 @@ s.add(PickEmPick(user_id=a, season=5, week=3, game_index=0, home_team_id=1, away
 s.add(PickEmPick(user_id=b, season=5, week=3, game_index=0, home_team_id=1, away_team_id=2,
                  picked_team_id=1, is_auto=True))
 s.add(WeeklyCardBonus(roster_id=1, user_id=a, season=5, week=3, bonus_fp=0))
+s.add(CurrencyTransaction(user_id=a, amount=3, balance_after=3, transaction_type='spectator_cheer',
+                          season=5, week=3))
+s.add(CurrencyTransaction(user_id=c, amount=3, balance_after=3, transaction_type='spectator_cheer',
+                          season=5, week=2))
 s.commit()
 act = G.participationByUser(s, [a, b, c], 5, 3)
-expect("a made picks and fielded a lineup (2); b's auto-picks don't count (0)", act == {a: 2, b: 0, c: 0})
+expect("a made picks, fielded a lineup and watched (3, capped at two by the weight); "
+       "b's auto-picks don't count; c watched LAST week, not this one", act == {a: 3, b: 0, c: 0})
+expect("watching alone counts as an activity", G.participationByUser(s, [c], 5, 2) == {c: 1})
 paid = G.accrueWeeklyGate(s, 5, 3, SU, [1, 2, 3])
 s.commit()
 expect("team 1 is paid for both its fans, weighted",

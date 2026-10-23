@@ -12,7 +12,8 @@ GATE REVENUE, every regular-season week, for each team's active fans:
     reachable without playing fantasy (G3).
   - A fan's WEIGHT is 1.0 plus a participation boost for the site's games that week,
     indexed by how many they did: manual pick-em picks (auto-picks don't count), a fielded
-    fantasy lineup, cards in the Showcase. It tops out at two activities.
+    fantasy lineup, cards in the Showcase, watching games (a completed cheer-bar segment).
+    It tops out at two activities.
   - CONCAVE in the weights, so the first fan is worth the most and 17 fans don't earn 17x.
 
 THE DONATION MATCH: the league adds DONATION_MATCH_RATE x each fan's donation (direct
@@ -83,7 +84,7 @@ def activeFansByTeam(session) -> dict:
 
 def participationByUser(session, userIds, season: int, week: int) -> dict:
     """{userId: number of the site's games they took part in this week}."""
-    from database.models import PickEmPick, WeeklyCardBonus, ShowcaseSlot
+    from database.models import PickEmPick, WeeklyCardBonus, ShowcaseSlot, CurrencyTransaction
     ids = list(userIds)
     if not ids:
         return {}
@@ -96,8 +97,15 @@ def participationByUser(session, userIds, season: int, week: int) -> dict:
         WeeklyCardBonus.week == week).distinct().all()}
     showcases = {r[0] for r in session.query(ShowcaseSlot.user_id).filter(
         ShowcaseSlot.user_id.in_(ids), ShowcaseSlot.season == season).distinct().all()}
+    # Watching: a cheer-bar segment completed this week. Every segment pays until the
+    # weekly cap, so a spectator_cheer grant this week is exactly "watched enough to
+    # finish one" (the per-user progress row is overwritten each week; the ledger isn't).
+    watchers = {r[0] for r in session.query(CurrencyTransaction.user_id).filter(
+        CurrencyTransaction.user_id.in_(ids), CurrencyTransaction.season == season,
+        CurrencyTransaction.week == week,
+        CurrencyTransaction.transaction_type == 'spectator_cheer').distinct().all()}
     for u in ids:
-        counts[u] = (u in pickers) + (u in lineups) + (u in showcases)
+        counts[u] = (u in pickers) + (u in lineups) + (u in showcases) + (u in watchers)
     return counts
 
 

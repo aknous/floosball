@@ -2219,7 +2219,8 @@ GATE_SHARES_PER_WEEK = 0.02
 GATE_FAN_EXPONENT = 0.85
 # A fan's weight: 1.0 for being active, plus a boost for taking part in the site's games
 # that week, indexed by how many of the activities they did (owner, 2026-10-22): manual
-# pick-em picks (auto-picks don't count), a fielded fantasy lineup, cards in the Showcase.
+# pick-em picks (auto-picks don't count), a fielded fantasy lineup, cards in the Showcase,
+# watching games (a completed cheer-bar segment that week; owner, 2026-10-23).
 # Tops out at two, so no single game is required and nobody has to do everything.
 GATE_PARTICIPATION_BOOST = [0.0, 0.35, 0.5]
 GATE_STADIUM_MULT = [1.0, 1.08, 1.16, 1.26, 1.38, 1.5]   # by Stadium level 0-5

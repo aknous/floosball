@@ -66,7 +66,8 @@ A fan who takes part in the site's games that week is worth more at the gate tha
   - **Pick-em:** made picks this week. **Auto-picks don't count** (owner, 2026-10-22).
   - **Fantasy:** fielded a lineup this week (a banked `WeeklyCardBonus` row for the week).
   - **Showcase:** has cards in the Showcase.
-  - Candidates to add later: the playoff bracket, award votes, the facility ranking, rallies.
+  - **Watching:** completed a cheer-bar segment this week (a `spectator_cheer` grant), added 2026-10-23 (owner). The Supporter dividend and the cheer bar stay the fan's own income; they are not redirected or matched (the dividend scales with patron rank, so matching it would favor the biggest donors). Counting watching here lets the same visit grow the team's gate.
+  - Candidates to add later: the playoff bracket, award votes, the facility ranking.
 - **The boost tops out early.** Proposal: a fan's weight is 1.0 for being active, about 1.35 with one activity and 1.5 (the maximum) with any two. One activity gets most of the effect and a second reaches the top; a third adds nothing.
 - Because the activities are weighted equally and the cap is reached with any two, **pick-em plus the Showcase earns exactly what fantasy plus anything else does.** Fantasy is one way to reach the top, never the only one.
 - The boost applies to each fan before the fan-count curve: `gate = base x (sum of fan weights)^p`.
