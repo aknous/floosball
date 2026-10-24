@@ -350,6 +350,10 @@ DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tag
 # defensive production (offense-dominant); MVP/All-Pro run off it.
 PERF_OFFENSE_WEIGHT = 0.7    # offensive-production share of the overall performance rating
 PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall performance rating
+# Offensive performance ratings are RATES (performance_rating.py). A rate over few plays is
+# shrunk toward the position's rate by this many games of the position's median volume, so
+# a two-game sample cannot outrank a full season; over a 28-game season it barely moves.
+PERF_RATE_PRIOR_GAMES = 1.0
 # Unified MVP (flat): production composite (two-way, via perfZ of the OVERALL rating)
 # + clutch WPA on each side. Defensive production lives inside perfZ now (via the
 # overall composite), so there's no separate box defValue term — only the clutch
@@ -371,11 +375,20 @@ MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch;
 # group) — the box (production) term of defValue, blended with individual
 # defensive WPA. Coverage value is invisible to the box, so CB/S lean hard on
 # ints/PBUs to capture it (and the WPA term picks up clutch coverage swings).
+# ⚠️ NO TACKLES FOR LB / CB / S (2026-10-22). The sim credits those tackles by what the
+# defense GAVE UP: the safety gets one on every run of 5+ yards and every completion of
+# 15+ (on top of the real tackler), the covering corner one on every completion against
+# him, and the linebacker is the primary tackler on most runs. Measured on prod seasons
+# 9-11, safety tackles correlated +0.81 to +0.89 with team yards allowed and made 72-83%
+# of the safety score, so the safety and linebacker DEFENSIVE RATINGS ROSE as the defense
+# got worse (+0.41 to +0.60 with yards allowed). Season 11's Straycat Doughty read a 100
+# off 568 tackles and was 3rd on the MVP ballot; without them he is 12th. Tackles for
+# loss stay (a stop at or behind the line). DE tackles measured near-neutral and stay.
 DEF_BOX_WEIGHTS = {
     'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
-    'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
-    'CB': {'passBreakups': 2.0, 'ints': 3.0, 'tackles': 0.5, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.0},
-    'S':  {'ints': 2.5, 'passBreakups': 2.0, 'tackles': 1.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.5},
+    'LB': {'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
+    'CB': {'passBreakups': 2.0, 'ints': 3.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.0},
+    'S':  {'ints': 2.5, 'passBreakups': 2.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.5},
 }
 
 # Momentum system
@@ -3903,10 +3916,46 @@ TRADE_MIDSEASON_SIGNING_TERM = 1
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
 # an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.
-# Most-voted option wins (no quorum); the winner applies immediately and drifts across
-# seasons until reverted. The engine (game_rules.applyRuleChange/revertRule) is safe:
-# only floosball_game.py reads the mutable fields (WP/pick-em/MVP are insulated).
+# Most-voted option wins (no quorum); the winner applies immediately and lasts the rest of
+# the season (`maybeResetRuleOverridesForSeason` returns the rulebook to standard when a new
+# season starts). The engine (game_rules.applyRuleChange/revertRule) is safe: only
+# floosball_game.py reads the mutable fields (WP/pick-em/MVP are insulated).
+# ⚠️ READ IT THROUGH `ruleVotesEnabled()`, never the constant: the Admin panel's
+# `rule_votes_enabled` app_setting overrides it live (owner, 2026-10-23: run the league in
+# standard for a while). Criticality's per-game chaos rules do NOT read this switch.
 RULE_VOTE_ENABLED = True
+
+
+def ruleVotesEnabled(session=None) -> bool:
+    """THE single reading of whether Cores rule-change votes run: the constant, overridden
+    live by the `rule_votes_enabled` app_setting the Admin panel writes.
+
+    Off means no new ballot opens, an open one closes with no rule change at the next
+    resolve point, and the API reports no vote open. ⚠️ It does NOT touch Criticality's
+    chaos rules (`ruleVoteManager.randomChaosRules`), which keep randomizing each
+    Criticality game, and it does not revert rules already voted in this season (the
+    rulebook returns to standard at the next season start).
+
+    Same shape as `tradingEnabled`: an ABSENT row means "use the constant" (no row is
+    seeded, so a deploy can change the default), and it fails open to the constant.
+    `session` is the caller's, to avoid a second session against SQLite's write lock.
+    """
+    try:
+        from database.models import AppSetting
+        own = session is None
+        if own:
+            from database.connection import get_session
+            session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key='rule_votes_enabled').first()
+            if row is None or row.value is None or row.value == '':
+                return bool(RULE_VOTE_ENABLED)
+            return str(row.value).lower() == 'true'
+        finally:
+            if own:
+                session.close()
+    except Exception:
+        return bool(RULE_VOTE_ENABLED)
 # Fire chance keyed to consecutive prior game-days THIS season that didn't fire
 # (0 misses -> 25%, ramping to a guaranteed fire once three in a row have missed).
 RULE_VOTE_RAMP = [0.25, 0.50, 0.75, 1.0]
@@ -4411,21 +4460,32 @@ DRIVE_CLOCK_PRESETS = [
     {"key": "dc_70s_series", "label": "70 seconds, resets each first down",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
                "driveClockReset": "series", "driveClockLimit": 70}},
-    {"key": "dc_8plays_possession", "label": "8 plays, whole drive",
+    {"key": "dc_8plays_possession", "label": "8 plays, whole drive (first downs and sideline goals don't count)",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
                "driveClockReset": "possession", "driveClockLimit": 8}},
 ]
+# A PLAYS drive clock does not count a snap that gains a first down or makes a sideline
+# goal (`Game._driveClockFreeSnaps`, owner 2026-10-23). Measured with chunk-pace play
+# calling, 100 games x 2 seeds at 8 plays: field goals 72% -> 49-52% of offensive scores
+# (no drive clock ~40%), TDs 1.6 -> 2.5 per team-game, clock expiries 0.41 -> 0.15. A
+# behavior of the plays unit rather than a rule field, so a persisted "8 plays" override
+# picks it up without a re-vote.
+DRIVE_CLOCK_FREE_SNAPS = True
 # Wire the presets into the vote candidate (declared above with presets=None to
 # avoid a forward-reference).
 RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 
-# Drive-clock SHOT SELECTION (play-caller awareness): as the possession clock winds
-# down the offense must gain yards FAST, not just snap fast, so bias toward chunk
-# plays. `_applyDriveClockMods` keys off yards-needed-per-remaining-snap.
+# Drive-clock SHOT SELECTION (play-caller awareness): the offense plans the drive
+# around the pace the clock demands, yards still needed / snaps left
+# (`_applyDriveClockMods`). It used to react only with 3 or fewer snaps left, so a drive
+# chipped away at the normal pace (~6 yds a snap), ran out of snaps around the opponent's
+# 25 and kicked: under "8 plays, whole drive" 75% of scores were field goals.
 DRIVE_CLOCK_SECS_PER_SNAP = 18.0        # est. seconds/snap in hurry-up (12s huddle + play)
-DRIVE_CLOCK_PRESSURE_SNAPS = 3.0        # only bias once <= this many snaps of budget remain
-DRIVE_CLOCK_CHUNK_THRESHOLD = 8.0       # yds/snap below which checkdowns/runs still suffice
-DRIVE_CLOCK_CHUNK_CEILING = 20.0        # yds/snap at which urgency saturates (full bias)
+# What the normal mix gains per snap: ~40% runs at ~4.5 a carry, ~60% throws at ~7.0 a
+# dropback. A pace above this cannot be kept by chipping away.
+DRIVE_CLOCK_NORMAL_YDS_PER_SNAP = 6.0
+# Twice the normal pace: only chunk plays get there, so the lean is full.
+DRIVE_CLOCK_CHUNK_CEILING = 12.0
 
 # Drive-clock behavior thresholds are FRACTIONS of the configured seconds-limit, so
 # they scale to any preset instead of being hardcoded for the 120s default. Under a

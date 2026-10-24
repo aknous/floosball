@@ -1,6 +1,6 @@
 """Regression: every card-sizing table names keys the card actually mints.
 
-_BAND_TRIM, _DIAMOND_SIZE and _BAND_LIFT scale a card's payout keys at mint by name. A
+_BAND_TRIM, _DIAMOND_SIZE, _BAND_LIFT and _SYNERGY_LIFT scale a card's payout keys at mint by name. A
 misspelled or renamed key is not an error, it is a silent no-op: the card simply keeps its
 old size while the table claims otherwise. This mints every listed card at every position
 it can take and checks each named key is present and numeric (or a tier list).
@@ -38,6 +38,26 @@ class SizingTablesNameRealKeys(unittest.TestCase):
 
     def testBandLift(self):
         self._check(ce._BAND_LIFT, lambda entry: entry[1].keys())
+
+    def testSynergyLift(self):
+        self._check(ce._SYNERGY_LIFT, lambda entry: entry[1].keys())
+
+    def testSynergyLiftLands(self):
+        """The lift reaches the minted card, and the text quotes the lifted number."""
+        saved = dict(ce._SYNERGY_LIFT)
+        try:
+            lifted = ce.buildEffectConfig("diamond", 92, 1, forceEffect="catalyst")
+            ce._SYNERGY_LIFT.clear()
+            plain = ce.buildEffectConfig("diamond", 92, 1, forceEffect="catalyst")
+        finally:
+            ce._SYNERGY_LIFT.update(saved)
+        factor = saved["catalyst"][0]
+        self.assertAlmostEqual(lifted["primary"]["perFpPct"],
+                               plain["primary"]["perFpPct"] * factor, places=2)
+        shown = lifted["primary"]["perFpPctDisplay"]
+        self.assertAlmostEqual(shown, round(lifted["primary"]["perFpPct"] * 100, 1))
+        self.assertIn(f"+{shown}%", lifted["detail"])
+        self.assertIn(f"+{lifted['primary']['maxBoostDisplay']}%", lifted["detail"])
 
     def testLiftFactorsAreCapped(self):
         """A factor over 4x turns a rare week into a jackpot rather than lifting the card."""

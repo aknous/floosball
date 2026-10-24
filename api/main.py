@@ -1803,6 +1803,19 @@ def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
     return out
 
 
+def _openRuleVote(repo, season, session=None):
+    """The season's open rule-change ballot, or None while rule votes are switched off.
+
+    ⚠️ Every reader of the open ballot goes through here (status, ballot, cast, withdraw,
+    the Discord reminder list), so switching votes off on the Admin panel hides an
+    already-open ballot at once instead of at the next resolve, when the sim closes it.
+    """
+    from constants import ruleVotesEnabled
+    if not ruleVotesEnabled(session):
+        return None
+    return repo.getOpenWindow(season)
+
+
 @app.get("/api/rules/vote/status")
 def get_rule_vote_status():
     """Is a Cores rule-change vote open? Drives the nav badge + the dashboard popup."""
@@ -1813,7 +1826,7 @@ def get_rule_vote_status():
     from database.repositories.rule_vote_repository import RuleVoteRepository
     session = get_session()
     try:
-        w = RuleVoteRepository(session).getOpenWindow(season)
+        w = _openRuleVote(RuleVoteRepository(session), season, session)
         if not w:
             return build_success_response({"open": False, "season": season})
         return build_success_response({
@@ -1842,7 +1855,7 @@ def get_rule_vote_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
     session = get_session()
     try:
         repo = RuleVoteRepository(session)
-        w = repo.getOpenWindow(season)
+        w = _openRuleVote(repo, season, session)
         if not w:
             return build_success_response({"open": False, "season": season})
         options = _ruleVoteOptions(w, _liveGameRules())
@@ -1890,7 +1903,7 @@ def cast_rule_vote(req: _RuleVoteRequest, user: _User = Depends(_getCurrentUser)
     session = get_session()
     try:
         repo = RuleVoteRepository(session)
-        w = repo.getOpenWindow(season)
+        w = _openRuleVote(repo, season, session)
         if not w:
             raise HTTPException(400, "No rule-change vote is open right now")
         if not _isVotingOpen(w):
@@ -1941,7 +1954,7 @@ def withdraw_rule_vote(user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         repo = RuleVoteRepository(session)
-        w = repo.getOpenWindow(season)
+        w = _openRuleVote(repo, season, session)
         if not w:
             raise HTTPException(400, "No rule-change vote is open right now")
         if not _isVotingOpen(w):
@@ -6188,6 +6201,10 @@ async def get_app_settings():
         # happened to be live at the moment the row was written.
         from constants import TRADING_ENABLED as _tradingDefault
         settings.setdefault('trading_enabled', bool(_tradingDefault))
+        # Same rule (an absent row means the constant), read through the one function the
+        # sim uses so the admin toggle shows exactly what is in force.
+        from constants import ruleVotesEnabled
+        settings['rule_votes_enabled'] = ruleVotesEnabled(session)
         return settings
     finally:
         session.close()
@@ -6204,7 +6221,7 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text',
                'halftime_show_url', 'halftime_show_pause_seconds',
                'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled', 'anomaly_intensity',
-               'trading_enabled',
+               'trading_enabled', 'rule_votes_enabled',
                'awakened_involve_qb', 'awakened_involve_rb', 'awakened_involve_wr', 'awakened_involve_te',
                'awakened_involve_k', 'awakened_def_fire_chance'}
     session = get_session()
@@ -6268,6 +6285,67 @@ def _seasonRolloverStatus() -> Dict[str, Any]:
         # When the next season would roll over on its own (scheduled mode).
         'usualRollover': TimingManager._nextSeasonAnchorUtc().isoformat() + 'Z',
     }
+
+
+class _AdminRuleRequest(BaseModel):
+    key: str
+    value: Optional[Any] = None
+    preset: Optional[str] = None
+
+
+def _adminRulesPayload() -> Dict[str, Any]:
+    import rule_admin
+    from constants import ruleVotesEnabled
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
+    return {
+        "season": season,
+        "rules": rule_admin.describeRules(_liveGameRules()),
+        "ruleVotesEnabled": ruleVotesEnabled(),
+        "gamesLive": _gamesLive(),
+    }
+
+
+def _gamesLive() -> bool:
+    """A game is being played right now. Every game holds a reference to the season's
+    shared ruleset, so a change now would land mid-game."""
+    sm = floosball_app.seasonManager if floosball_app else None
+    games = (sm.currentSeason.activeGames if sm and sm.currentSeason else None) or []
+    return any(getattr(g, 'status', None) == FloosGame.GameStatus.Active for g in games)
+
+
+@app.get("/api/admin/rules")
+def admin_get_rules(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: the league's rule slate (the Rulebook's rules), live value against standard."""
+    return build_success_response(_adminRulesPayload())
+
+
+@app.put("/api/admin/rules")
+def admin_set_rule(req: _AdminRuleRequest, _auth: None = Depends(_checkAdminAuth)):
+    """Admin: set one rule (scalar `value`, or `preset` for Game Format / Drive Clock).
+    Setting a rule to standard reverts it. Refused while a game is being played. Lasts
+    until the next season starts, like a voted rule; publishes no news."""
+    import rule_admin
+    if _gamesLive():
+        raise HTTPException(409, "Games are being played. Change rules between slates.")
+    try:
+        touched = rule_admin.setRule(_liveGameRules(), req.key, value=req.value, preset=req.preset)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    logger.info(f"Admin rule change: {req.key} -> {req.preset if req.preset is not None else req.value!r} "
+                f"(fields {touched})")
+    return build_success_response({**_adminRulesPayload(), "touched": touched})
+
+
+@app.post("/api/admin/rules/reset")
+def admin_reset_rules(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: every rule back to standard. Refused while a game is being played."""
+    import rule_admin
+    if _gamesLive():
+        raise HTTPException(409, "Games are being played. Change rules between slates.")
+    reverted = rule_admin.resetAllRules(_liveGameRules())
+    logger.info(f"Admin rule reset: reverted {reverted}")
+    return build_success_response({**_adminRulesPayload(), "touched": reverted})
 
 
 @app.get("/api/admin/season-rollover")
@@ -15610,7 +15688,7 @@ def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
         discordMap = {u.id: u.discord_id for u in reminderUsers}
 
         votes, voters = [], {}
-        window = RuleVoteRepository(session).getOpenWindow(season) if season else None
+        window = _openRuleVote(RuleVoteRepository(session), season, session) if season else None
         if _isVotingOpen(window):
             key = f"rule:{window.id}"
             core = _coreDisplayName(window.core)
