@@ -70,6 +70,7 @@ class Stub:
     def _getPlayerTerm(s, p): return 3
     def promotionTerm(s, p): return 2
     def _currentSeasonNumber(s): return 0
+    _promoteProspectIntoSlot = PlayerManager._promoteProspectIntoSlot
 
 
 def _fill(prospects, fas):

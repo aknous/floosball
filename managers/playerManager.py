@@ -3864,8 +3864,11 @@ class PlayerManager:
                     # at every open position. Generate a replacement FA into the
                     # working lists and retry so the draft can never leave a hole.
                     # (rosterComplete=False alone is the normal mid-draft state —
-                    # only an empty pickEvents means nothing was signable.)
-                    if not rosterComplete and not pickEvents:
+                    # only a turn that signed nobody means nothing was signable.
+                    # Promotions don't count: they no longer use the pick, so a
+                    # turn can promote a prospect and still find no free agent.)
+                    signedAny = any(not ev.get('isPromotion') for ev in pickEvents)
+                    if not rosterComplete and not signedAny:
                         slotToPos = {'qb': 1, 'rb': 2, 'wr1': 3, 'wr2': 3, 'te': 4, 'k': 5}
                         posToList = {1: freeAgentQbList, 2: freeAgentRbList, 3: freeAgentWrList,
                                      4: freeAgentTeList, 5: freeAgentKList}
@@ -5703,6 +5706,9 @@ class PlayerManager:
           2. Pick the highest-rated overall (by playerRating).
           3. If it's an FA, sign them. If it's a prospect, promote them.
 
+        Prospects who win their slot are promoted BEFORE the pick and do not use
+        it (owner, 2026-10-24), so one turn can promote and still sign.
+
         This makes prospect auto-promotion conditional on actually being the
         top player on the board rather than firing eagerly above a fixed
         rating floor — the user's "best player available" intent.
@@ -5865,6 +5871,38 @@ class PlayerManager:
                         getattr(best, 'prospect_seasons', 0) or 0)
                     windowTerms[(slot, getattr(bestFa, 'id', None))] = (max(1, left), best)
             return cands
+
+        # ⚠️ A PROMOTION DOES NOT COST THE PICK (owner, 2026-10-24: "it does feel a bit
+        # counterintuitive that a team will just promote a prospect instead of signing a FA
+        # on their turn"). The prospect is already the team's and nobody else can take him,
+        # so the turn is not what decides it. Each open slot where the team has a prospect
+        # is settled first, against the best free agent on its board right now (the same
+        # comparison `_gather` makes), and the team then makes its ordinary pick from what
+        # is left. Before, the promotion WAS the pick: a second open slot waited a round
+        # while the free agents it wanted went to other teams.
+        while True:
+            promotedAny = False
+            for posVal, slot in list(firstOpenSlotByPos.items()):
+                posProspects = [p for p in prospects if p.position.value == posVal]
+                if not posProspects:
+                    continue
+                best = max(posProspects, key=_seasonRating)
+                bestFa = _bestFaFor(POS_TO_FALIST.get(posVal, []), True, True)
+                if not _prospectTakes(best, bestFa):
+                    continue
+                self._promoteProspectIntoSlot(team, best, slot, freeAgencyDict,
+                                              leagueHighlights, eventLog)
+                promotedAny = True
+            if not promotedAny:
+                break
+            # WR has two slots: the next open one may take a second prospect. Updated in
+            # place because `_gather` and `_upgradeCandidates` close over this dict.
+            firstOpenSlotByPos.clear()
+            for posVal, slots in POS_TO_SLOTS.items():
+                for s in slots:
+                    if team.rosterDict.get(s) is None:
+                        firstOpenSlotByPos[posVal] = s
+                        break
 
         # Widen the search one rule at a time rather than leaving a slot empty:
         # this team's board, then the board without the release block, then the
@@ -6065,54 +6103,61 @@ class PlayerManager:
 
             logger.debug(f"{team.name} filled {slot} with FA {selectedPlayer.name}")
         else:
-            # kind == 'prospect' — promote the chosen prospect into the slot.
-            promoted = candidate
-            promotedTerm = self.promotionTerm(promoted)
-            promoted.is_prospect = False
-            promoted.onProspectContract = True
-            # prospect_seasons is KEPT: it is his pipeline seasons served, which the
-            # development clock counts (`PlayerDevelopment.careerSeasons`).
-            promoted.drafting_team_id = None
-            promoted.seasonsPlayed = 0
-            promoted.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
-            promoted.team = team
-            team.rosterDict[slot] = promoted
-            if promoted in team.prospects:
-                team.prospects.remove(promoted)
-            promoted.term = promotedTerm
-            promoted.termRemaining = promotedTerm
-            # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
-            # later in this same offseason — including two rounds further into this very
-            # draft, which `_draftFilledSlots` does not prevent because that set is
-            # stamped by FA SIGNINGS only.
-            stampPromotion(promoted, self._currentSeasonNumber())
-
-            freeAgencyDict.setdefault(team.name, []).append({
-                'action': 'promote', 'player': promoted.name,
-                'position': promoted.position.name, 'slot': slot,
-            })
-            leagueHighlights.insert(0, {
-                'event': {'text': f"{team.name} promoted prospect {promoted.name} ({promoted.position.name}) to starter"}
-            })
-
-            if eventLog is not None:
-                eventLog.append({
-                    'type': 'pick',
-                    'team': team.name,
-                    'teamAbbr': teamAbbr,
-                    'playerId': getattr(promoted, 'id', None),
-                    'player': promoted.name,
-                    'position': promoted.position.name,
-                    'rating': round(promoted.playerRating, 1),
-                    'tier': promoted.playerTier.name,
-                    'isPromotion': True,
-                    'slot': slot,
-                })
-
-            logger.debug(f"{team.name} filled {slot} with promoted prospect {promoted.name}")
+            # kind == 'prospect'. The pass above promotes every prospect who wins his
+            # slot before the pick is made, so this is only a fallback.
+            self._promoteProspectIntoSlot(team, candidate, slot, freeAgencyDict,
+                                          leagueHighlights, eventLog)
         # Check if roster is now complete
         remaining = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k') if team.rosterDict.get(k) is None]
         return len(remaining) == 0
+
+    def _promoteProspectIntoSlot(self, team, promoted, slot, freeAgencyDict,
+                                 leagueHighlights, eventLog=None) -> None:
+        """Promote one of this team's prospects into an open slot during the FA draft."""
+        teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+        promotedTerm = self.promotionTerm(promoted)
+        promoted.is_prospect = False
+        promoted.onProspectContract = True
+        # prospect_seasons is KEPT: it is his pipeline seasons served, which the
+        # development clock counts (`PlayerDevelopment.careerSeasons`).
+        promoted.drafting_team_id = None
+        promoted.seasonsPlayed = 0
+        promoted.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
+        promoted.team = team
+        team.rosterDict[slot] = promoted
+        if promoted in team.prospects:
+            team.prospects.remove(promoted)
+        promoted.term = promotedTerm
+        promoted.termRemaining = promotedTerm
+        # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
+        # later in this same offseason — including two rounds further into this very
+        # draft, which `_draftFilledSlots` does not prevent because that set is
+        # stamped by FA SIGNINGS only.
+        stampPromotion(promoted, self._currentSeasonNumber())
+
+        freeAgencyDict.setdefault(team.name, []).append({
+            'action': 'promote', 'player': promoted.name,
+            'position': promoted.position.name, 'slot': slot,
+        })
+        leagueHighlights.insert(0, {
+            'event': {'text': f"{team.name} promoted prospect {promoted.name} ({promoted.position.name}) to starter"}
+        })
+
+        if eventLog is not None:
+            eventLog.append({
+                'type': 'pick',
+                'team': team.name,
+                'teamAbbr': teamAbbr,
+                'playerId': getattr(promoted, 'id', None),
+                'player': promoted.name,
+                'position': promoted.position.name,
+                'rating': round(promoted.playerRating, 1),
+                'tier': promoted.playerTier.name,
+                'isPromotion': True,
+                'slot': slot,
+            })
+
+        logger.debug(f"{team.name} filled {slot} with promoted prospect {promoted.name}")
 
     def _currentSeasonNumber(self) -> int:
         """The season the sim is on, or 0 if it cannot be read.

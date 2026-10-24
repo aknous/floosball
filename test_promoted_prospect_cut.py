@@ -77,10 +77,15 @@ def _funcSource(path, name):
 
 PROMOTERS = [
     ('managers/seasonManager.py', '_promoteProspectsAutonomously'),
-    ('managers/playerManager.py', '_attemptRosterFill'),
+    # The FA draft promotes through one helper (`_attemptRosterFill` calls it before the
+    # pick and as a fallback for the pick itself).
+    ('managers/playerManager.py', '_promoteProspectIntoSlot'),
 ]
 for path, fn in PROMOTERS:
     expect(f"{fn} stamps the promotion", 'stampPromotion(' in _funcSource(path, fn))
+expect("_attemptRosterFill promotes only through the stamping helper",
+       '_promoteProspectIntoSlot(' in _funcSource('managers/playerManager.py', '_attemptRosterFill')
+       and 'is_prospect = False' not in _funcSource('managers/playerManager.py', '_attemptRosterFill'))
 
 
 # ── every cut site consults it ──────────────────────────────────────────────
