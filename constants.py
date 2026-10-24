@@ -3916,10 +3916,46 @@ TRADE_MIDSEASON_SIGNING_TERM = 1
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
 # an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.
-# Most-voted option wins (no quorum); the winner applies immediately and drifts across
-# seasons until reverted. The engine (game_rules.applyRuleChange/revertRule) is safe:
-# only floosball_game.py reads the mutable fields (WP/pick-em/MVP are insulated).
+# Most-voted option wins (no quorum); the winner applies immediately and lasts the rest of
+# the season (`maybeResetRuleOverridesForSeason` returns the rulebook to standard when a new
+# season starts). The engine (game_rules.applyRuleChange/revertRule) is safe: only
+# floosball_game.py reads the mutable fields (WP/pick-em/MVP are insulated).
+# ⚠️ READ IT THROUGH `ruleVotesEnabled()`, never the constant: the Admin panel's
+# `rule_votes_enabled` app_setting overrides it live (owner, 2026-10-23: run the league in
+# standard for a while). Criticality's per-game chaos rules do NOT read this switch.
 RULE_VOTE_ENABLED = True
+
+
+def ruleVotesEnabled(session=None) -> bool:
+    """THE single reading of whether Cores rule-change votes run: the constant, overridden
+    live by the `rule_votes_enabled` app_setting the Admin panel writes.
+
+    Off means no new ballot opens, an open one closes with no rule change at the next
+    resolve point, and the API reports no vote open. ⚠️ It does NOT touch Criticality's
+    chaos rules (`ruleVoteManager.randomChaosRules`), which keep randomizing each
+    Criticality game, and it does not revert rules already voted in this season (the
+    rulebook returns to standard at the next season start).
+
+    Same shape as `tradingEnabled`: an ABSENT row means "use the constant" (no row is
+    seeded, so a deploy can change the default), and it fails open to the constant.
+    `session` is the caller's, to avoid a second session against SQLite's write lock.
+    """
+    try:
+        from database.models import AppSetting
+        own = session is None
+        if own:
+            from database.connection import get_session
+            session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key='rule_votes_enabled').first()
+            if row is None or row.value is None or row.value == '':
+                return bool(RULE_VOTE_ENABLED)
+            return str(row.value).lower() == 'true'
+        finally:
+            if own:
+                session.close()
+    except Exception:
+        return bool(RULE_VOTE_ENABLED)
 # Fire chance keyed to consecutive prior game-days THIS season that didn't fire
 # (0 misses -> 25%, ramping to a guaranteed fire once three in a row have missed).
 RULE_VOTE_RAMP = [0.25, 0.50, 0.75, 1.0]
