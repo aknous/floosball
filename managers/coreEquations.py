@@ -10,15 +10,15 @@ Inputs (same three across all equations):
   M   = 1 + Σ(Mᵢ − 1) — the bonus-additive aggregate multiplier (≥ 1.0)
 
 ⚠️ EACH CORE AMPLIFIES A DIFFERENT TERM, BY THE SAME K (owner, 2026-10-07):
-  Pyre       FPx            (R + ΣF) × (1 + K·(ΣM − 1))
-  Cassian    card flat FP   (R + K·ΣF) × ΣM
-  Halverson  roster FP      (K·R + ΣF) × ΣM
-  Aris       all three      (∛K·R + ∛K·ΣF) × (1 + ∛K·(ΣM − 1))
+  Pyre       FPx            (R + ΣF) × (1 + K×(ΣM − 1))
+  Cassian    card flat FP   (R + K×ΣF) × ΣM
+  Halverson  roster FP      (K×R + ΣF) × ΣM
+  Aris       all three      (∛K×R + ∛K×ΣF) × (1 + ∛K×(ΣM − 1))
 K = CRITICALITY_AMPLIFICATION. A build specialized in a Core's term gains up to K
 times its normal week. Aris is the week for everyone: every build gains between ∛K
 (no FPx) and K^(2/3) (FPx-heavy), 1.6x-2.5x at K=4.
 
-They used to be (R+F)·e^M (Pyre), Γ(M+1) (Aris), M·(M+1) (Cassian) and M² (Halverson),
+They used to be (R+F)×e^M (Pyre), Γ(M+1) (Aris), M×(M+1) (Cassian) and M² (Halverson),
 which ALL amplified FPx, three of them super-linearly. Reported by a player and
 confirmed on the prod snapshot: Criticality weeks (1-5 a season) supplied 55-99% of a
 top-3 finisher's season total, one Pyre week ran 335x a normal week, and the
@@ -71,7 +71,7 @@ def applyCoreEquation(
         boosted = 1.0 + K * (M - 1.0)
         out = (R + F) * boosted
         eqn = (
-            f"(R + ΣF) × (1 + {K:g}·(ΣM − 1))  "
+            f"(R + ΣF) × (1 + {K:g}×(ΣM − 1))  "
             f"= ({R:.0f} + {F:.0f}) × {boosted:.2f}  "
             f"= {out:.0f}"
         )
@@ -80,7 +80,7 @@ def applyCoreEquation(
     if coreKey == 'cassian':
         out = (R + K * F) * M
         eqn = (
-            f"(R + {K:g}·ΣF) × ΣM  "
+            f"(R + {K:g}×ΣF) × ΣM  "
             f"= ({R:.0f} + {K:g}×{F:.0f}) × {M:.2f}  "
             f"= {out:.0f}"
         )
@@ -89,7 +89,7 @@ def applyCoreEquation(
     if coreKey == 'halverson':
         out = (K * R + F) * M
         eqn = (
-            f"({K:g}·R + ΣF) × ΣM  "
+            f"({K:g}×R + ΣF) × ΣM  "
             f"= ({K:g}×{R:.0f} + {F:.0f}) × {M:.2f}  "
             f"= {out:.0f}"
         )
@@ -100,7 +100,7 @@ def applyCoreEquation(
         boosted = 1.0 + k * (M - 1.0)
         out = k * (R + F) * boosted
         eqn = (
-            f"∛{K:g}·(R + ΣF) × (1 + ∛{K:g}·(ΣM − 1))  "
+            f"∛{K:g}×(R + ΣF) × (1 + ∛{K:g}×(ΣM − 1))  "
             f"= {k:.2f}×({R:.0f} + {F:.0f}) × {boosted:.2f}  "
             f"= {out:.0f}"
         )
@@ -157,13 +157,13 @@ def equationTemplate(coreKey: Optional[str]) -> str:
     """
     from constants import CRITICALITY_AMPLIFICATION as K
     if coreKey == 'pyre':
-        return f"(R + ΣF) × (1 + {K:g}·(ΣM − 1))"
+        return f"(R + ΣF) × (1 + {K:g}×(ΣM − 1))"
     if coreKey == 'cassian':
-        return f"(R + {K:g}·ΣF) × ΣM"
+        return f"(R + {K:g}×ΣF) × ΣM"
     if coreKey == 'halverson':
-        return f"({K:g}·R + ΣF) × ΣM"
+        return f"({K:g}×R + ΣF) × ΣM"
     if coreKey == 'aris':
-        return f"∛{K:g}·(R + ΣF) × (1 + ∛{K:g}·(ΣM − 1))"
+        return f"∛{K:g}×(R + ΣF) × (1 + ∛{K:g}×(ΣM − 1))"
     return "(R + ΣF) × ΣM"
 
 

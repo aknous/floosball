@@ -725,7 +725,7 @@ class InningsFormat(GameFormat):
                 # (batting team made its top conversion and keeps batting — no try spent).
                 try:
                     _ev = {
-                        'text': f"{giver.abbr} · Try extended!",
+                        'text': f"{giver.abbr}: Try extended!",
                         '_type': 'inning',
                         'quarter': getattr(game, 'currentQuarter', 1),
                         'timeRemaining': '',
@@ -763,7 +763,7 @@ class InningsFormat(GameFormat):
                 _bat = game.homeTeam if game._inningsHalf == 'bottom' else game.awayTeam
                 _lbl = ('Bottom' if game._inningsHalf == 'bottom' else 'Top') + f" {game._inningsNumber}"
                 _ev = {
-                    'text': f"{_lbl} · {_bat.abbr} up",
+                    'text': f"{_lbl}, {_bat.abbr} up",
                     '_type': 'inning',
                     'quarter': game.currentQuarter,
                     'timeRemaining': '',

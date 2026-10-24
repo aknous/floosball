@@ -5127,9 +5127,9 @@ def _computeAdvantage(primary, ctx, cardPlayerId, eqId):
     """
     chanceCount = ctx.chanceCardCount
     if chanceCount > 0:
-        eq = f"Active · {chanceCount} chance card{'s' if chanceCount != 1 else ''} rolling with advantage"
+        eq = f"Active, {chanceCount} chance card{'s' if chanceCount != 1 else ''} rolling with advantage"
     else:
-        eq = "No chance cards equipped — dormant"
+        eq = "Dormant: no chance cards equipped"
     return EffectResult(equation=eq)
 
 
@@ -5141,7 +5141,7 @@ def _computeCatalyst(primary, ctx, cardPlayerId, eqId):
     baseFloobits = primary.get("baseFloobits", 3)
     playerFP = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
     boost = catalystJackpotBoost(primary, playerFP)
-    eq = f"{playerFP:.1f} FP · chance jackpots +{boost:.0%} · {baseFloobits}F"
+    eq = f"{playerFP:.1f} FP, chance jackpots +{boost:.0%}, {baseFloobits}F"
     return EffectResult(floobits=baseFloobits, equation=eq)
 
 

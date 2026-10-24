@@ -1,6 +1,6 @@
 """Innings batting-change / try-extended markers must reach the WEBSOCKET.
 
-Reported: "Bottom 4 · PHI up" and similar innings markers don't always arrive over
+Reported: "Bottom 4, PHI up" and similar innings markers don't always arrive over
 the socket — closing and reopening the game (which refetches the feed over REST)
 is what makes them show up.
 
