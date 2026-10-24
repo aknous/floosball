@@ -10723,7 +10723,7 @@ class Game:
                             self._inningsMarkerEvent = None
                             if not _marked:
                                 nextTryEvent = {
-                                    'text': f'{self.offensiveTeam.abbr} · next try',
+                                    'text': f'Next try: {self.offensiveTeam.abbr}',
                                     '_type': 'inning',
                                     'quarter': self.currentQuarter,
                                     'timeRemaining': '',
@@ -17479,7 +17479,7 @@ class Play():
         self.homeAbbr = game.homeTeam.abbr
         self.awayAbbr = game.awayTeam.abbr
         self.quarter = game.currentQuarter
-        # Innings: stamp the at-bat context so the play row can show "Top 2 · Try 1"
+        # Innings: stamp the at-bat context so the play row can show "Top 2, Try 1"
         # instead of the meaningless quarter/clock (the clock loop is inert). None off
         # innings, so no effect on other formats.
         if getattr(game.format, 'key', '') == 'innings':
@@ -17492,10 +17492,10 @@ class Play():
             self.inningHalf = None
             self.inningTry = None
         # Frames: stamp the frame number + time remaining IN the frame (10-min frames don't
-        # line up with 15-min quarters), so the play row shows "Frame 2 · 7:30" not a
+        # line up with 15-min quarters), so the play row shows "Frame 2 7:30" not a
         # quarter. None off frames — and None in OT, which is standard points-decided
         # overtime, not a frame (elapsed caps at regulation there, so this would otherwise
-        # stamp every OT play as "Frame 6 · 10:00"). OT plays fall back to the quarter/OT row.
+        # stamp every OT play as "Frame 6 10:00"). OT plays fall back to the quarter/OT row.
         if getattr(game.format, 'key', '') == 'frames' and game.currentQuarter < 5:
             try:
                 fmt = game.format
@@ -17504,7 +17504,7 @@ class Play():
                 elapsed = fmt._elapsed(game)
                 # The frame the game is IN (`_frameIndex`), not the one elapsed time points
                 # at: a conversion after a touchdown on the frame's buzzer belongs to the
-                # frame that touchdown ended, and read "Frame 2 · 10:00" by elapsed time.
+                # frame that touchdown ended, and read "Frame 2 10:00" by elapsed time.
                 self.frame = min(n, int(getattr(game, '_frameIndex', 0)) + 1) if frameLen else 1
                 # Elapsed at which THIS frame ends — lets stampFrameClock recompute the time
                 # LEFT in the frame the play occurred in after the play burns the clock, so the
