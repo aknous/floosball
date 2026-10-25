@@ -60,10 +60,13 @@ class SharpshooterIsPrecision(unittest.TestCase):
     def testItMultipliesCompletionsForAQbCard(self):
         cadence = card(1, "cadence", 101, QB, edition="metallic", rating=85)
         alone = run([cadence], {101: QB_LINE})["cadence"].totalFP
-        withIt = run([cadence, card(2, "sharpshooter", 102, RB)],
+        sharp = card(2, "sharpshooter", 102, RB)
+        fgMult = sharp.user_card.card_template.effect_config["primary"]["fgMult"]
+        withIt = run([cadence, sharp],
                      {101: QB_LINE, 102: {"fantasyPoints": 25}})["cadence"].totalFP
         self.assertGreater(alone, 0)
-        self.assertAlmostEqual(withIt, alone * 3, delta=1.0)
+        self.assertGreater(fgMult, 3.0)   # the 3x precision base, then the synergy lift
+        self.assertAlmostEqual(withIt, alone * fgMult, delta=1.5)
 
     def testItCountsEveryAccuracyStat(self):
         stats = {cat: set(fields) for cat, fields in cec.SHARPSHOOTER_STATS}
@@ -168,7 +171,15 @@ class DiamondSizing(unittest.TestCase):
     def testTheRunawaysAreTrimmedAndTheWeakLifted(self):
         def p(e):
             return ce.buildEffectConfig("diamond", 92, QB, forceEffect=e)["primary"]
-        self.assertLess(p("doubler")["tdMult"], 2.0)
+        # Doubler was trimmed here (0.71) and then lifted again by _SYNERGY_LIFT (next
+        # season, a hand built around it must beat Bizarro); check the trim is still the
+        # first step by minting without the lift.
+        saved = dict(ce._SYNERGY_LIFT)
+        try:
+            ce._SYNERGY_LIFT.clear()
+            self.assertLess(p("doubler")["tdMult"], 2.0)
+        finally:
+            ce._SYNERGY_LIFT.update(saved)
         self.assertGreater(p("conductor")["boostPct"], 40)
         for e, (factor, _) in ce._DIAMOND_SIZE.items():
             self.assertEqual(ce.EFFECT_EDITION_TIER[e], "diamond", e)

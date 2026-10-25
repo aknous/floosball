@@ -16,6 +16,12 @@ the drive's last whatever the down says. Before, only the real final down reache
 Now `_isFinalDown` sends that snap to the fourth-down caller with the goal line as the
 yards to go (`_decisionYardsToGo`), so the go / kick / punt model decides it.
 
+⚠️ THIS FILE PINS THE RULE WITH FREE SNAPS OFF (`DRIVE_CLOCK_FREE_SNAPS`). Since
+2026-10-23 a plays clock does not count a snap that gains a first down or makes a sideline
+goal, so a conversion saves the drive and the last snap plays to the marker; that rule is
+tested in `test_drive_clock_free_snaps.py`. Everything here still describes the clock
+with the switch off.
+
 Run: .venv/bin/python -m pytest -q test_drive_clock_last_snap.py
 """
 import collections
@@ -28,6 +34,20 @@ from game_rules import GameRules
 from scenario import Scenario
 
 TRIALS = 30
+
+_FREE_SNAPS = None
+
+
+def setUpModule():
+    import constants
+    global _FREE_SNAPS
+    _FREE_SNAPS = constants.DRIVE_CLOCK_FREE_SNAPS
+    constants.DRIVE_CLOCK_FREE_SNAPS = False
+
+
+def tearDownModule():
+    import constants
+    constants.DRIVE_CLOCK_FREE_SNAPS = _FREE_SNAPS
 
 
 def lastSnap(*, down, distance, ballOn, snapsLeft=1, unit='plays', reset='possession',

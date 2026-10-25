@@ -294,8 +294,8 @@ class RuleVoteManager:
     # ── open ─────────────────────────────────────────────────────────────────
     def maybeOpenWindow(self, season: int, week: int, gameRules,
                         closesAt: Optional[datetime.datetime] = None) -> None:
-        from constants import RULE_VOTE_ENABLED, RULE_VOTE_BALLOT_SIZE
-        if not RULE_VOTE_ENABLED or week not in GAME_DAY_START_WEEKS:
+        from constants import RULE_VOTE_BALLOT_SIZE
+        if not self._enabled() or week not in GAME_DAY_START_WEEKS:
             return
         dayIndex = self.dayIndexForWeek(week)
         from database.connection import get_session
@@ -452,6 +452,34 @@ class RuleVoteManager:
             session.close()
         return closed
 
+    def closeOpenWindows(self, season: int) -> int:
+        """Close every open window this season as 'none', applied=0 (votes are kept).
+        Used when rule votes are switched off. Returns the count closed."""
+        from database.connection import get_session
+        session = get_session()
+        closed = 0
+        try:
+            repo = self._repo(session)
+            while True:
+                w = repo.getOpenWindow(season)
+                if w is None:
+                    break
+                w.resolved = True
+                w.winner_key = 'none'
+                w.applied = False
+                session.flush()
+                closed += 1
+                logger.info(f"Rule vote CLOSED (votes switched off): S{season} day "
+                            f"{w.day_index} ({w.kind}), no rule change")
+            if closed:
+                session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"Rule vote close (switched off) failed: {e}")
+        finally:
+            session.close()
+        return closed
+
     def resolveOpenWindow(self, season: int, gameRules, requireClosed: bool = False,
                           currentWeek: Optional[int] = None) -> Optional[str]:
         """Resolve the season's open vote (most-voted wins). Applies the winner to
@@ -464,8 +492,12 @@ class RuleVoteManager:
 
         `currentWeek` lets the sim sweep windows whose game day has passed first —
         see expireStaleWindows. Omitted by the debug endpoint, which resolves the
-        newest window on demand and wants no sweep."""
+        newest window on demand and wants no sweep.
+
+        Votes switched off (Admin panel) closes any open window with no rule change
+        instead, so a ballot opened before the switch cannot still apply a rule."""
         if not self._enabled():
+            self.closeOpenWindows(season)
             return None
         if currentWeek:
             self.expireStaleWindows(season, currentWeek)
@@ -640,8 +672,10 @@ class RuleVoteManager:
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _enabled(self) -> bool:
-        from constants import RULE_VOTE_ENABLED
-        return bool(RULE_VOTE_ENABLED)
+        # The live switch (constant + `rule_votes_enabled` app_setting), not the bare
+        # constant, so the Admin panel can turn votes off without a deploy.
+        from constants import ruleVotesEnabled
+        return ruleVotesEnabled()
 
     def _weekForDay(self, dayIndex: int) -> int:
         return dayIndex * 7 + 1
