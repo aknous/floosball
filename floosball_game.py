@@ -1441,7 +1441,7 @@ class Game:
             gameStatsDict['awayTeamPoss'] = True
         gameStatsDict['down'] = self.down
         down = downOrdinal(self.down)
-        if self.yardsToEndzone <= self.gameRules.firstDownDistance:
+        if self.yardsToFirstDown >= self.yardsToEndzone:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToEndzone
             gameStatsDict['downText'] = '{0} & Goal'.format(down)
         else:
@@ -8201,8 +8201,13 @@ class Game:
                     and timeoutsLeft > 0 and not self._isGarbageTime(decisionDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow
-                    # Already in comfortable range, tied or within a kick: score LAST.
-                    and not self._isFgSecuredDrain()):
+                    # Already in comfortable range, tied or within a kick: score LAST. The
+                    # secured drain owns 1:00-3:00 and `_isFgDrainMode` the last minute; the
+                    # second was missing, so a team draining to kick last still stopped the
+                    # clock (prod season 12 week 1: NOR down 1 at the MIA 20, timeouts at
+                    # 0:54 and 0:50).
+                    and not self._isFgSecuredDrain()
+                    and not self._isFgDrainMode()):
                 if secs <= self.gameRules.timeoutClockThreshold:
                     # Inside 2:00 — high urgency. In FG range with a one-score/tied
                     # deficit, a competent coach stops the clock near-deterministically.
@@ -11356,7 +11361,13 @@ class Game:
 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
-                
+                # A timeout called after a kneel (above) stopped the clock, and nothing has
+                # been snapped since. Re-deriving the clock from the kneel restarted it, so the
+                # defense's next check called a SECOND timeout in the same dead ball (prod
+                # season 12 week 1: Bees, twice at 0:25).
+                if self.play.playType is PlayType.Kneel and self._timeoutCalled:
+                    self.clockRunning = False
+
                 # Check for two-minute warning
                 self.checkTwoMinuteWarning()
 
@@ -17625,7 +17636,11 @@ class Play():
         self.yardLine = game.yardLine
         self.yardsToEndzone = game.yardsToEndzone
         self.yardsToSafety = game.yardsToSafety
-        if self.yardsToEndzone <= 10:
+        # Goal to go only when the line to gain IS the goal line. Inside the 10 the marker
+        # can still be short of it (1st & 10 from the 12, gain 3: 2nd & 7 at the 9), which
+        # was printed as "& Goal" (prod season 12 week 1: a 4th & 1 at the 8 read as
+        # 4th & Goal).
+        if game.yardsToFirstDown >= game.yardsToEndzone:
             self.yardsTo1st = 'Goal'
         else:
             self.yardsTo1st = game.yardsToFirstDown
@@ -20267,7 +20282,10 @@ class Play():
         rbDumps = (wouldBeSacked and not qbScrambles and RB_CHECKDOWN_ENABLED and hasRb
                    and batched_random() * 100 < RB_CHECKDOWN_PRESSURE_CHANCE)
         # Designed screen: a called play on a clean dropback (no would-be sack).
+        # Never on a Hail Mary: the play IS the heave (prod season 12 week 1, DET's last
+        # snap of the half from the KCS 42 went as a 1-yard screen).
         screenCalled = (not wouldBeSacked and RB_SCREEN_ENABLED and hasRb
+                        and not getattr(self, '_isHailMaryPlay', False)
                         and batched_random() * 100 < RB_SCREEN_CHANCE)
         if screenCalled:
             screenCov = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
