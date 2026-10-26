@@ -2922,13 +2922,19 @@ class Game:
         if defTimeouts <= 0:
             return
         # Time window: a defense burns timeouts to get the ball back, which only
-        # pays off close to the end. Inside 2:00 for a one-score game; extended
-        # to 3:00 only when down multiple scores (genuinely needs the clock).
-        # Calling them at 4-5 min in a tight game is the "no coach does that" case.
+        # pays off close to the end. A trailing defense starts at
+        # `DEF_TIMEOUT_TRAILING_WINDOW_SECS` (4:00) at any deficit; a leading or tied one
+        # (the lead-evaporating case above) inside 2:00.
+        # ⚠️ IT WAS 2:00 FOR ONE SCORE AND 3:00 FOR TWO (widened 2026-10-26). NFL 2019-23,
+        # Q4, trailing defense with a timeout after a running-clock snap: 41-60% between
+        # 2:30 and 4:00 down one score, 54-60% down two. Prod season 12 week 2, ARI @
+        # COL: Arizona, down 9 with three timeouts, never used one as Colorado ran from
+        # 2:26 to the final whistle.
+        from constants import DEF_TIMEOUT_TRAILING_WINDOW_SECS
         isEndGame = _kind in ('game', 'overtime')
-        multiScore = deficit > self._maxPossession()
         if isEndGame:
-            threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
+            threshold = (DEF_TIMEOUT_TRAILING_WINDOW_SECS if deficit > 0
+                         else self.gameRules.timeoutClockThreshold)
         else:
             threshold = 60  # Q2 end-of-half
             # ⚠️ ONLY WHEN A STOP IS LIKELY (fixed 2026-10-26). Before the half a timeout
@@ -2960,9 +2966,9 @@ class Game:
             # Inside 2:00 — high urgency to get the ball back
             toChance = (0.5 + 0.5 * defGameIQ) if isEndGame else (0.4 + 0.4 * defGameIQ)
         else:
-            # 2-3 min, multi-score only — urgency builds toward the 2-min mark
-            urgency = max(0.0, (180 - secs) / 60)
-            toChance = (0.25 + 0.45 * defGameIQ) * urgency
+            # 2:00-4:00, trailing: flat across the window, as the NFL's is (see constants).
+            from constants import DEF_TIMEOUT_EARLY_BASE, DEF_TIMEOUT_EARLY_IQ
+            toChance = DEF_TIMEOUT_EARLY_BASE + DEF_TIMEOUT_EARLY_IQ * defGameIQ
         # ⚠️ A DEFENSE THAT HAS STOPPED THE CLOCK ON THIS DRIVE KEEPS STOPPING IT (fixed
         # 2026-10-20). The roll above runs once per snap and nothing asks again during the
         # huddle, so a coach who called a timeout one snap could "forget" the next and let
@@ -2975,7 +2981,12 @@ class Game:
         driveKey = (id(self.offensiveTeam),
                     getattr(self, '_drivesBy', {}).get(id(self.offensiveTeam), 0),
                     self.currentQuarter, getattr(self, '_frameIndex', 0))
-        if getattr(self, '_defTimeoutDrive', None) != driveKey and _random.random() >= toChance:
+        # The commitment holds inside 2:00 only. Between 2:00 and 4:00 each snap is its own
+        # call (the NFL rate there is flat at ~50% a snap); holding the read from 3:50 spent
+        # all three timeouts on consecutive snaps and left none for the last two minutes.
+        committed = (getattr(self, '_defTimeoutDrive', None) == driveKey
+                     and secs <= self.gameRules.timeoutClockThreshold)
+        if not committed and _random.random() >= toChance:
             return
         self._defTimeoutDrive = driveKey
         # Call timeout

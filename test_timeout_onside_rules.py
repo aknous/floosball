@@ -9,6 +9,9 @@ From the prod season 12 week 1 review, each checked against NFL 2019-23 play-by-
    would otherwise go unused (`_offensiveTimeoutNeeded`).
 2. END-OF-HALF DEFENSIVE TIMEOUTS fired on any down, handing the time to a drive that
    was moving. NFL: ~5% on 1st/2nd down, 17-26% on 3rd. Now only when a stop is likely.
+   And a TRAILING Q4 defense waited until 2:00 (3:00 down two scores); NFL defenses call
+   one after 41-60% of running-clock snaps from 2:30 to 4:00 (prod week 2: ARI, down 9
+   with three timeouts, never used one from 2:26). Now 4:00, a flat per-snap roll.
 3. ONSIDE KICKS were 75% for any deficit inside 4:00, timeouts ignored. Now the NFL rate
    by deficit, clock and timeouts (`ONSIDE_RATE_TABLE`).
 
@@ -79,6 +82,35 @@ def onsideRate(deficit, secs, timeouts, trials=200):
                                  defTimeouts=timeouts)
         n += s.game._shouldOnsideKick()
     return n / trials
+
+
+def q4DefenseTimeouts(committed=False, **kw):
+    n = 0
+    for i in range(TRIALS):
+        random.seed(i); np.random.seed(i)
+        s = Scenario().situation(clockRunning=True, quarter=4, **kw)
+        g = s.game
+        if committed:
+            g._defTimeoutDrive = (id(g.offensiveTeam), g._drivesBy.get(id(g.offensiveTeam), 0) if hasattr(g, '_drivesBy') else 0,
+                                  g.currentQuarter, getattr(g, '_frameIndex', 0))
+        g._checkDefensiveTimeout()
+        n += g.awayTimeoutsRemaining < 3
+    return n / TRIALS
+
+
+print("\n-- 2b. a trailing defense uses its timeouts from 4:00 (NFL ~50% a snap) --")
+r = q4DefenseTimeouts(clock=210, offScore=20, defScore=14, down=2, distance=6, ballOn=60)
+expect(f"Q4 3:30, defense down 6: sometimes stops the clock ({r:.0%})", 0.25 <= r <= 0.75)
+r = q4DefenseTimeouts(clock=210, offScore=24, defScore=14, down=2, distance=6, ballOn=60)
+expect(f"Q4 3:30, defense down 10: sometimes stops the clock ({r:.0%})", 0.25 <= r <= 0.75)
+r = q4DefenseTimeouts(clock=300, offScore=20, defScore=14, down=2, distance=6, ballOn=60)
+expect(f"Q4 5:00 is still too early ({r:.0%})", r == 0)
+r = q4DefenseTimeouts(clock=210, offScore=14, defScore=20, down=2, distance=6, ballOn=60)
+expect(f"Q4 3:30, defense ahead and the offense far away: let it run ({r:.0%})", r == 0)
+r = q4DefenseTimeouts(committed=True, clock=210, offScore=20, defScore=14, down=2, distance=6, ballOn=60)
+expect(f"before 2:00 an earlier call on the drive does not commit the next one ({r:.0%})", r < 0.9)
+r = q4DefenseTimeouts(committed=True, clock=90, offScore=20, defScore=14, down=2, distance=6, ballOn=60)
+expect(f"inside 2:00 it does ({r:.0%})", r == 1.0)
 
 
 print("\n-- 3. onside kicks by deficit, clock and timeouts --")

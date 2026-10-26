@@ -4779,6 +4779,14 @@ TWO_MINUTE_YARDS_PER_SNAP = 5.5   # the sim's hurry-up gain per snap in the last
 TWO_MINUTE_CLOCK_STOP_SHARE = 0.5  # share of hurry-up snaps in the last 2:00 that stop the clock themselves (50% measured)
 TWO_MINUTE_PRESNAP_SECS = 8        # hurry-up pre-snap on a running clock, no-huddle and huddle mixed (8.0s measured)
 OFFENSE_TIMEOUT_MISREAD = 0.06    # chance to burn one anyway when the clock is fine, x (1 - clock IQ): 3% for an average coach, the NFL rate above 1:00 with all three in hand (1-5%)
+# ── Trailing-defense timeouts before the last 2:00 (`Game._checkDefensiveTimeout`) ──
+# NFL 2019-23, Q4, trailing defense holding a timeout, per running-clock snap: 41-60%
+# from 2:30 to 4:00 down one score, 54-60% down two (35-45% from 2:00 to 2:30, where the
+# warning is still to come; the sim holds its timeouts there for the free stop). Flat
+# across the window; the coach's clock IQ moves it, 50% for an average one.
+DEF_TIMEOUT_TRAILING_WINDOW_SECS = 240
+DEF_TIMEOUT_EARLY_BASE = 0.30
+DEF_TIMEOUT_EARLY_IQ = 0.40
 
 # ── No-huddle ─────────────────────────────────────────────────────────────
 # ⚠️ THE OFFENSE HAD NO PRESENCE BETWEEN THE WHISTLE AND THE SNAP. Tempo was one
