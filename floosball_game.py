@@ -1699,7 +1699,32 @@ class Game:
         # the 3 is not technically goal-to-go and is exactly as good a position to hold.
         if self.yardsToEndzone > TD_DRAIN_MAX_YARDS:
             return False
-        return self.down <= 2
+        if self.down > 2:
+            return False
+        # ⚠️ AND ONLY THE CLOCK IT CAN SPARE (fixed 2026-10-26). Draining is worth it only
+        # while every remaining down still fits behind the drained snap. Prod season 12
+        # week 1, MON 22-17 BUF: down 5, 2nd & goal at the 4 with 0:40 and no timeouts,
+        # Buffalo took a 37-second huddle, got one snap instead of three, and lost on it.
+        # Draining buys nothing unless it burns more than a hurry-up huddle would.
+        from constants import LAST_SNAP_HUDDLE_SECS
+        return self._tdDrainBudget() > LAST_SNAP_HUDDLE_SECS
+
+    def _tdDrainBudget(self) -> int:
+        """Seconds the offense can let run before this snap and still get every remaining
+        down off: this snap's live ball, then each later down's huddle (free when a timeout
+        stops the clock first, a running-clock hurry-up huddle otherwise), the live ball of
+        each down but the last, and the final snap. Priced for runs, which keep the clock
+        going; an incompletion stops it for free, so this is the cautious case."""
+        from constants import FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS, LAST_SNAP_LIVE_SECS
+        later = max(0, self._seriesSnapsLeft() - 1)
+        timeouts = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                    else self.awayTimeoutsRemaining)
+        runningHuddles = max(0, later - timeouts)
+        need = (LAST_SNAP_LIVE_SECS
+                + runningHuddles * (LAST_SNAP_HUDDLE_SECS + DEAD_BALL_ADMIN_SECONDS)
+                + max(0, later - 1) * LAST_SNAP_LIVE_SECS
+                + FINAL_SNAP_SECS)
+        return self._offenseEffectiveSecs() - need
 
     def _isFgSecuredDrain(self) -> bool:
         """True when an offense already in comfortable field-goal range, tied or within a
@@ -10904,10 +10929,6 @@ class Game:
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
 
-                # A snap has now been committed — the post-warning dead-clock
-                # window is over (timeouts allowed again on the next stoppage).
-                self._clockStoppedByWarning = False
-
                 # Tempo intent is captured on every play so the play insights
                 # always show the offense's intent (hurry-up / burn / neutral),
                 # even when the clock is stopped going into the snap.
@@ -10966,6 +10987,15 @@ class Game:
                 # budget spent, so cheap snaps cannot stall it.
                     if self.gameClockSeconds <= 0:
                         break
+                # The snap is now committed, so the post-warning dead-clock window is over
+                # (timeouts are allowed again on the next stoppage).
+                # ⚠️ CLEARED HERE, AT THE SNAP, NOT BEFORE THE HUDDLE (fixed 2026-10-26). The
+                # warning usually fires DURING the pre-snap window just above, and clearing the
+                # flag before that window left it set through the following play, so neither
+                # team could call a timeout after it. Prod season 12 week 1: WAS down 6 with
+                # two timeouts at 1:21 and TAM down 9 with three at 1:19 each let a
+                # 45-second huddle run.
+                self._clockStoppedByWarning = False
                 self.totalPlays += 1
                 self.play.playNumber = self.totalPlays
                 # Game format tick (play_limit drives its synthetic clock from here).
@@ -14437,7 +14467,7 @@ class Game:
         # opponent has no time to answer. Must precede the trailing hurry-up below, which
         # would otherwise race to score early and hand the game back.
         if self._isTdDrainMode():
-            return ('burnClock', 40)
+            return ('burnClock', min(40, self._tdDrainBudget()))
         # ⚠️ IN FRAMES THE RULES BELOW READ THE WRONG SCOREBOARD. They are the standard
         # end-of-half and second-half rules, keyed on the quarter and the TOTAL score, so
         # a team losing the frame but ahead on the total burned the clock on a Q4 lead,
@@ -14584,6 +14614,12 @@ class Game:
         _wxPace = max(WEATHER_PACE_MIN, min(WEATHER_PACE_MAX, self.wx('paceMod')))
         if _wxPace != 1.0:
             finalTime = max(8, int(round(finalTime * _wxPace)))
+
+        # A goal-line drain never eats the downs it is holding the score for: the coach's
+        # IQ offset, the jitter and the weather can stretch the huddle, but not past the
+        # clock the remaining downs need (`_tdDrainBudget`).
+        if intent == 'burnClock' and self._isTdDrainMode():
+            finalTime = min(finalTime, max(0, self._tdDrainBudget()))
 
         # A play that MUST beat the clock this snap rushes to the line and snaps below the
         # normal huddle floor — a FG unit especially doesn't huddle. Without this the 8s
@@ -16233,6 +16269,7 @@ class Game:
         drains the possessing team's budget and recomputes its synthetic clock."""
         # Frames: nothing crosses the current frame's buzzer (FramesFormat.clampConsumption).
         seconds = self.format.clampConsumption(self, seconds)
+        seconds = self._clampToTwoMinuteWarning(seconds)
         self.format.consumeTime(self, seconds)
         # Drive Clock (seconds unit): the possession budget drains with the game clock,
         # so it naturally pauses whenever the game clock is stopped. Only for formats
@@ -16244,6 +16281,24 @@ class Game:
             if self.driveClockRemaining <= 0:
                 self.driveClockRemaining = 0
                 self.driveClockExpiredThisPlay = True
+
+    def _clampToTwoMinuteWarning(self, seconds: int) -> int:
+        """Between plays the clock stops AT the two-minute warning, so the pre-snap window
+        (dead-ball administration and the huddle) may not run it past 2:00. A play in
+        progress still runs through it, as in the NFL; the warning then follows the play.
+
+        ⚠️ FIXED 2026-10-26: the huddle was charged in full and the warning only checked
+        after it, so on prod (season 12 week 1) it fired at 1:23-2:00 in all 32 halves,
+        19.5 seconds late on average and up to 37. That is time the trailing team was
+        meant to keep: `_twoMinuteWarningPending` tells both sides to hold their timeouts
+        for a free stop at 2:00, and the stop came 40 seconds later."""
+        if seconds <= 0 or not getattr(self, '_inPreSnap', False):
+            return seconds
+        if (not self.format.usesQuarterBreaks() or self.twoMinuteWarningShown
+                or self.currentQuarter not in (2, 4)):
+            return seconds
+        room = self.gameClockSeconds - self.gameRules.timeoutClockThreshold
+        return max(0, min(seconds, room))
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
