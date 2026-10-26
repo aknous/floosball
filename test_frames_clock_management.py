@@ -102,9 +102,12 @@ class FramesClockManagementTests(unittest.TestCase):
             self.assertIsNone(g._periodEnd()[0], f'frame {frame} with 6:40 left')
 
     def testAnOffenseBehindInAnyFrameStopsTheClock(self):
+        # Once the clock binds (two timeouts, 0:25 of the frame left), every frame ending
+        # gets the drill; with 1:20 left the timeouts wait (`_offensiveTimeoutNeeded`).
         for frame in (1, 2, 4, 5):
-            rate = offenseTimeoutRate(frame=frame, secsLeft=80, frameMargin=-3)
+            rate = offenseTimeoutRate(frame=frame, secsLeft=25, frameMargin=-3)
             self.assertGreater(rate, 0.5, f'frame {frame}: {rate:.2f}')
+            self.assertLess(offenseTimeoutRate(frame=frame, secsLeft=80, frameMargin=-3), 0.15)
 
     def testAnOffenseAheadInTheFrameDoesNotStopTheClock(self):
         self.assertEqual(offenseTimeoutRate(frame=2, secsLeft=80, frameMargin=3), 0.0)
@@ -128,8 +131,9 @@ class FramesClockManagementTests(unittest.TestCase):
         self.assertEqual(g._periodEnd()[0], 'half')                   # offense, behind
         self.assertEqual(g._periodEnd(forDefense=True)[0], 'game')    # defense, ahead
         self.assertFalse(g._isGarbageTime(g._clockMargin()))
-        # The trailing side still plays for the total score: it stops the clock.
-        self.assertGreater(offenseTimeoutRate(frame=2, secsLeft=60, frameMargin=-30), 0.5)
+        # The trailing side still plays for the total score: it stops the clock once the
+        # clock binds.
+        self.assertGreater(offenseTimeoutRate(frame=2, secsLeft=25, frameMargin=-30), 0.5)
         # The side ahead does not (the owner's frame-leader rule).
         self.assertEqual(offenseTimeoutRate(frame=2, secsLeft=60, frameMargin=30), 0.0)
         # In the final frame a decided frame decides the match: no 'half' ending.
