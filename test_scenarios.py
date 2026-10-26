@@ -79,7 +79,8 @@ expect(f"4th & 2: mostly goes ({goes}/50 >= 35)", goes >= 35)
 # ── 4. Late-game timeouts for a tied team near FG range ──────────────────
 # Already in COMFORTABLE range, the clock is the tied team's friend: it scores last, so it
 # mostly runs the clock (a coach call, `_isFgSecuredDrain`, 2026-10-19). Just outside
-# comfortable range it still stops the clock to bank time to get there.
+# comfortable range it stops the clock once the clock binds (`_offensiveTimeoutNeeded`,
+# 2026-10-26): with 1:50 and three timeouts a short drive has the time, at 0:30 it does not.
 print("4. Tied team: runs the clock in comfortable FG range, stops it short of it")
 s = Scenario()
 random.seed(3)
@@ -92,10 +93,12 @@ inRange_150 = toCount(110, 20)     # 1:50, a 37-yard kick
 short_240   = toCount(160, 40)     # 2:40, a 57-yard kick: not yet comfortable
 deep_240    = toCount(160, 72)     # 2:40, own territory
 short_150   = toCount(110, 40)     # 1:50, still short of comfortable range
+short_30    = toCount(30, 40)      # 0:30, still short: now the clock binds
 expect(f"inside 2:00 in comfortable range, mostly runs the clock ({inRange_150}/60 <= 30)", inRange_150 <= 30)
-expect(f"at 2:40 just short of comfortable range, timeout fires sometimes ({short_240}/60)", short_240 > 0)
+expect(f"at 2:40 just short of comfortable range, the timeout waits ({short_240}/60)", short_240 <= 6)
 expect("at 2:40 in deep territory, timeout does NOT fire", deep_240 == 0)
-expect(f"inside 2:00 short of comfortable range, timeout fires almost always ({short_150}/60 >= 50)", short_150 >= 50)
+expect(f"at 1:50 short of comfortable range with three timeouts, the timeout waits ({short_150}/60 <= 6)", short_150 <= 6)
+expect(f"at 0:30 short of comfortable range, timeout fires almost always ({short_30}/60 >= 50)", short_30 >= 50)
 
 
 # ── 5. Kneel on 4th down only when it ends the game ──────────────────────

@@ -1441,7 +1441,7 @@ class Game:
             gameStatsDict['awayTeamPoss'] = True
         gameStatsDict['down'] = self.down
         down = downOrdinal(self.down)
-        if self.yardsToEndzone <= self.gameRules.firstDownDistance:
+        if self.yardsToFirstDown >= self.yardsToEndzone:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToEndzone
             gameStatsDict['downText'] = '{0} & Goal'.format(down)
         else:
@@ -1699,7 +1699,32 @@ class Game:
         # the 3 is not technically goal-to-go and is exactly as good a position to hold.
         if self.yardsToEndzone > TD_DRAIN_MAX_YARDS:
             return False
-        return self.down <= 2
+        if self.down > 2:
+            return False
+        # ⚠️ AND ONLY THE CLOCK IT CAN SPARE (fixed 2026-10-26). Draining is worth it only
+        # while every remaining down still fits behind the drained snap. Prod season 12
+        # week 1, MON 22-17 BUF: down 5, 2nd & goal at the 4 with 0:40 and no timeouts,
+        # Buffalo took a 37-second huddle, got one snap instead of three, and lost on it.
+        # Draining buys nothing unless it burns more than a hurry-up huddle would.
+        from constants import LAST_SNAP_HUDDLE_SECS
+        return self._tdDrainBudget() > LAST_SNAP_HUDDLE_SECS
+
+    def _tdDrainBudget(self) -> int:
+        """Seconds the offense can let run before this snap and still get every remaining
+        down off: this snap's live ball, then each later down's huddle (free when a timeout
+        stops the clock first, a running-clock hurry-up huddle otherwise), the live ball of
+        each down but the last, and the final snap. Priced for runs, which keep the clock
+        going; an incompletion stops it for free, so this is the cautious case."""
+        from constants import FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS, LAST_SNAP_LIVE_SECS
+        later = max(0, self._seriesSnapsLeft() - 1)
+        timeouts = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                    else self.awayTimeoutsRemaining)
+        runningHuddles = max(0, later - timeouts)
+        need = (LAST_SNAP_LIVE_SECS
+                + runningHuddles * (LAST_SNAP_HUDDLE_SECS + DEAD_BALL_ADMIN_SECONDS)
+                + max(0, later - 1) * LAST_SNAP_LIVE_SECS
+                + FINAL_SNAP_SECS)
+        return self._offenseEffectiveSecs() - need
 
     def _isFgSecuredDrain(self) -> bool:
         """True when an offense already in comfortable field-goal range, tied or within a
@@ -2897,15 +2922,38 @@ class Game:
         if defTimeouts <= 0:
             return
         # Time window: a defense burns timeouts to get the ball back, which only
-        # pays off close to the end. Inside 2:00 for a one-score game; extended
-        # to 3:00 only when down multiple scores (genuinely needs the clock).
-        # Calling them at 4-5 min in a tight game is the "no coach does that" case.
+        # pays off close to the end. A trailing defense starts at
+        # `DEF_TIMEOUT_TRAILING_WINDOW_SECS` (4:00) at any deficit; a leading or tied one
+        # (the lead-evaporating case above) inside 2:00.
+        # ⚠️ IT WAS 2:00 FOR ONE SCORE AND 3:00 FOR TWO (widened 2026-10-26). NFL 2019-23,
+        # Q4, trailing defense with a timeout after a running-clock snap: 41-60% between
+        # 2:30 and 4:00 down one score, 54-60% down two. Prod season 12 week 2, ARI @
+        # COL: Arizona, down 9 with three timeouts, never used one as Colorado ran from
+        # 2:26 to the final whistle.
+        from constants import DEF_TIMEOUT_TRAILING_WINDOW_SECS
         isEndGame = _kind in ('game', 'overtime')
-        multiScore = deficit > self._maxPossession()
         if isEndGame:
-            threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
+            threshold = (DEF_TIMEOUT_TRAILING_WINDOW_SECS if deficit > 0
+                         else self.gameRules.timeoutClockThreshold)
         else:
             threshold = 60  # Q2 end-of-half
+            # ⚠️ ONLY WHEN A STOP IS LIKELY (fixed 2026-10-26). Before the half a timeout
+            # buys time for the defense's own possession, which only exists if the
+            # offense gives the ball back; stopping the clock on a drive that is moving
+            # hands the time to the offense. It fired on any down (prod season 12 week 1:
+            # 29 Q2 defensive timeouts, 18 on drives that ended in a score or FG try; the
+            # Sand Dollars used three while LVR moved from its own 32 to a field goal).
+            # NFL 2019-23, last 1:00 of Q2 after a running-clock snap: ~5% on 1st/2nd
+            # down, 17-26% on 3rd. So: the next snap is the final down, or the one before
+            # it with long yardage and no kick in reach.
+            downs = self.gameRules.downsPerSeries
+            kicker = self.offensiveTeam.rosterDict.get('k')
+            kickReach = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+            stopLikely = (self.down >= downs
+                          or (self.down == downs - 1 and self.yardsToFirstDown >= 7
+                              and self.yardsToEndzone > kickReach))
+            if not stopLikely:
+                return
         if secs > threshold:
             return
         # Don't waste a timeout right before the free two-minute-warning stop.
@@ -2918,9 +2966,9 @@ class Game:
             # Inside 2:00 — high urgency to get the ball back
             toChance = (0.5 + 0.5 * defGameIQ) if isEndGame else (0.4 + 0.4 * defGameIQ)
         else:
-            # 2-3 min, multi-score only — urgency builds toward the 2-min mark
-            urgency = max(0.0, (180 - secs) / 60)
-            toChance = (0.25 + 0.45 * defGameIQ) * urgency
+            # 2:00-4:00, trailing: flat across the window, as the NFL's is (see constants).
+            from constants import DEF_TIMEOUT_EARLY_BASE, DEF_TIMEOUT_EARLY_IQ
+            toChance = DEF_TIMEOUT_EARLY_BASE + DEF_TIMEOUT_EARLY_IQ * defGameIQ
         # ⚠️ A DEFENSE THAT HAS STOPPED THE CLOCK ON THIS DRIVE KEEPS STOPPING IT (fixed
         # 2026-10-20). The roll above runs once per snap and nothing asks again during the
         # huddle, so a coach who called a timeout one snap could "forget" the next and let
@@ -2933,7 +2981,12 @@ class Game:
         driveKey = (id(self.offensiveTeam),
                     getattr(self, '_drivesBy', {}).get(id(self.offensiveTeam), 0),
                     self.currentQuarter, getattr(self, '_frameIndex', 0))
-        if getattr(self, '_defTimeoutDrive', None) != driveKey and _random.random() >= toChance:
+        # The commitment holds inside 2:00 only. Between 2:00 and 4:00 each snap is its own
+        # call (the NFL rate there is flat at ~50% a snap); holding the read from 3:50 spent
+        # all three timeouts on consecutive snaps and left none for the last two minutes.
+        committed = (getattr(self, '_defTimeoutDrive', None) == driveKey
+                     and secs <= self.gameRules.timeoutClockThreshold)
+        if not committed and _random.random() >= toChance:
             return
         self._defTimeoutDrive = driveKey
         # Call timeout
@@ -3700,6 +3753,58 @@ class Game:
                 and self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
                 and self.gameRules.timeoutClockThreshold < secs
                 <= self.gameRules.timeoutClockThreshold + 15)
+
+    def _fgComfortYards(self, kicker) -> int:
+        """The farthest spot (yards to the end zone) from which this kicker makes it at
+        least `FOURTH_KICK_MID` of the time: where a drive playing for the kick is done."""
+        from constants import FOURTH_KICK_MID
+        if kicker is None:
+            return 0
+        maxYte = max(0, int(kicker.maxFgDistance - self.gameRules.fgSnapDistance))
+        for yte in range(maxYte, -1, -1):
+            if self.fgMakeProbability(kicker, yte + self.gameRules.fgSnapDistance) >= FOURTH_KICK_MID:
+                return yte
+        return 0
+
+    def _offensiveTimeoutNeeded(self, secs: int, timeoutsLeft: int, margin: float,
+                                periodKind) -> bool:
+        """Has the clock become the constraint on this drive, so a timeout now is worth it?
+
+        A timeout saves one running-clock huddle, and it saves the same seconds now as
+        later, so there is no reason to spend it early: an offense that calls one with
+        1:30 left at the opponent's 23 has the same time to score as one that saves it for
+        the last 30 seconds, and less flexibility. Two cases make it worth spending now:
+
+          * USE OR LOSE: the offense holds at least as many timeouts as running-clock
+            snaps still fit before the period ends, so every one it keeps is one it will
+            never use.
+          * SHORT: the snaps the drive still needs no longer fit, counting the timeouts
+            still held as free stops later. The drive plays for the kick when a field goal
+            does the job (any score at the half; tied or within a kick at the end), so it
+            is done at this kicker's comfortable range plus the kick; otherwise it is done
+            at the end zone.
+
+        Priced at the drill's measured pace: about half its snaps stop the clock on their
+        own and a running-clock pre-snap averages 8 seconds. See constants TWO_MINUTE_*."""
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_LIVE_SECS, TWO_MINUTE_YARDS_PER_SNAP,
+                               TWO_MINUTE_CLOCK_STOP_SHARE, TWO_MINUTE_PRESNAP_SECS)
+        stopShare = TWO_MINUTE_CLOCK_STOP_SHARE
+        huddle = TWO_MINUTE_PRESNAP_SECS + DEAD_BALL_ADMIN_SECONDS   # paid only on a running clock
+        avgSnap = LAST_SNAP_LIVE_SECS + (1.0 - stopShare) * huddle
+        runningSnapsLeft = (1.0 - stopShare) * secs / avgSnap
+        if timeoutsLeft >= runningSnapsLeft:
+            return True
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        fgDoesIt = periodKind == 'half' or (-self._fgValue() <= margin <= 0)
+        if fgDoesIt and kicker is not None:
+            yards = max(0, self.yardsToEndzone - self._fgComfortYards(kicker))
+            snaps = math.ceil(yards / TWO_MINUTE_YARDS_PER_SNAP) + 1   # + the kick
+        else:
+            snaps = max(1, math.ceil(self.yardsToEndzone / TWO_MINUTE_YARDS_PER_SNAP))
+        # About half the snaps stop the clock themselves; each timeout held covers one more.
+        runningHuddles = max(0.0, (1.0 - stopShare) * snaps - timeoutsLeft)
+        need = (snaps - 1) * LAST_SNAP_LIVE_SECS + runningHuddles * huddle + FINAL_SNAP_SECS
+        return secs < need
 
     def _offenseEffectiveSecs(self) -> int:
         """Seconds of urgency the offense faces — how soon it MUST score. Standard: the
@@ -8176,9 +8281,30 @@ class Game:
                     and timeoutsLeft > 0 and not self._isGarbageTime(decisionDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow
-                    # Already in comfortable range, tied or within a kick: score LAST.
-                    and not self._isFgSecuredDrain()):
-                if secs <= self.gameRules.timeoutClockThreshold:
+                    # Already in comfortable range, tied or within a kick: score LAST. The
+                    # secured drain owns 1:00-3:00 and `_isFgDrainMode` the last minute; the
+                    # second was missing, so a team draining to kick last still stopped the
+                    # clock (prod season 12 week 1: NOR down 1 at the MIA 20, timeouts at
+                    # 0:54 and 0:50).
+                    and not self._isFgSecuredDrain()
+                    and not self._isFgDrainMode()):
+                # ⚠️ ONLY WHEN THE CLOCK IS THE CONSTRAINT (fixed 2026-10-26). This used to
+                # roll on every running-clock snap in the window, at 90%+ near FG range, so
+                # teams burned all three timeouts in seconds with plenty of clock left (prod
+                # season 12 week 1: CLE at 1:26, 1:22 and 1:18 from the PHI 23; 15 such
+                # bursts in 32 halves). `_offensiveTimeoutNeeded` asks whether this drive
+                # needs the time; the coach's clock IQ still decides whether he reads it.
+                # A multi-score chase is always short of time. A poor clock manager still
+                # wastes one now and then (OFFENSE_TIMEOUT_MISREAD).
+                from constants import OFFENSE_TIMEOUT_MISREAD
+                # (A multi-score deficit binds only at the end of the GAME: the half ends on
+                # one drive whatever the score.)
+                clockBinds = (multiScore and _periodKind in ('game', 'overtime')) or self._offensiveTimeoutNeeded(
+                    secs, timeoutsLeft, decisionDiff, _periodKind)
+                if not clockBinds:
+                    toChance = (OFFENSE_TIMEOUT_MISREAD * (1.0 - gameIQ)
+                                if secs <= self.gameRules.timeoutClockThreshold else 0.0)
+                elif secs <= self.gameRules.timeoutClockThreshold:
                     # Inside 2:00 — high urgency. In FG range with a one-score/tied
                     # deficit, a competent coach stops the clock near-deterministically.
                     toChance = 0.5 + 0.5 * gameIQ
@@ -10904,10 +11030,6 @@ class Game:
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
 
-                # A snap has now been committed — the post-warning dead-clock
-                # window is over (timeouts allowed again on the next stoppage).
-                self._clockStoppedByWarning = False
-
                 # Tempo intent is captured on every play so the play insights
                 # always show the offense's intent (hurry-up / burn / neutral),
                 # even when the clock is stopped going into the snap.
@@ -10966,6 +11088,15 @@ class Game:
                 # budget spent, so cheap snaps cannot stall it.
                     if self.gameClockSeconds <= 0:
                         break
+                # The snap is now committed, so the post-warning dead-clock window is over
+                # (timeouts are allowed again on the next stoppage).
+                # ⚠️ CLEARED HERE, AT THE SNAP, NOT BEFORE THE HUDDLE (fixed 2026-10-26). The
+                # warning usually fires DURING the pre-snap window just above, and clearing the
+                # flag before that window left it set through the following play, so neither
+                # team could call a timeout after it. Prod season 12 week 1: WAS down 6 with
+                # two timeouts at 1:21 and TAM down 9 with three at 1:19 each let a
+                # 45-second huddle run.
+                self._clockStoppedByWarning = False
                 self.totalPlays += 1
                 self.play.playNumber = self.totalPlays
                 # Game format tick (play_limit drives its synthetic clock from here).
@@ -11326,7 +11457,13 @@ class Game:
 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
-                
+                # A timeout called after a kneel (above) stopped the clock, and nothing has
+                # been snapped since. Re-deriving the clock from the kneel restarted it, so the
+                # defense's next check called a SECOND timeout in the same dead ball (prod
+                # season 12 week 1: Bees, twice at 0:25).
+                if self.play.playType is PlayType.Kneel and self._timeoutCalled:
+                    self.clockRunning = False
+
                 # Check for two-minute warning
                 self.checkTwoMinuteWarning()
 
@@ -14437,7 +14574,7 @@ class Game:
         # opponent has no time to answer. Must precede the trailing hurry-up below, which
         # would otherwise race to score early and hand the game back.
         if self._isTdDrainMode():
-            return ('burnClock', 40)
+            return ('burnClock', min(40, self._tdDrainBudget()))
         # ⚠️ IN FRAMES THE RULES BELOW READ THE WRONG SCOREBOARD. They are the standard
         # end-of-half and second-half rules, keyed on the quarter and the TOTAL score, so
         # a team losing the frame but ahead on the total burned the clock on a Q4 lead,
@@ -14584,6 +14721,12 @@ class Game:
         _wxPace = max(WEATHER_PACE_MIN, min(WEATHER_PACE_MAX, self.wx('paceMod')))
         if _wxPace != 1.0:
             finalTime = max(8, int(round(finalTime * _wxPace)))
+
+        # A goal-line drain never eats the downs it is holding the score for: the coach's
+        # IQ offset, the jitter and the weather can stretch the huddle, but not past the
+        # clock the remaining downs need (`_tdDrainBudget`).
+        if intent == 'burnClock' and self._isTdDrainMode():
+            finalTime = min(finalTime, max(0, self._tdDrainBudget()))
 
         # A play that MUST beat the clock this snap rushes to the line and snaps below the
         # normal huddle floor — a FG unit especially doesn't huddle. Without this the 8s
@@ -14953,20 +15096,30 @@ class Game:
         if deficit <= 0:  # Not trailing
             return False
 
-        # Coach aggressiveness: aggressive coaches try earlier and more consistently
+        # ⚠️ THE NFL RATE BY DEFICIT, CLOCK AND TIMEOUTS (2026-10-26). It used to onside-kick
+        # 75% of the time for any deficit inside 4:00 (8:00 down two scores) and never
+        # looked at timeouts, so a one-score team with three timeouts and 3:30 left gave a
+        # 50-yard field back instead of kicking deep and getting the ball again. See
+        # constants ONSIDE_RATE_TABLE; coach aggressiveness shifts it in log-odds, as the
+        # 4th-down model does.
+        from constants import (ONSIDE_TIME_EDGES, ONSIDE_RATE_TABLE, ONSIDE_AGGR_K,
+                               COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE)
         coach = getattr(self.defensiveTeam, 'coach', None)
-        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE  # -1.0 to +1.0
-
-        # Time threshold: 4 min for any deficit, 8 min for large deficits (14+)
-        # Aggressive coaches extend the window by up to 60s; conservative coaches shrink it
-        baseThreshold = 480 if deficit >= 2 * self._oneScore() else 240
-        timeThreshold = baseThreshold + int(aggressNorm * 60)
-        if self.gameClockSeconds >= timeThreshold:
+        aggressNorm = ((getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL) - COACH_ATTR_NEUTRAL)
+                       / COACH_ATTR_RANGE) if coach else 0.0
+        oneScore = self._maxPossession()
+        band = 'one' if deficit <= oneScore else 'two' if deficit <= 2 * oneScore else 'three'
+        secs = self.gameClockSeconds
+        row = next((i for i, edge in enumerate(ONSIDE_TIME_EDGES) if secs <= edge),
+                   len(ONSIDE_TIME_EDGES) - 1)
+        timeouts = (self.homeTimeoutsRemaining if self.defensiveTeam is self.homeTeam
+                    else self.awayTimeoutsRemaining)
+        base = ONSIDE_RATE_TABLE[band][row][max(0, min(3, int(timeouts)))]
+        if base <= 0.0:
             return False
-
-        # Base 75% → shifts to 60% (conservative) or 90% (aggressive)
-        pct = max(0.40, min(0.95, 0.75 + aggressNorm * 0.15))
-        return random.random() < pct
+        base = min(0.998, max(0.002, base))
+        logit = math.log(base / (1.0 - base)) + ONSIDE_AGGR_K * aggressNorm
+        return random.random() < 1.0 / (1.0 + math.exp(-logit))
 
     def _conversionOptions(self, scoringTeam: FloosTeam.Team, kickAllowed: bool, goRungs: list,
                            kick: dict) -> list:
@@ -16233,6 +16386,7 @@ class Game:
         drains the possessing team's budget and recomputes its synthetic clock."""
         # Frames: nothing crosses the current frame's buzzer (FramesFormat.clampConsumption).
         seconds = self.format.clampConsumption(self, seconds)
+        seconds = self._clampToTwoMinuteWarning(seconds)
         self.format.consumeTime(self, seconds)
         # Drive Clock (seconds unit): the possession budget drains with the game clock,
         # so it naturally pauses whenever the game clock is stopped. Only for formats
@@ -16244,6 +16398,24 @@ class Game:
             if self.driveClockRemaining <= 0:
                 self.driveClockRemaining = 0
                 self.driveClockExpiredThisPlay = True
+
+    def _clampToTwoMinuteWarning(self, seconds: int) -> int:
+        """Between plays the clock stops AT the two-minute warning, so the pre-snap window
+        (dead-ball administration and the huddle) may not run it past 2:00. A play in
+        progress still runs through it, as in the NFL; the warning then follows the play.
+
+        ⚠️ FIXED 2026-10-26: the huddle was charged in full and the warning only checked
+        after it, so on prod (season 12 week 1) it fired at 1:23-2:00 in all 32 halves,
+        19.5 seconds late on average and up to 37. That is time the trailing team was
+        meant to keep: `_twoMinuteWarningPending` tells both sides to hold their timeouts
+        for a free stop at 2:00, and the stop came 40 seconds later."""
+        if seconds <= 0 or not getattr(self, '_inPreSnap', False):
+            return seconds
+        if (not self.format.usesQuarterBreaks() or self.twoMinuteWarningShown
+                or self.currentQuarter not in (2, 4)):
+            return seconds
+        room = self.gameClockSeconds - self.gameRules.timeoutClockThreshold
+        return max(0, min(seconds, room))
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
@@ -17570,7 +17742,11 @@ class Play():
         self.yardLine = game.yardLine
         self.yardsToEndzone = game.yardsToEndzone
         self.yardsToSafety = game.yardsToSafety
-        if self.yardsToEndzone <= 10:
+        # Goal to go only when the line to gain IS the goal line. Inside the 10 the marker
+        # can still be short of it (1st & 10 from the 12, gain 3: 2nd & 7 at the 9), which
+        # was printed as "& Goal" (prod season 12 week 1: a 4th & 1 at the 8 read as
+        # 4th & Goal).
+        if game.yardsToFirstDown >= game.yardsToEndzone:
             self.yardsTo1st = 'Goal'
         else:
             self.yardsTo1st = game.yardsToFirstDown
@@ -20212,7 +20388,10 @@ class Play():
         rbDumps = (wouldBeSacked and not qbScrambles and RB_CHECKDOWN_ENABLED and hasRb
                    and batched_random() * 100 < RB_CHECKDOWN_PRESSURE_CHANCE)
         # Designed screen: a called play on a clean dropback (no would-be sack).
+        # Never on a Hail Mary: the play IS the heave (prod season 12 week 1, DET's last
+        # snap of the half from the KCS 42 went as a 1-yard screen).
         screenCalled = (not wouldBeSacked and RB_SCREEN_ENABLED and hasRb
+                        and not getattr(self, '_isHailMaryPlay', False)
                         and batched_random() * 100 < RB_SCREEN_CHANCE)
         if screenCalled:
             screenCov = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}

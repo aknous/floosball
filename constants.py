@@ -730,6 +730,38 @@ FOURTH_GO_TABLE = [
 FOURTH_GO_SCORE_POINTS = [-16, -9, -4, 0, 4, 9, 16]
 FOURTH_GO_SCORE_SHIFT = [1.5, 1.2, 0.5, 0.0, -0.2, -0.6, -0.9]
 FOURTH_GO_AGGR_K = 0.8            # log-odds swing from a timid (-1) to a bold (+1) coach
+# ── Onside kicks (`Game._shouldOnsideKick`) ──
+# NFL 2019-23 onside rate on Q4 kickoffs by the kicking team's deficit, time left and
+# timeouts held (smoothed; thin cells pulled toward their neighbours). A one-score team
+# onside-kicks almost always under 2:00, rarely at 2:00-3:00 with timeouts to get a deep
+# kick back, and essentially never earlier; a two-score team goes inside 4:00. The sim
+# used to onside-kick 75% of the time for any deficit inside 4:00, timeouts ignored.
+ONSIDE_TIME_EDGES = [60, 120, 180, 240, 300, 480, 900]   # upper edge of each time bin (seconds)
+ONSIDE_RATE_TABLE = {
+    # deficit band: one row per time bin, columns = kicking team's timeouts 0/1/2/3
+    'one':   [[1.00, 1.00, 0.95, 0.95],
+              [1.00, 1.00, 0.90, 0.85],
+              [1.00, 0.30, 0.35, 0.02],
+              [0.15, 0.12, 0.02, 0.01],
+              [0.05, 0.02, 0.01, 0.00],
+              [0.00, 0.00, 0.00, 0.00],
+              [0.00, 0.00, 0.00, 0.00]],
+    'two':   [[0.95, 0.95, 0.95, 0.95],
+              [0.95, 0.95, 0.95, 0.95],
+              [0.95, 0.90, 0.90, 0.90],
+              [0.90, 0.88, 0.88, 0.88],
+              [0.45, 0.45, 0.45, 0.45],
+              [0.25, 0.25, 0.25, 0.25],
+              [0.01, 0.01, 0.01, 0.01]],
+    'three': [[0.35, 0.35, 0.35, 0.35],
+              [0.35, 0.35, 0.35, 0.35],
+              [0.35, 0.35, 0.35, 0.35],
+              [0.35, 0.35, 0.35, 0.35],
+              [0.35, 0.35, 0.35, 0.35],
+              [0.35, 0.35, 0.35, 0.35],
+              [0.10, 0.10, 0.10, 0.10]],
+}
+ONSIDE_AGGR_K = 0.8               # log-odds swing from a timid (-1) to a bold (+1) coach
 # Kick-vs-punt when not going: logistic in the kicker's make probability, centred on
 # FOURTH_KICK_MID (offset by the coach's FG threshold). Fitted through the sim's median
 # kicker to the NFL's 52-58 yard cliff.
@@ -4736,6 +4768,25 @@ CHESS_CLOCK_TIED_MIDFIELD_PUNT = 0.8
 
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
 LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
+# ── Offensive timeouts in the two-minute drill (`Game._offensiveTimeoutNeeded`) ──
+# A timeout saves one running-clock huddle, the same seconds now or later, so an offense
+# spends one when the clock has become the constraint: either the snaps the drive still
+# needs no longer fit, or it holds more timeouts than the running-clock snaps left, so
+# keeping one means losing it. Before 2026-10-26 it called one on ~75-100% of running
+# snaps anywhere inside 2:00 near FG range (NFL 2019-23: 0-16% above 1:00, ~60% under
+# 0:40), and three teams burned all three inside ten seconds of clock on prod.
+TWO_MINUTE_YARDS_PER_SNAP = 5.5   # the sim's hurry-up gain per snap in the last 2:00 (5.6 measured)
+TWO_MINUTE_CLOCK_STOP_SHARE = 0.5  # share of hurry-up snaps in the last 2:00 that stop the clock themselves (50% measured)
+TWO_MINUTE_PRESNAP_SECS = 8        # hurry-up pre-snap on a running clock, no-huddle and huddle mixed (8.0s measured)
+OFFENSE_TIMEOUT_MISREAD = 0.06    # chance to burn one anyway when the clock is fine, x (1 - clock IQ): 3% for an average coach, the NFL rate above 1:00 with all three in hand (1-5%)
+# ── Trailing-defense timeouts before the last 2:00 (`Game._checkDefensiveTimeout`) ──
+# NFL 2019-23, Q4, trailing defense holding a timeout, per running-clock snap: 41-60%
+# from 2:30 to 4:00 down one score, 54-60% down two (35-45% from 2:00 to 2:30, where the
+# warning is still to come; the sim holds its timeouts there for the free stop). Flat
+# across the window; the coach's clock IQ moves it, 50% for an average one.
+DEF_TIMEOUT_TRAILING_WINDOW_SECS = 240
+DEF_TIMEOUT_EARLY_BASE = 0.30
+DEF_TIMEOUT_EARLY_IQ = 0.40
 
 # ── No-huddle ─────────────────────────────────────────────────────────────
 # ⚠️ THE OFFENSE HAD NO PRESENCE BETWEEN THE WHISTLE AND THE SNAP. Tempo was one

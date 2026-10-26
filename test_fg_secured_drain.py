@@ -60,12 +60,21 @@ class InRangeRunsTheClock(unittest.TestCase):
         self.assertEqual(timeoutRate(clockMgmt=100, offScore=10), 0.0)   # down 3
 
     def testAPoorClockManagerStillSometimesDoes(self):
-        rate = timeoutRate(clockMgmt=60)
-        self.assertGreater(rate, 0.3, rate)
-        self.assertGreater(rate, timeoutRate(clockMgmt=80))   # better coach, fewer
+        # The read is the coach's: a poor clock manager often misses the drain. With 1:39
+        # left he still does not stop the clock, because the drive does not need the time
+        # (`_offensiveTimeoutNeeded`, 2026-10-26); he just does not slow it down either.
+        def drainRead(clockMgmt):
+            random.seed(4)
+            return sum(spot(clockMgmt=clockMgmt).g._isFgSecuredDrain() for _ in range(TRIALS)) / TRIALS
+        self.assertLess(drainRead(60), 0.7)
+        self.assertGreater(drainRead(80), drainRead(60))   # better coach, reads it more
+        self.assertLess(timeoutRate(clockMgmt=60), 0.10)
 
     def testOutOfRangeStillStopsTheClock(self):
-        self.assertGreater(timeoutRate(clockMgmt=100, ballOn=40), 0.6)
+        # Out of comfortable range the drain does not apply, and the timeout comes once
+        # the clock binds: held at 1:39 with three in hand, spent at 0:30.
+        self.assertLess(timeoutRate(clockMgmt=100, ballOn=40), 0.10)
+        self.assertGreater(timeoutRate(clockMgmt=100, ballOn=40, clock=30), 0.6)
 
     def testAheadOrInTheLastMinuteIsLeftAlone(self):
         s = spot(clockMgmt=100, offScore=20)

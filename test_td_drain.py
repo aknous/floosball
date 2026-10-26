@@ -36,8 +36,10 @@ class StubGame:
     _periodEnd = fg.Game._periodEnd
     _clockMargin = fg.Game._clockMargin
     _twoMinuteWarningPending = fg.Game._twoMinuteWarningPending
+    _tdDrainBudget = fg.Game._tdDrainBudget
+    _seriesSnapsLeft = fg.Game._seriesSnapsLeft
 
-    def __init__(self, *, diff=-5, yte=3, ytg=None, down=1, secs=55, quarter=4):
+    def __init__(self, *, diff=-5, yte=3, ytg=None, down=1, secs=55, quarter=4, timeouts=3):
         self.currentQuarter = quarter
         self.gameClockSeconds = secs
         self.homeTeam = Team('OFFENSE'); self.awayTeam = Team('DEFENSE')
@@ -46,6 +48,7 @@ class StubGame:
         self.yardsToEndzone = yte
         self.yardsToFirstDown = yte if ytg is None else ytg
         self.down = down
+        self.homeTimeoutsRemaining = timeouts; self.awayTimeoutsRemaining = 3
         self.gameRules = Rules()
         from game_formats import GameFormat
         self.format = GameFormat()
@@ -113,6 +116,33 @@ expect("Q3 is not an end-game", not StubGame(quarter=3)._isTdDrainMode())
 midfield = StubGame(diff=-5, yte=45, ytg=10, down=1, secs=55)
 expect("a normal trailing drive at midfield still hurries",
        not midfield._isTdDrainMode() and midfield._classifyTempoIntent()[0] == 'hurryUp')
+
+# ── only the clock it can spare (prod season 12 week 1, MON 22-17 BUF) ─────────
+# Down 5, 2nd & goal at the 4, 0:40, no timeouts: a 37-second drain left one snap for
+# three downs. With no way to stop the clock, every remaining down needs a hurry-up huddle.
+buf = StubGame(diff=-5, yte=4, down=2, secs=40, timeouts=0)
+expect("the reported Buffalo spot: no timeouts, 0:40, 2nd & goal -> do not drain",
+       not buf._isTdDrainMode())
+expect("...and the tempo is the two-minute drill instead",
+       buf._classifyTempoIntent()[0] == 'hurryUp')
+expect("the same spot with three timeouts still holds the score",
+       StubGame(diff=-5, yte=4, down=2, secs=40, timeouts=3)._isTdDrainMode())
+one = StubGame(diff=-5, yte=4, down=2, secs=40, timeouts=1)
+intent, base = one._classifyTempoIntent()
+expect(f"one timeout: a partial drain that keeps both later downs ({intent}, {base}s)",
+       intent == 'burnClock' and base == one._tdDrainBudget() and base < 40)
+far = StubGame(diff=-5, yte=3, down=1, secs=90, timeouts=0)
+expect(f"no timeouts but 1:30 on the clock: drain only what the downs can spare "
+       f"({far._classifyTempoIntent()[1]}s)",
+       far._isTdDrainMode() and far._classifyTempoIntent()[1] == far._tdDrainBudget() < 40)
+for to in range(4):
+    for secs in range(25, 91):
+        for down in (1, 2):
+            g = StubGame(diff=-5, yte=3, down=down, secs=secs, timeouts=to)
+            if g._isTdDrainMode():
+                left = secs - g._classifyTempoIntent()[1]
+                if left < 5 + 2:   # at least this snap's live ball and a final snap
+                    expect(f"drain leaves room ({to} TO, 0:{secs}, down {down})", False)
 
 print("\nPASS — the offense bleeds the clock before a go-ahead score, and only then."
       if not fails else f"\n{len(fails)} FAILED")
