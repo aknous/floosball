@@ -11345,6 +11345,20 @@ class Game:
                         # the RECEIVING team's goal, so in the punting team's own
                         # attacking coordinates that is `landing` yards out.
                         self.yardsToEndzone = max(1, landing)
+                        # ⚠️ BOTH SPOTS MOVE, AND THE RECOVERY IS A NEW DRIVE (fixed
+                        # 2026-10-28, prod game 5318). This branch set only
+                        # `yardsToEndzone`, and the play loop advances `yardsToSafety`
+                        # by `+=` yardage, so it stayed at the PUNT spot: STRANGERS
+                        # punted from their own 41 with the drive clock nearly out,
+                        # recovered the muff on the STL 3, the clock expired a snap
+                        # later and the Waffles took over at the NYS 41 (the expiry
+                        # hands over at `yardsToSafety`). The drive clock also carried
+                        # the punting drive's dregs into a possession that began with
+                        # the receiving team touching the ball.
+                        self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
+                        self._resetDriveClock()
+                        self._hoopPairResult = {}
+                        self._driveTeam = None
                         self.down = 1
                         self.yardsToFirstDown = self._freshSeriesDistance()
                         lastPlayFormatted = True
