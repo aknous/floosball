@@ -424,6 +424,12 @@ MOMENTUM_NEUTRAL_ZONE = 5              # Abs momentum below this = no gameplay e
 MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
 MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight
 MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it (matches NEUTRAL_ZONE so UI never lies about mechanical impact)
+# A team whose game is settled gets little momentum (`Game._settledGameDampener`): its
+# momentum events are scaled by its pre-play win probability / ALIVE_WP, floored at
+# SETTLED_FLOOR. At the floor a touchdown moves the meter ~3, under the display and
+# cross-zero thresholds, so a garbage-time score takes neither the flame nor a shift tag.
+MOMENTUM_ALIVE_WP = 5.0                # Win probability (%) at which a team gets full momentum
+MOMENTUM_SETTLED_FLOOR = 0.15          # Momentum scale for a team with ~no chance left
 
 # Momentum event deltas (raw, before dampening)
 MOMENTUM_TD = 20

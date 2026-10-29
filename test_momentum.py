@@ -54,7 +54,8 @@ def makeTeam(isHome=True, mentalStats=80):
     return team
 
 
-def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, mentalStats=80, quarter=2, gameClockSeconds=600):
+def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, mentalStats=80, quarter=2, gameClockSeconds=600,
+             homeWp=50.0):
     """Create a minimal game-like object with momentum methods attached.
     Defaults: Q2 with 10:00 left — comfortably outside the late-game
     amplifier window so existing tests reflect raw event math."""
@@ -100,6 +101,11 @@ def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, 
     # Numeric game state the momentum path reads and compares. A MagicMock would
     # auto-answer these with a Mock and every comparison would raise TypeError.
     game._peakAbsMomentum = 0.0
+    # Pre-play win probability, read by `_settledGameDampener`. 50/50 by default so the
+    # tests below that are about other multipliers see it at full value.
+    game.homeTeamWinProbability = homeWp
+    game.awayTeamWinProbability = 100.0 - homeWp
+    game._settledGameDampener = types.MethodType(fg.Game._settledGameDampener, game)
 
     return game
 
@@ -377,6 +383,43 @@ def testBlowoutDampening():
     # Momentum should be negative (away team benefits)
     assert game.momentum < 0, f"Expected negative momentum for away team, got {game.momentum}"
     print(f"    Trailer TD in blowout: momentum={game.momentum:.2f} (expected ~-{expectedTrailer:.2f})")
+    print("    PASSED")
+
+
+def testSettledGameMutesTheLoser():
+    """A team whose game is lost gets little momentum: its events scale with its
+    pre-play win probability up to MOMENTUM_ALIVE_WP, floored at MOMENTUM_SETTLED_FLOOR.
+    Prod game 5430: MEX scored a TD down 38-3 late in Q3 with NYS at 99.9% and took
+    the meter, the flame and a momentum-shift tag."""
+    print("  Settled game mutes the loser (prod game 5430)...")
+    from constants import MOMENTUM_ALIVE_WP, MOMENTUM_SETTLED_FLOOR
+    resist = 0.85  # mentalStats=80
+
+    # The reported spot: home up 38-3, Q3 1:31, home WP 99.9, momentum ~0.
+    game = makeGame(homeScore=38, awayScore=9, momentum=1.7, mentalStats=80, quarter=3,
+                    gameClockSeconds=91, homeWp=99.9)
+    game._applyMomentumEvent(MOMENTUM_TD, game.awayTeam)
+    expected = 1.7 - 20.0 * MOMENTUM_SETTLED_FLOOR * resist
+    assert abs(game.momentum - expected) < 0.1, f"expected ~{expected}, got {game.momentum}"
+    assert abs(game.momentum) < MOMENTUM_DISPLAY_THRESHOLD, "a garbage-time TD should not take the flame"
+    assert not game.play.isMomentumShift, "a garbage-time TD is not a momentum shift"
+
+    # Full value once the team is alive, and a linear ramp below it.
+    for wp, scale in ((50.0, 1.0), (MOMENTUM_ALIVE_WP, 1.0), (MOMENTUM_ALIVE_WP / 2, 0.5)):
+        game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=3,
+                        gameClockSeconds=600, homeWp=wp)
+        game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+        assert abs(game.momentum - 20.0 * scale * resist) < 0.1, (wp, game.momentum)
+
+    # The leader is untouched (its WP is high); the score-gap dampener still handles it.
+    game = makeGame(homeScore=35, awayScore=7, mentalStats=80, homeWp=99.9)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    assert abs(game.momentum - 20.0 * 0.4 * resist) < 0.1, game.momentum
+
+    # No WP yet (None) is full value.
+    game = makeGame(homeScore=7, awayScore=21, mentalStats=80)
+    game.homeTeamWinProbability = None
+    assert game._settledGameDampener(game.homeTeam) == 1.0
     print("    PASSED")
 
 
@@ -778,6 +821,7 @@ def main():
     testBlowoutDampening()
     testLateGameAmplifier()
     testNoComebackUrgency()
+    testSettledGameMutesTheLoser()
     testMomentumClamping()
     testMomentumEffectNeutralZone()
     testMomentumEffectActive()
