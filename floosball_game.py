@@ -65,7 +65,7 @@ from constants import (
     MOMENTUM_SHIFT_THRESHOLD, MOMENTUM_CROSS_ZERO_THRESHOLD, MOMENTUM_DISPLAY_THRESHOLD,
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
-    MOMENTUM_PUNT,
+    MOMENTUM_PUNT, MOMENTUM_ALIVE_WP, MOMENTUM_SETTLED_FLOOR,
     WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
     TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS, LEAD_THREAT_TD_YARDS,
     LEAD_THREAT_FG_MIN_PROB, LEAD_ANSWER_MIN_SECONDS,
@@ -12221,6 +12221,27 @@ class Game:
             return 0.4
         return 0.2
 
+    def _settledGameDampener(self, benefitingTeam):
+        """Mute momentum for a team whose game is already lost. Read off that team's win
+        probability before the play: full value at MOMENTUM_ALIVE_WP or better, falling
+        linearly to MOMENTUM_SETTLED_FLOOR once it is nearly zero.
+
+        ⚠️ `_scoreGapDampener` gives the trailing team full value at ANY deficit, so a
+        team down 35 with nothing left to play for took the meter, the flame and a
+        momentum-shift tag on a garbage-time touchdown (prod game 5430: MEX's TD at
+        38-3 late in Q3, NYS at 99.9%). The leader is untouched here (its WP is high);
+        its piling-on is the score-gap dampener's job.
+
+        Pre-play WP, because the post-play number is not priced until the broadcast.
+        Measured over 150 games, a play taking a team from under 5% to 10%+ happened
+        8 times in 4,530 momentum events, all from 3.6% or better, so a real comeback
+        score keeps most of its value."""
+        wp = (self.homeTeamWinProbability if benefitingTeam is self.homeTeam
+              else self.awayTeamWinProbability)
+        if wp is None:
+            return 1.0
+        return max(MOMENTUM_SETTLED_FLOOR, min(1.0, wp / MOMENTUM_ALIVE_WP))
+
     def _mentalResistance(self, resistingTeam):
         """High mental stats on the resisting team reduce incoming momentum.
         Returns 0.7-1.0 (lower = more resistance)."""
@@ -12295,9 +12316,11 @@ class Game:
             streakInertia = 1.0
 
         # Dampening — gap damp is asymmetric: only the leading team's
-        # piling-on is muted, the trailing team's comeback momentum hits
-        # at full value regardless of deficit.
+        # piling-on is muted. The trailing team's comeback momentum hits
+        # at full value while the game is still alive, and is muted once
+        # its win probability says the result is settled.
         gapDamp = self._scoreGapDampener(benefitingTeam)
+        settledDamp = self._settledGameDampener(benefitingTeam)
         mentalResist = self._mentalResistance(resistingTeam)
 
         # Cascade multiplier — scale down in blowouts so piling-on streaks flatten out
@@ -12313,7 +12336,8 @@ class Game:
         inOvertime = self.currentQuarter >= 5
         lateGameMultiplier = 1.3 if (inTwoMinute or inOvertime) else 1.0
 
-        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier
+        finalDelta = (rawDelta * cascadeMultiplier * gapDamp * settledDamp * mentalResist
+                      * streakInertia * lateGameMultiplier)
 
         if benefitingTeam is self.homeTeam:
             self.momentum += finalDelta
