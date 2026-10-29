@@ -15,6 +15,13 @@
    so it ran 20-27% between the 30s under 0:40 (NFL 4-6%) and 22% at the opponent's 1-10
    with 1:30 (NFL 51%). Now the cut follows `_halfRunWeight`: how short the clock is for
    the yards to the end zone, nothing when nothing is in reach.
+5. Behind at the end of the game with no timeout, a run that does not score loses: it is
+   tackled in bounds and no snap fits after it (`_runEndsTheGame`). Prod game 5525: SEO,
+   down 7, 4th & 3 at the MEX 8 with 0:11, ran and was tackled at the 9. The late
+   fourth-down tree also hardcoded its go play (a run on every 4th & 1-3 inside the 40, a
+   pass everywhere else); it now goes through the normal play path (`_lateGoForIt`).
+6. At the half with nothing in reach, the offense does not spend timeouts (`_halfPlayedOut`):
+   games 5518 and 5525 had teams on their own 6 and 27 calling a timeout, then running.
 
 Run: .venv/bin/python test_last_minute_runs.py   (exits non-zero on any failure)
 """
@@ -102,6 +109,53 @@ r, n = runRate(quarter=2, clock=15, down=1, distance=10, ballOn=82, offScore=10,
                offTimeouts=3, clockRunning=False)
 expect(f"Q2 0:15 at its own 18: nothing in reach, the half is played out ({r:.0%} runs, n={n})",
        r >= 0.25)
+
+print("\n-- 5. behind at the end, a run that does not score loses the game --")
+def goRunShare(**kw):
+    runs = goes = 0
+    for i in range(TRIALS):
+        random.seed(i); np.random.seed(i)
+        s = Scenario().situation(**kw)
+        pt = s.callPlay()
+        if pt in (FG.PlayType.Run, FG.PlayType.Pass):
+            goes += 1
+            runs += pt is FG.PlayType.Run and not getattr(s.g.play, 'isScramble', False)
+    return runs / max(goes, 1), goes
+r, n = goRunShare(quarter=4, clock=11, down=4, distance=3, ballOn=8, offScore=23, defScore=30,
+                  offTimeouts=0, clockRunning=False)
+expect(f"down 7, 4th & 3 at the 8, 0:11, no timeouts (game 5525): never run ({r:.0%}, n={n})",
+       n == TRIALS and r == 0)
+r, n = goRunShare(quarter=4, clock=11, down=2, distance=10, ballOn=15, offScore=23, defScore=30,
+                  offTimeouts=0, clockRunning=False)
+expect(f"down 7, 2nd & 10 at the 15, 0:11, no timeouts: never run ({r:.0%}, n={n})", r == 0)
+r, n = goRunShare(quarter=4, clock=11, down=4, distance=2, ballOn=2, offScore=20, defScore=24,
+                  offTimeouts=0, clockRunning=False)
+expect(f"down 4, 4th & goal at the 2, 0:11: converting is scoring, a run is allowed ({r:.0%}, n={n})",
+       r > 0)
+r, n = goRunShare(quarter=4, clock=90, down=4, distance=1, ballOn=60, offScore=17, defScore=20,
+                  offTimeouts=1, clockRunning=False)
+expect(f"down 3, 4th & 1 at its own 40, 1:30: the go play is called, not fixed ({r:.0%} runs)",
+       0.2 <= r <= 0.7)
+r, n = goRunShare(quarter=4, clock=180, down=4, distance=2, ballOn=25, offScore=14, defScore=19,
+                  offTimeouts=2, clockRunning=False)
+expect(f"down 5, 4th & 2 at the 25, 3:00: the go play is called, not fixed ({r:.0%} runs)",
+       0.1 <= r <= 0.7)
+
+print("\n-- 6. at the half with nothing in reach, no timeouts --")
+def toRate(**kw):
+    used = 0
+    for i in range(TRIALS):
+        random.seed(i); np.random.seed(i)
+        s = Scenario().situation(**kw)
+        s.callPlay()
+        used += s.g.homeTimeoutsRemaining < kw['offTimeouts']
+    return used / TRIALS
+r = toRate(quarter=2, clock=26, down=1, distance=10, ballOn=94, offScore=0, defScore=3,
+           offTimeouts=3, clockRunning=True)
+expect(f"Q2 0:26 at its own 6, three timeouts (game 5518): no timeout ({r:.0%})", r == 0)
+r = toRate(quarter=2, clock=30, down=1, distance=10, ballOn=40, offScore=7, defScore=7,
+           offTimeouts=2, clockRunning=True)
+expect(f"Q2 0:30 at the opponent's 40, two timeouts: still stops the clock ({r:.0%})", r >= 0.6)
 
 print()
 if fails:
