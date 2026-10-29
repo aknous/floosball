@@ -1045,13 +1045,10 @@ class SeasonManager:
             self.updatePlayoffPicture()
             newClinchEvents = self.checkForClinches()
 
-            # Broadcast clinch/elimination events and award Floobits for team achievements
+            # Award Floobits for team achievements. The announcements are
+            # `_publishClinchNews`'s job (week end), off the same `clinchStatus`.
             from constants import CLINCH_PLAYOFF_REWARD, CLINCH_TOPSEED_REWARD
             for event in newClinchEvents:
-                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': event['text']}})
-                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(
-                        LeagueNewsEvent.leagueNews(event['text'], 'standings', event['type']))
                 if event['type'] == 'clinch_playoff':
                     self._awardFavoriteTeamBonus(
                         event['teamId'], CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
@@ -4837,13 +4834,24 @@ class SeasonManager:
         Idempotent through `team._clinchAnnounced`: the flags are recomputed from
         the table every week and stay true once true, so without a marker every
         remaining week would re-announce the same title.
+
+        ⚠️ AND THROUGH THE FEED ITSELF (fixed 2026-10-29). `_clinchAnnounced` is in
+        memory, so every restart re-announced every clinch: prod season 12 published the
+        Raccoons' berth in weeks 21, 23 and 27, each a deploy. A line already in the feed
+        for this season is not published again (`_teamNewsExists`).
+
+        This is the only mid-season announcer: the legacy `checkPlayoffClinching` (top
+        half by record, blind to division winners) is gone, and eliminations are
+        announced here too. Broadcast live as well as persisted.
         """
         try:
-            from standings_view import clinchStatus
+            from standings_view import clinchStatus, regularSeasonWeeks
             season = self.currentSeason
             if not season:
                 return
-            totalGames = len(getattr(season, 'schedule', None) or []) or None
+            # The regular season, not the schedule list, which grows a week per
+            # playoff round (`regularSeasonWeeks`).
+            totalGames = regularSeasonWeeks(getattr(season, 'schedule', None) or [])
             if not totalGames:
                 return
             teamManager = self.serviceContainer.getService('team_manager')
@@ -4867,23 +4875,47 @@ class SeasonManager:
                          f'division champions', True),
                         ('playoffs', 'clinched',
                          f'{team.city} {team.name} have clinched a playoff berth', False),
+                        ('eliminated', 'eliminated',
+                         f'{team.city} {team.name} have faded from playoff contention', None),
                     ):
                         won = flags.get({'topSeed': 'clinchedTopSeed',
                                          'division': 'clinchedDivision',
-                                         'playoffs': 'clinchedPlayoffs'}[key])
+                                         'playoffs': 'clinchedPlayoffs',
+                                         'eliminated': 'eliminated'}[key])
                         if not won or key in announced:
                             continue
                         announced.add(key)
+                        if self._teamNewsExists(category, text, team):
+                            continue
                         try:
                             season.leagueHighlights.insert(0, {'event': {'text': text}})
                         except Exception:
                             pass
-                        self._publishTeamNews(category, text, team, lead=lead)
+                        self._publishTeamNews(category, text, team, lead=bool(lead), broadcast=True)
         except Exception as e:
             # Never let an announcement break a week rollover.
             logger.warning(f"_publishClinchNews failed in week {week}: {e}")
 
-    def _publishTeamNews(self, category: str, text: str, team, lead: bool = False) -> None:
+    def _teamNewsExists(self, category: str, text: str, team) -> bool:
+        """Is this line already in the feed for this team this season? Clinches and
+        eliminations happen once a season, and the in-memory markers that say they were
+        announced do not survive a restart. Fails open (False): a duplicate line beats a
+        lost one."""
+        try:
+            from database.models import LeagueNewsItem
+            seasonNumber = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+            return self.db_session.query(LeagueNewsItem.id).filter(
+                LeagueNewsItem.season == seasonNumber,
+                LeagueNewsItem.category == category,
+                LeagueNewsItem.team_id == team.id,
+                LeagueNewsItem.text == text,
+            ).first() is not None
+        except Exception as e:
+            logger.debug(f"Team news lookup skipped ({category}): {e}")
+            return False
+
+    def _publishTeamNews(self, category: str, text: str, team, lead: bool = False,
+                         broadcast: bool = False) -> None:
         """Persist a team event to the league-news feed.
 
         `lead=True` attaches the four-number strip that makes an item eligible to lead the
@@ -4920,9 +4952,9 @@ class SeasonManager:
                 # single game can produce so it takes the headline of the week it lands
                 # in rather than losing to whichever receiver had a big afternoon.
                 leadWeight=3.0 if lead else None,
-                # The surrounding code already broadcasts this line itself; publishing
-                # would send it twice.
-                broadcast=False,
+                # Most callers broadcast the line themselves; publishing would send it
+                # twice. `_publishClinchNews` does not.
+                broadcast=broadcast,
             )
         except Exception as e:
             logger.debug(f"Team news publish skipped ({category}): {e}")
@@ -5641,6 +5673,8 @@ class SeasonManager:
                             description='Favorite team clinched playoffs',
                             season=self.currentSeason.seasonNumber)
                         _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
+                        if self._teamNewsExists('clinched', _clinchText, team):
+                            continue   # announced before a restart
                         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
                         self._publishTeamNews('clinched', _clinchText, team, lead=True)
                         if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
@@ -5655,6 +5689,8 @@ class SeasonManager:
                 team.clinchedPlayoffs = False
                 if not resuming:
                     _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
+                    if self._teamNewsExists('eliminated', _elimText, team):
+                        continue   # announced mid-season, or before a restart
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
                     self._publishTeamNews('eliminated', _elimText, team)
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
@@ -10640,10 +10676,16 @@ class SeasonManager:
         Supporter loyalty × patron rank (this is where the "profit only for
         long-tenure fans of great teams" envelope actually bites). Gated on the
         same activity rule as idle accrual — dormant accounts don't get paid.
-        Returns the number of users rewarded."""
+        Returns the number of users rewarded.
+
+        ⚠️ ONCE PER FAN PER SEASON PER MILESTONE (fixed 2026-10-29). Every caller pays a
+        once-a-season milestone (berth, top seed, Floos Bowl), but the flags that guard
+        them live in memory, so each restart paid again: prod season 12 paid Strangers
+        fans for their berth in weeks 22, 23 and 27. A fan holding a transaction of this
+        type for this season is skipped."""
         try:
             from database.connection import get_session
-            from database.models import User
+            from database.models import CurrencyTransaction, User
             from database.repositories.card_repositories import CurrencyRepository
             from managers.supporterManager import (
                 computePatronRanks, combinedMultiplier, isEarning,
@@ -10656,6 +10698,12 @@ class SeasonManager:
                 ).all()
                 # Only fans who pass the activity gate (consistent with accrual).
                 users = [u for u in users if isEarning(u)]
+                paid = {uid for (uid,) in session.query(CurrencyTransaction.user_id).filter(
+                    CurrencyTransaction.transaction_type == transactionType,
+                    CurrencyTransaction.season == season,
+                    CurrencyTransaction.user_id.in_([u.id for u in users] or [-1]),
+                ).all()}
+                users = [u for u in users if u.id not in paid]
                 if not users:
                     session.close()
                     return 0
@@ -13821,17 +13869,75 @@ class SeasonManager:
         self.currentSeason.nonPlayoffTeams = nonPlayoffTeams
     
     def checkForClinches(self) -> list:
-        """Check for playoff clinches, top seed clinches, and eliminations mid-season.
-        Delegates to leagueManager.checkPlayoffClinching() and returns new event texts to broadcast.
-        """
+        """Set each club's clinch / elimination flags and in-season pressure off
+        `standings_view.clinchStatus`, and return the newly won berths and top seeds
+        (`{'type': 'clinch_playoff'|'clinch_topseed', 'teamId'}`) for the fan bonus.
+
+        ⚠️ ONE DEFINITION OF CLINCHED (fixed 2026-10-29). This delegated to
+        `leagueManager.checkPlayoffClinching`, which took the top half BY RECORD as the
+        field and compared raw wins with the club 9th by record. A division winner takes
+        a top-four seed at any record, so the two differ: prod season 12 week 25 it
+        announced the Broads and Caddies (8th and 7th by record) as clinched while the
+        12-15 Sand Dollars led their division; the Broads finished week 27 9th. It also
+        paid the clinch bonus, and set `team.clinchedPlayoffs`, which the engine reads
+        (a clinched club with a loose room coasts from week 24, `floosball_game`).
+        `clinchStatus` is what the standings board and the news feed use.
+
+        The flags are in memory and rebuilt here every week, so a restart re-derives them;
+        the bonus (`_awardFavoriteTeamBonus`) and the news (`_publishClinchNews`) check the
+        database, so a restart does not repeat either."""
         if not self.currentSeason:
             return []
-        leagueHighlights = getattr(self.currentSeason, 'leagueHighlights', [])
-        return self.leagueManager.checkPlayoffClinching(
-            currentWeek=self.currentSeason.currentWeek,
-            leagueHighlights=leagueHighlights
-        )
-    
+        try:
+            from standings_view import clinchStatus, regularSeasonWeeks, seedLeague, _points, _played
+        except Exception:
+            return []
+        totalGames = regularSeasonWeeks(getattr(self.currentSeason, 'schedule', None) or [])
+        if not totalGames:
+            return []
+        week = self.currentSeason.currentWeek or 0
+        highlights = getattr(self.currentSeason, 'leagueHighlights', None)
+        events = []
+        for league in self.leagueManager.leagues:
+            teams = list(league.teamList)
+            if not teams:
+                continue
+            status = clinchStatus(teams, totalGames)
+            seeds = seedLeague(teams)['seeds']
+            cutTeam = None
+            if seeds:
+                cutId = max(seeds, key=lambda tid: seeds[tid][0])
+                cutTeam = next((t for t in teams if t.id == cutId), None)
+            for team in teams:
+                st = status.get(team.id) or {}
+                if st.get('clinchedTopSeed') and not getattr(team, 'clinchedTopSeed', False):
+                    team.clinchedTopSeed = True
+                    events.append({'type': 'clinch_topseed', 'teamId': team.id})
+                if st.get('clinchedPlayoffs') and not getattr(team, 'clinchedPlayoffs', False):
+                    team.clinchedPlayoffs = True
+                    team.eliminated = False
+                    events.append({'type': 'clinch_playoff', 'teamId': team.id})
+                if st.get('eliminated') and not getattr(team, 'eliminated', False):
+                    team.eliminated = True
+                    team.inSeasonPressure = 0.7
+                # In-season pressure for the clubs outside the projected field (the
+                # blended pressureModifier is recomputed at week start,
+                # `teamManager.applyRegularSeasonPressureBlend`).
+                if team.id in seeds or team.eliminated or getattr(team, 'clinchedPlayoffs', False):
+                    continue
+                if (team.seasonTeamStats.get('winPerc', 0) or 0) < 0.45 and week >= 14:
+                    team.inSeasonPressure = 0.9
+                remaining = max(0, totalGames - _played(team))
+                if cutTeam is not None and _points(team) + remaining == _points(cutTeam):
+                    # On the brink: one more loss and the club holding the last seed is
+                    # out of reach.
+                    if highlights is not None:
+                        highlights.insert(0, {'event': {
+                            'text': f'{team.city} {team.name} are on the brink of elimination!'}})
+                    if remaining <= 5:
+                        team.inSeasonPressure = 2.0
+        return events
+
     def saveSeasonStats(self) -> None:
         """Save season statistics to file (matches original Season.saveSeasonStats)"""
         if not self.currentSeason:

@@ -1181,50 +1181,6 @@ class TeamManager:
         self.logger.info("Prior-season pressure baselines set")
         self.logPressureSnapshot("season_start", season=currentSeason, week=0)
     
-    def updateInSeasonPressureModifiers(self, currentWeek: int, nonPlayoffTeamsList: List, lastTeamIn) -> List[Dict[str, str]]:
-        """Update each team's `inSeasonPressure` (NOT pressureModifier directly)
-        based on current standings and elimination math. The blended live
-        pressureModifier gets recomputed in applyRegularSeasonPressureBlend.
-        """
-        leagueHighlights = []
-
-        self.logger.info(f"Updating in-season pressure for week {currentWeek}")
-
-        for standing in nonPlayoffTeamsList:
-            team = standing['team'] if isinstance(standing, dict) else standing
-
-            # Poor performers late in season: in-season pressure dips
-            if team.seasonTeamStats.get('winPerc', 0) < 0.45 and currentWeek >= 14:
-                team.inSeasonPressure = 0.9
-
-            if not getattr(team, 'clinchedPlayoffs', False) and not getattr(team, 'eliminated', False):
-                import floosball_methods as FloosMethods
-
-                team.eliminated = FloosMethods.checkIfEliminated(
-                    team.seasonTeamStats.get('wins', 0),
-                    lastTeamIn.seasonTeamStats.get('wins', 0),
-                    28 - currentWeek
-                )
-
-                if team.eliminated:
-                    leagueHighlights.insert(0, {
-                        'event': {'text': f'{team.city} {team.name} have faded from playoff contention'}
-                    })
-                    team.inSeasonPressure = 0.7
-                else:
-                    teamMaxWins = team.seasonTeamStats.get('wins', 0) + (28 - currentWeek)
-                    lastTeamWins = lastTeamIn.seasonTeamStats.get('wins', 0)
-
-                    if teamMaxWins == lastTeamWins:
-                        leagueHighlights.insert(0, {
-                            'event': {'text': f'{team.city} {team.name} are on the brink of elimination!'}
-                        })
-                        if (28 - currentWeek) <= 5:
-                            team.inSeasonPressure = 2.0  # Must-win
-
-        self.logger.info(f"In-season pressure update complete for week {currentWeek}")
-        return leagueHighlights
-
     def applyRegularSeasonPressureBlend(self, currentWeek: int, season: int = None) -> None:
         """Blend prior-season expectation into in-season pressure based on
         how far we are into the regular season. Call this at week start during
