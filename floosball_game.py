@@ -3794,25 +3794,78 @@ class Game:
 
         Priced at the drill's measured pace: about half its snaps stop the clock on their
         own and a running-clock pre-snap averages 8 seconds. See constants TWO_MINUTE_*."""
-        from constants import (FINAL_SNAP_SECS, LAST_SNAP_LIVE_SECS, TWO_MINUTE_YARDS_PER_SNAP,
-                               TWO_MINUTE_CLOCK_STOP_SHARE, TWO_MINUTE_PRESNAP_SECS)
+        from constants import (LAST_SNAP_LIVE_SECS, TWO_MINUTE_CLOCK_STOP_SHARE,
+                               TWO_MINUTE_PRESNAP_SECS)
         stopShare = TWO_MINUTE_CLOCK_STOP_SHARE
         huddle = TWO_MINUTE_PRESNAP_SECS + DEAD_BALL_ADMIN_SECONDS   # paid only on a running clock
         avgSnap = LAST_SNAP_LIVE_SECS + (1.0 - stopShare) * huddle
         runningSnapsLeft = (1.0 - stopShare) * secs / avgSnap
         if timeoutsLeft >= runningSnapsLeft:
             return True
+        return secs < self._driveSecsNeeded(timeoutsLeft, margin, periodKind)
+
+    def _halfRunWeight(self, secs: int) -> float:
+        """Run-weight multiplier in the last 1:00 of a half, from how short the clock is for
+        the yards to the end zone (2026-10-29). Above 1:00 it only lifts the old flat 0.35
+        where the clock is no constraint: that cut matched the NFL from its own end to
+        midfield (own 31-50 14% vs 15%), where this one reads 1:30 as fully urgent (5%), but
+        ran 22% at the opponent's 1-10 with 1:30 (NFL 51%).
+
+        A run in bounds costs a running-clock huddle, or a timeout to stop it. Pressure is
+        the clock the drive needs to reach the END ZONE with no timeout spent
+        (`_driveSecsNeeded`), over the clock left: the offense plays for the touchdown and
+        the kick is its fallback, so the field-goal target the timeout rule uses would read
+        the opponent's 20 with 0:30 as no hurry at all.
+          * pressure <= 0.5 (time to spare even if every run pays its huddle): no cut;
+          * from there to 1.0: the cut ramps to the Q4 last-minute floor, 0.1;
+          * nothing is in reach (after the snaps that fit, the end zone is past this QB's
+            heave and the kick): the half is being played out, no cut (NFL teams inside
+            their own 30 with 0:20 left run 46% of the time).
+        It replaced the flat 0.35 (clock-IQ scaled) under 1:00, which ran too much when time
+        was short. Harness vs NFL 2016-24
+        (scrambles as passes), before: 1:01-2:00 at the opponent's 1-10 22% runs (NFL 51%),
+        11-30 16% (32%); under 0:40 between the 30s 20-27% (4-6%)."""
+        from constants import TWO_MINUTE_YARDS_PER_SNAP
+        if secs <= 0:
+            return 1.0
+        roster = self.offensiveTeam.rosterDict
+        kicker = roster.get('k')
+        reachAfterDrive = max(hailMaryReach(roster.get('qb')),
+                              self._fgComfortYards(kicker) if kicker else 0)
+        drive = max(0, self._estimateAvailablePlays() - 1) * TWO_MINUTE_YARDS_PER_SNAP
+        if self.yardsToEndzone - drive > reachAfterDrive:
+            return 1.0
+        # To the end zone, planning on the downs left: close in, a touchdown is a series of
+        # tries (the sim scores 35-56% a snap from the 1-5), and a stuffed run spends the
+        # clock or a timeout one of the later tries needs. One snap read the 5 with 0:30 as
+        # calm, and the offense ran 44% there with timeouts in hand (NFL 27%).
+        downsLeft = self.gameRules.downsPerSeries - self.down + 1
+        pressure = self._driveSecsNeeded(0, -99, 'game', minSnaps=downsLeft) / secs
+        if pressure <= 0.5:
+            return 1.0
+        return 1.0 - 0.9 * min(1.0, (pressure - 0.5) / 0.5)
+
+    def _driveSecsNeeded(self, timeoutsLeft: int, margin: float, periodKind,
+                         minSnaps: int = 1) -> float:
+        """Clock this drive still needs to score, at the two-minute drill's measured pace:
+        to this kicker's comfortable range plus the kick when a field goal does the job
+        (any score at the half; tied or within a kick at the end), else to the end zone.
+        About half the snaps stop the clock themselves and each timeout held covers one
+        more; the rest pay a running-clock huddle. Shared by `_offensiveTimeoutNeeded` and
+        the end-of-half run weight (`_applySituationalMods`)."""
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_LIVE_SECS, TWO_MINUTE_YARDS_PER_SNAP,
+                               TWO_MINUTE_CLOCK_STOP_SHARE, TWO_MINUTE_PRESNAP_SECS)
+        stopShare = TWO_MINUTE_CLOCK_STOP_SHARE
+        huddle = TWO_MINUTE_PRESNAP_SECS + DEAD_BALL_ADMIN_SECONDS
         kicker = self.offensiveTeam.rosterDict.get('k')
         fgDoesIt = periodKind == 'half' or (-self._fgValue() <= margin <= 0)
         if fgDoesIt and kicker is not None:
             yards = max(0, self.yardsToEndzone - self._fgComfortYards(kicker))
             snaps = math.ceil(yards / TWO_MINUTE_YARDS_PER_SNAP) + 1   # + the kick
         else:
-            snaps = max(1, math.ceil(self.yardsToEndzone / TWO_MINUTE_YARDS_PER_SNAP))
-        # About half the snaps stop the clock themselves; each timeout held covers one more.
+            snaps = max(minSnaps, math.ceil(self.yardsToEndzone / TWO_MINUTE_YARDS_PER_SNAP))
         runningHuddles = max(0.0, (1.0 - stopShare) * snaps - timeoutsLeft)
-        need = (snaps - 1) * LAST_SNAP_LIVE_SECS + runningHuddles * huddle + FINAL_SNAP_SECS
-        return secs < need
+        return (snaps - 1) * LAST_SNAP_LIVE_SECS + runningHuddles * huddle + FINAL_SNAP_SECS
 
     def _offenseEffectiveSecs(self) -> int:
         """Seconds of urgency the offense faces — how soon it MUST score. Standard: the
@@ -5362,7 +5415,12 @@ class Game:
         # deep shot; everyone goes pass-first and hurries. Coach-scaled via _mul.
         if q == 2 and secs < 120:
             deepBoost = 2.0 if scoreDiff < 0 else 1.6
-            _mul('run', 0.35)
+            if secs <= 60:
+                _flat('run', self._halfRunWeight(secs))
+            else:
+                # Above a minute the old flat cut is the most urgency there is, and a drive
+                # the clock does not constrain (the red zone with 1:30) takes none of it.
+                _flat('run', max(1 + (0.35 - 1) * sit, self._halfRunWeight(secs)))
             _mul('short', 1.2)
             _mul('medium', 1.4)
             _mul('long', 1.6)

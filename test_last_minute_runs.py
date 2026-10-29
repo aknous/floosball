@@ -1,4 +1,4 @@
-"""The last minute of Q4, tied or trailing, is pass-first (2026-10-29, prod week of 10-29).
+"""The last minute of each half, tied or trailing at the end of the game, is pass-first (2026-10-29, prod week of 10-29).
 
 1. The trailing desperation cut on the run weight went through `_mul`, which scales it by
    the coach's clock IQ, so an average coach kept ~37% of it; a TIED team got no cut at
@@ -11,6 +11,10 @@
    in that spot on the old engine). Off the drain, a running clock now gets a timeout too.
 3. The drains themselves are untouched: tied in a comfortable kick with the clock short,
    the offense still runs it down and kicks last (NFL 84% runs inside the 30).
+4. The last 1:00 of the first half used a flat clock-IQ-scaled cut at any field position,
+   so it ran 20-27% between the 30s under 0:40 (NFL 4-6%) and 22% at the opponent's 1-10
+   with 1:30 (NFL 51%). Now the cut follows `_halfRunWeight`: how short the clock is for
+   the yards to the end zone, nothing when nothing is in reach.
 
 Run: .venv/bin/python test_last_minute_runs.py   (exits non-zero on any failure)
 """
@@ -80,6 +84,24 @@ print("\n-- 3. the drains still run the clock down --")
 r, n = runRate(quarter=4, clock=40, down=1, distance=10, ballOn=15, offScore=20, defScore=20,
                offTimeouts=2)
 expect(f"tied at the opponent's 15, 0:40, chip-shot kick: drain ({r:.0%} runs, n={n})", r >= 0.5)
+
+print("\n-- 4. the end of the first half: the run follows the clock left for the yards --")
+# Stopped clock: on a running one a no-huddle snap's menu is passes only. Ahead 10-7, so
+# the field-goal drain (tied or down 1-3) is not what is being measured.
+r, n = runRate(quarter=2, clock=30, down=1, distance=10, ballOn=22, offScore=10, defScore=7,
+               offTimeouts=2, clockRunning=False)
+expect(f"Q2 0:30 at the opponent's 22, two timeouts: pass ({r:.0%} runs, n={n})", r <= 0.25)
+r, n = runRate(quarter=2, clock=30, down=1, distance=5, ballOn=5, offScore=10, defScore=7,
+               offTimeouts=2, clockRunning=False)
+expect(f"Q2 0:30, 1st & goal at the 5, two timeouts: mostly pass ({r:.0%} runs, n={n})", r <= 0.4)
+r, n = runRate(quarter=2, clock=90, down=1, distance=8, ballOn=8, offScore=10, defScore=7,
+               offTimeouts=3, clockRunning=False)
+expect(f"Q2 1:30, 1st & goal at the 8: no hurry, no clock cut ({r:.0%} runs, n={n})",
+       r >= 0.68)
+r, n = runRate(quarter=2, clock=15, down=1, distance=10, ballOn=82, offScore=10, defScore=7,
+               offTimeouts=3, clockRunning=False)
+expect(f"Q2 0:15 at its own 18: nothing in reach, the half is played out ({r:.0%} runs, n={n})",
+       r >= 0.25)
 
 print()
 if fails:
