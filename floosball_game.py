@@ -1782,6 +1782,14 @@ class Game:
         # trigger any quarter (the possession/frame is ending, not just the half/game).
         if self.currentQuarter not in (2, 4) and not self._chessClockLow(60) and not self._frameEndSoon(60):
             return False
+        # ⚠️ NOT ON A SNAP THE COACH IS PLAYING FOR THE TOUCHDOWN (`deferFG` / `pushForTD`
+        # in `playCaller`, fixed 2026-10-29). Both fall through to the play caller, and the
+        # drain stayed on, tripling the run weight on a snap meant to score. Prod game 5469:
+        # the Sand Dollars, down 3 at the COL 26 with 0:23, "try for the TD to win outright",
+        # ran up the middle for a yard, burned 18 seconds and had time only for the tying kick.
+        play = getattr(self, 'play', None)
+        if play is not None and getattr(play, 'playingForTd', False):
+            return False
         if self._offenseEffectiveSecs() > 60:
             return False
         isHome = (self.offensiveTeam is self.homeTeam)
@@ -3786,25 +3794,78 @@ class Game:
 
         Priced at the drill's measured pace: about half its snaps stop the clock on their
         own and a running-clock pre-snap averages 8 seconds. See constants TWO_MINUTE_*."""
-        from constants import (FINAL_SNAP_SECS, LAST_SNAP_LIVE_SECS, TWO_MINUTE_YARDS_PER_SNAP,
-                               TWO_MINUTE_CLOCK_STOP_SHARE, TWO_MINUTE_PRESNAP_SECS)
+        from constants import (LAST_SNAP_LIVE_SECS, TWO_MINUTE_CLOCK_STOP_SHARE,
+                               TWO_MINUTE_PRESNAP_SECS)
         stopShare = TWO_MINUTE_CLOCK_STOP_SHARE
         huddle = TWO_MINUTE_PRESNAP_SECS + DEAD_BALL_ADMIN_SECONDS   # paid only on a running clock
         avgSnap = LAST_SNAP_LIVE_SECS + (1.0 - stopShare) * huddle
         runningSnapsLeft = (1.0 - stopShare) * secs / avgSnap
         if timeoutsLeft >= runningSnapsLeft:
             return True
+        return secs < self._driveSecsNeeded(timeoutsLeft, margin, periodKind)
+
+    def _halfRunWeight(self, secs: int) -> float:
+        """Run-weight multiplier in the last 1:00 of a half, from how short the clock is for
+        the yards to the end zone (2026-10-29). Above 1:00 it only lifts the old flat 0.35
+        where the clock is no constraint: that cut matched the NFL from its own end to
+        midfield (own 31-50 14% vs 15%), where this one reads 1:30 as fully urgent (5%), but
+        ran 22% at the opponent's 1-10 with 1:30 (NFL 51%).
+
+        A run in bounds costs a running-clock huddle, or a timeout to stop it. Pressure is
+        the clock the drive needs to reach the END ZONE with no timeout spent
+        (`_driveSecsNeeded`), over the clock left: the offense plays for the touchdown and
+        the kick is its fallback, so the field-goal target the timeout rule uses would read
+        the opponent's 20 with 0:30 as no hurry at all.
+          * pressure <= 0.5 (time to spare even if every run pays its huddle): no cut;
+          * from there to 1.0: the cut ramps to the Q4 last-minute floor, 0.1;
+          * nothing is in reach (after the snaps that fit, the end zone is past this QB's
+            heave and the kick): the half is being played out, no cut (NFL teams inside
+            their own 30 with 0:20 left run 46% of the time).
+        It replaced the flat 0.35 (clock-IQ scaled) under 1:00, which ran too much when time
+        was short. Harness vs NFL 2016-24
+        (scrambles as passes), before: 1:01-2:00 at the opponent's 1-10 22% runs (NFL 51%),
+        11-30 16% (32%); under 0:40 between the 30s 20-27% (4-6%)."""
+        from constants import TWO_MINUTE_YARDS_PER_SNAP
+        if secs <= 0:
+            return 1.0
+        roster = self.offensiveTeam.rosterDict
+        kicker = roster.get('k')
+        reachAfterDrive = max(hailMaryReach(roster.get('qb')),
+                              self._fgComfortYards(kicker) if kicker else 0)
+        drive = max(0, self._estimateAvailablePlays() - 1) * TWO_MINUTE_YARDS_PER_SNAP
+        if self.yardsToEndzone - drive > reachAfterDrive:
+            return 1.0
+        # To the end zone, planning on the downs left: close in, a touchdown is a series of
+        # tries (the sim scores 35-56% a snap from the 1-5), and a stuffed run spends the
+        # clock or a timeout one of the later tries needs. One snap read the 5 with 0:30 as
+        # calm, and the offense ran 44% there with timeouts in hand (NFL 27%).
+        downsLeft = self.gameRules.downsPerSeries - self.down + 1
+        pressure = self._driveSecsNeeded(0, -99, 'game', minSnaps=downsLeft) / secs
+        if pressure <= 0.5:
+            return 1.0
+        return 1.0 - 0.9 * min(1.0, (pressure - 0.5) / 0.5)
+
+    def _driveSecsNeeded(self, timeoutsLeft: int, margin: float, periodKind,
+                         minSnaps: int = 1) -> float:
+        """Clock this drive still needs to score, at the two-minute drill's measured pace:
+        to this kicker's comfortable range plus the kick when a field goal does the job
+        (any score at the half; tied or within a kick at the end), else to the end zone.
+        About half the snaps stop the clock themselves and each timeout held covers one
+        more; the rest pay a running-clock huddle. Shared by `_offensiveTimeoutNeeded` and
+        the end-of-half run weight (`_applySituationalMods`)."""
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_LIVE_SECS, TWO_MINUTE_YARDS_PER_SNAP,
+                               TWO_MINUTE_CLOCK_STOP_SHARE, TWO_MINUTE_PRESNAP_SECS)
+        stopShare = TWO_MINUTE_CLOCK_STOP_SHARE
+        huddle = TWO_MINUTE_PRESNAP_SECS + DEAD_BALL_ADMIN_SECONDS
         kicker = self.offensiveTeam.rosterDict.get('k')
         fgDoesIt = periodKind == 'half' or (-self._fgValue() <= margin <= 0)
         if fgDoesIt and kicker is not None:
             yards = max(0, self.yardsToEndzone - self._fgComfortYards(kicker))
             snaps = math.ceil(yards / TWO_MINUTE_YARDS_PER_SNAP) + 1   # + the kick
         else:
-            snaps = max(1, math.ceil(self.yardsToEndzone / TWO_MINUTE_YARDS_PER_SNAP))
-        # About half the snaps stop the clock themselves; each timeout held covers one more.
+            snaps = max(minSnaps, math.ceil(self.yardsToEndzone / TWO_MINUTE_YARDS_PER_SNAP))
         runningHuddles = max(0.0, (1.0 - stopShare) * snaps - timeoutsLeft)
-        need = (snaps - 1) * LAST_SNAP_LIVE_SECS + runningHuddles * huddle + FINAL_SNAP_SECS
-        return secs < need
+        return (snaps - 1) * LAST_SNAP_LIVE_SECS + runningHuddles * huddle + FINAL_SNAP_SECS
 
     def _offenseEffectiveSecs(self) -> int:
         """Seconds of urgency the offense faces — how soon it MUST score. Standard: the
@@ -3927,6 +3988,26 @@ class Game:
                 return
 
             if self.homeScore == self.awayScore:
+                # ⚠️ TIED OUT OF RANGE IS GO OR PUNT AT THE NFL RATE, not an automatic go.
+                # This used to go for it from anywhere (it punted only on 16+ to go inside
+                # its own 15), so prod week 11-29 had MIN going on 4th & 1 at its own 29
+                # with 7:55 left and COL on 4th & 6 at its own 38 with 7:45 left; both
+                # failed and handed the opponent a short field for the win. NFL 2016-24,
+                # tied in OT in its own territory with 5:00+ left: 0 of 24 go on 4th & 6-10,
+                # 17-25% on 4th & 1-2. The regulation table gives 24% / 0.5% for those two.
+                goProb = self._fourthDownTableGoProbability(0, coach)
+                goes = self.format.suppressPunt(self) or _random.random() < goProb
+                self.play.insights['fourthDown'] = {
+                    'decision': 'goForIt' if goes else 'punt',
+                    'goProbability': round(goProb * 100, 1),
+                    'fgProbability': round(fgProb * 100, 1), 'inFgRange': False,
+                    'yardsToEndzone': self.yardsToEndzone,
+                    'coachAggr': coach.aggressiveness if coach else None,
+                    'reason': 'overtime, tied, out of field-goal range',
+                }
+                if not goes:
+                    self.play.playType = PlayType.Punt
+                    return
                 if self.yardsToFirstDown <= 3:
                     x = batched_randint(1, 2)
                     if x == 1:
@@ -4313,17 +4394,42 @@ class Game:
             if chargedInRange and fgHelps and not leadingLate:
                 self.play.playType = PlayType.FieldGoal
                 return
+            # ⚠️ TRAILING IN THE LAST 5:00, A PUNT FROM HERE MAY NEVER COME BACK (fixed
+            # 2026-10-29). This gate punted every trailing team inside its own 35 unless
+            # under 2:30 was left, ahead of the late-game branch below that goes for it.
+            # Prod game 5472: the Bees, down 5 with no timeouts, punted on 4th & 2 at their
+            # own 28 with 2:31 left and the Jetskis knelt it out. NFL 2016-24, Q4 2:01-5:00,
+            # trailing 1-8 inside its own 35: go 83% on 4th & 1, ~50% on 4th & 2-5, 86%
+            # with no timeouts. So: a punt the leader can kneel away (`_puntNeverComesBack`)
+            # always goes, 4th & 1 goes, 4th & 2-3 is the coach's call (clock IQ and
+            # aggressiveness, the same terms the late branch uses for a long 4th down).
+            _trailingLate = (_periodKind == 'game' and scoreDiff < 0 and _periodSecs <= 300)
+            _puntConcedes = _trailingLate and self._puntNeverComesBack()
+            _shortCall = False
+            if _trailingLate and not _puntConcedes and 2 <= ytg <= 3 and _periodSecs >= 150:
+                _aggr = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+                _shortCall = (_random.random()
+                              < 0.3 + 0.5 * self._coachClockIQ(coach) + 0.15 * _aggr)
             isLateGameDesperation = (
                 (_periodKind == 'game' and scoreDiff < 0 and _periodSecs < 150)
+                or _puntConcedes
+                or (_trailingLate and ytg <= 1)
+                or _shortCall
                 or (_periodKind == 'half' and scoreDiff <= 0
                     and _periodSecs < 60 and self.yardsToSafety > 50)
             )
             if not isLateGameDesperation:
+                self.play.insights['fourthDown'] = {
+                    'decision': 'punt', 'reason': 'deep own territory',
+                    'yardsToSafety': self.yardsToSafety,
+                }
                 self.play.playType = PlayType.Punt
                 return
             # Under 2 minutes trailing in Q4: NEVER punt — there's no realistic way
             # to get the ball back and still score, so go for it regardless of coach.
-            if not (_periodKind == 'game' and scoreDiff < 0 and _periodSecs < 120):
+            # The same holds whenever the leader could kneel out a punt.
+            if not ((_periodKind == 'game' and scoreDiff < 0 and _periodSecs < 120)
+                    or _puntConcedes or _shortCall):
                 gameIQ = self._coachClockIQ(coach)
                 # Only a genuinely poor clock-manager concedes with a punt here; an
                 # average-or-better coach goes for it. (The old gate let an average
@@ -4533,8 +4639,9 @@ class Game:
                 gameIQ = self._coachClockIQ(coach)
                 aggrMod = aggrNorm * 0.15  # risk tolerance: aggressive +0.15, conservative -0.15
 
-                # Under 2.5 min: must go for it — punting is conceding
-                if secs < 150:
+                # Under 2.5 min: must go for it — punting is conceding. So is a punt
+                # the leader can kneel away, whatever the clock reads.
+                if secs < 150 or self._puntNeverComesBack():
                     # Bad coaches may pick the wrong play tier, but they still go for it
                     if ytg <= 3:
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -4729,15 +4836,21 @@ class Game:
         play. Score and coach aggressiveness shift it in log-odds (the NFL goes on 4th &
         1 in opponent territory 97% of the time trailing by 9+, 80% leading by 9+).
         """
-        from constants import (FOURTH_GO_YTE, FOURTH_GO_YTG, FOURTH_GO_TABLE,
-                               FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT,
-                               FOURTH_GO_AGGR_K)
         if getattr(self.format, 'key', 'standard') != 'standard':
             return None
         q, secs = self.currentQuarter, self.gameClockSeconds
         if q >= 5 or (q == 4 and secs <= 300) or (q == 2 and secs <= 60):
             return None
-        byYtg = [float(np.interp(self.yardsToEndzone, FOURTH_GO_YTE, row)) for row in FOURTH_GO_TABLE]
+        return self._fourthDownTableGoProbability(scoreDiff, coach)
+
+    def _fourthDownTableGoProbability(self, scoreDiff: int, coach) -> float:
+        """The NFL go rate at this spot (`FOURTH_GO_TABLE`), shifted by score and coach
+        aggressiveness, with no clock gate. `_fourthDownGoProbability` gates it to the
+        normal game; overtime reads it directly for a tied 4th down."""
+        from constants import (FOURTH_GO_YTE, FOURTH_GO_YTG, FOURTH_GO_TABLE,
+                               FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT,
+                               FOURTH_GO_AGGR_K)
+        byYtg =[float(np.interp(self.yardsToEndzone, FOURTH_GO_YTE, row)) for row in FOURTH_GO_TABLE]
         base = float(np.interp(self._decisionYardsToGo(), FOURTH_GO_YTG, byYtg))
         base = min(0.995, max(0.002, base))
         shift = float(np.interp(scoreDiff, FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT))
@@ -5147,10 +5260,24 @@ class Game:
         else:
             adapt = aggr = 0.5
 
+        # ⚠️ THE LAST MINUTE, TIED OR TRAILING, IS PASS-FIRST FOR EVERY COACH (2026-10-29).
+        # The run cut below went through `_mul`, which scales it by clock IQ, so an average
+        # coach kept ~37% of the run weight; and a TIED team got no cut at all. Measured
+        # over 1,500 harness games against NFL 2016-24 (scrambles as passes, kneels out),
+        # last 1:00: tied in its own half 37% runs (NFL 11%), at the opponent's 31-50 36%
+        # (19%), trailing in its own half 11-13% (0-1%). 1:01-2:00 already matched, so
+        # only the last minute is flat. Not while draining for a kick or a goal-line score
+        # (`_isFgDrainMode` / `_isTdDrainMode`): there the run is the point.
+        lastMinuteChase = (q == 4 and secs <= 60 and scoreDiff <= 0
+                           and not self._isFgDrainMode() and not self._isTdDrainMode())
+
         # ── Q4 LAST 2 MIN trailing — universal desperation, no coach modulation ──
         # When the clock is genuinely out, every coach throws downfield.
         if q == 4 and scoreDiff < 0 and secs < 120:
-            _mul('run', 0.1)
+            if lastMinuteChase:
+                _flat('run', 0.1)
+            else:
+                _mul('run', 0.1)
             _mul('short', 1.3)
             _mul('medium', 1.8)
             _mul('long', 2.5)
@@ -5229,6 +5356,9 @@ class Game:
                 # Cruise control — no adjustment, vulnerable to comeback
                 self._tallyCoachArchetype('leading_cruise')
 
+        if lastMinuteChase and scoreDiff == 0:
+            _flat('run', 0.1)
+
         # (A one-score-lead Q4 branch used to sit here. It is folded into the
         # lead-protection shift below, which covers every Q4 lead on one curve.)
 
@@ -5285,7 +5415,12 @@ class Game:
         # deep shot; everyone goes pass-first and hurries. Coach-scaled via _mul.
         if q == 2 and secs < 120:
             deepBoost = 2.0 if scoreDiff < 0 else 1.6
-            _mul('run', 0.35)
+            if secs <= 60:
+                _flat('run', self._halfRunWeight(secs))
+            else:
+                # Above a minute the old flat cut is the most urgency there is, and a drive
+                # the clock does not constrain (the red zone with 1:30) takes none of it.
+                _flat('run', max(1 + (0.35 - 1) * sit, self._halfRunWeight(secs)))
             _mul('short', 1.2)
             _mul('medium', 1.4)
             _mul('long', 1.6)
@@ -7830,6 +7965,7 @@ class Game:
                         gambleChance = max(0.05, min(0.50, 0.22 + 0.35 * aggrNorm - 0.30 * gameIQ))
                         if _random.random() < gambleChance:
                             # Gamble for the TD — fall through to the play caller.
+                            self.play.playingForTd = True
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'pushForTD',
                                 'reason': 'Winning FG in hand but coach pushes for the TD',
@@ -7857,6 +7993,7 @@ class Game:
                         deferChance = 0.94 + playsBonus + 0.03 * aggrNorm + 0.02 * gameIQ
                         deferChance = max(0.85, min(0.99, deferChance))
                         if _random.random() < deferChance:
+                            self.play.playingForTd = True
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'deferFG',
                                 'reason': 'Down 3 with 2+ plays, try for the TD to win outright',
