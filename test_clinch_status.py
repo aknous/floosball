@@ -6,8 +6,9 @@ LATE just means the badge shows up a week after the fact. So every test here
 checks the conservative direction: the moment a rival can still catch you, you
 are not clinched, whatever the tiebreakers would say.
 
-⚠️ IT DOES NOT REUSE `leagueManager.checkPlayoffClinching`. That function is dead
-code and would be wrong if revived: it takes the top half BY RECORD as the
+⚠️ `leagueManager.checkPlayoffClinching` IS DELETED (2026-10-29). This file once
+called it dead code; it was not (`seasonManager.checkForClinches` still delegated to
+it, announcing and paying clinches off it), and it was wrong: it takes the top half BY RECORD as the
 playoff field, which stopped being true when divisions arrived — a division
 winner is guaranteed a top-four seed regardless of record, so the field and the
 record order are different sets. It also hardcodes a 28 game season and compares

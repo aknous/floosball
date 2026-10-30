@@ -2404,6 +2404,38 @@ class Game:
         need = LAST_SNAP_LIVE_SECS + huddle + DEAD_BALL_ADMIN_SECONDS + FINAL_SNAP_SECS
         return self._offenseEffectiveSecs() < need
 
+    def _runEndsTheGame(self) -> bool:
+        """Behind at the end of the game, no timeout, and too little time for a run tackled
+        in bounds to be followed by another snap: a run that does not score loses the game.
+        A pass stops the clock when it falls incomplete or the receiver gets out of bounds,
+        so the throw is the only call that keeps another snap alive (owner, 2026-10-29).
+
+        Prod game 5525: SEO, down 7 with no timeouts, 4th & 3 at the MEX 8 with 0:11 and the
+        clock stopped. The late fourth-down tree ran every 4th & 1-3 inside the 40, and the
+        back was tackled at the 9. The same cost model as `_runSpendsTheHalf`: the run's
+        live ball, the next huddle, administration and the final snap.
+
+        On the final down with goal to go, converting IS scoring, so a run is as good a try
+        as a throw and this does not apply. On an earlier down it does: a stuffed run
+        spends the clock, an incompletion keeps the later downs."""
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
+                               LAST_SNAP_LIVE_SECS)
+        kind, _ = self._periodEnd()
+        if kind != 'game' or not self._deadBallStopsClock():
+            return False
+        if self._clockMargin() >= 0:
+            return False
+        timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                        else self.awayTimeoutsRemaining)
+        if timeoutsLeft > 0:
+            return False
+        if self._isFinalDown() and self._decisionYardsToGo() >= self.yardsToEndzone:
+            return False
+        huddle = (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                  else LAST_SNAP_HUDDLE_SECS)
+        need = LAST_SNAP_LIVE_SECS + huddle + DEAD_BALL_ADMIN_SECONDS + FINAL_SNAP_SECS
+        return self._offenseEffectiveSecs() < need
+
     def _lastSnapBeforeBreak(self) -> bool:
         """Is this the last snap the offense gets before the half or the game ends?
 
@@ -3825,15 +3857,9 @@ class Game:
         was short. Harness vs NFL 2016-24
         (scrambles as passes), before: 1:01-2:00 at the opponent's 1-10 22% runs (NFL 51%),
         11-30 16% (32%); under 0:40 between the 30s 20-27% (4-6%)."""
-        from constants import TWO_MINUTE_YARDS_PER_SNAP
         if secs <= 0:
             return 1.0
-        roster = self.offensiveTeam.rosterDict
-        kicker = roster.get('k')
-        reachAfterDrive = max(hailMaryReach(roster.get('qb')),
-                              self._fgComfortYards(kicker) if kicker else 0)
-        drive = max(0, self._estimateAvailablePlays() - 1) * TWO_MINUTE_YARDS_PER_SNAP
-        if self.yardsToEndzone - drive > reachAfterDrive:
+        if self._halfPlayedOut():
             return 1.0
         # To the end zone, planning on the downs left: close in, a touchdown is a series of
         # tries (the sim scores 35-56% a snap from the 1-5), and a stuffed run spends the
@@ -3844,6 +3870,23 @@ class Game:
         if pressure <= 0.5:
             return 1.0
         return 1.0 - 0.9 * min(1.0, (pressure - 0.5) / 0.5)
+
+    def _halfPlayedOut(self) -> bool:
+        """Nothing is in reach before the half: after the snaps that still fit
+        (`_estimateAvailablePlays`, timeouts counted as free stops), the end zone is past
+        this QB's heave (`hailMaryReach`) and this kicker's comfortable range. The offense
+        is playing the half out: no clock cut on the run (`_halfRunWeight`; NFL teams
+        inside their own 30 with 0:20 left run 46% of the time) and no timeout spent
+        (`playCaller`). Both ask this one question, so they cannot disagree; they used to,
+        and prod season 12 week 26 had offenses on their own 6 and 27 with ~0:25 left
+        calling a timeout and then running (games 5518 and 5525)."""
+        from constants import TWO_MINUTE_YARDS_PER_SNAP
+        roster = self.offensiveTeam.rosterDict
+        kicker = roster.get('k')
+        reachAfterDrive = max(hailMaryReach(roster.get('qb')),
+                              self._fgComfortYards(kicker) if kicker else 0)
+        drive = max(0, self._estimateAvailablePlays() - 1) * TWO_MINUTE_YARDS_PER_SNAP
+        return self.yardsToEndzone - drive > reachAfterDrive
 
     def _driveSecsNeeded(self, timeoutsLeft: int, margin: float, periodKind,
                          minSnaps: int = 1) -> float:
@@ -4157,6 +4200,17 @@ class Game:
         }
         self.play.playType = PlayType.Punt
         return True
+
+    def _lateGoForIt(self, scoreDiff: int, coach):
+        """The go play for the late-game fourth-down tree: the normal play path, like the
+        NFL-model go in `_fourthDownCaller` (2026-10-29). The tree used to hardcode it, a run
+        on every 4th & 1-3 inside the opponent's 40 and a pass everywhere else, so it could
+        not see the clock: prod game 5525, SEO down 7 with no timeouts, 4th & 3 at the MEX
+        8 with 0:11, ran and was tackled short (`_runEndsTheGame` now takes the run away
+        there). NFL 2016-24, Q4 last 5:00 trailing 1-8: 4th & 1 runs 45-79%, 4th & 2-3
+        8-17%; the tree ran 100% inside the 40 and 0% outside it."""
+        self.play.insights.setdefault('fourthDown', {})['decision'] = 'goForIt'
+        self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
 
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
@@ -4509,11 +4563,7 @@ class Game:
                 if batched_randint(1, 10) <= goForItThreshold:
                     goForIt = True
             if goForIt:
-                if ytg <= 3:
-                    self.play.runPlay()
-                else:
-                    self.play.passPlay(self._selectPassPlay(
-                        'medium' if ytg <= 12 else 'long'))
+                self._lateGoForIt(scoreDiff, coach)
             else:
                 self.play.playType = PlayType.FieldGoal
             return
@@ -4575,10 +4625,7 @@ class Game:
                         self.play.playType = PlayType.FieldGoal
                         return
                     # Bad coach blunder: goes for TD instead of makeable FG
-                    if ytg <= 5:
-                        self.play.passPlay(self._selectPassPlay('short'))
-                    else:
-                        self.play.passPlay(self._selectPassPlay('medium'))
+                    self._lateGoForIt(scoreDiff, coach)
                     return
                 elif deficit <= self._maxPossession():
                     # Down 4-8: FG doesn't tie — need a TD eventually
@@ -4593,12 +4640,7 @@ class Game:
                             self.play.playType = PlayType.FieldGoal
                             return
                     # Go for TD
-                    if ytg <= 5:
-                        self.play.passPlay(self._selectPassPlay('short'))
-                    elif ytg <= 10:
-                        self.play.passPlay(self._selectPassPlay('medium'))
-                    else:
-                        self.play.passPlay(self._selectPassPlay('long'))
+                    self._lateGoForIt(scoreDiff, coach)
                     return
                 else:
                     # Down 9+: FG is almost meaningless, go for TD
@@ -4606,10 +4648,7 @@ class Game:
                     if aggrNorm < -0.5:
                         self.play.playType = PlayType.FieldGoal
                         return
-                    if ytg <= 5:
-                        self.play.passPlay(self._selectPassPlay('medium'))
-                    else:
-                        self.play.passPlay(self._selectPassPlay('long'))
+                    self._lateGoForIt(scoreDiff, coach)
                     return
             # Outside late Q4: standard FG logic
             if self.yardsToEndzone <= 25:
@@ -4642,55 +4681,42 @@ class Game:
                 # Under 2.5 min: must go for it — punting is conceding. So is a punt
                 # the leader can kneel away, whatever the clock reads.
                 if secs < 150 or self._puntNeverComesBack():
-                    # Bad coaches may pick the wrong play tier, but they still go for it
-                    if ytg <= 3:
-                        self.play.passPlay(self._selectPassPlay('short'))
-                    elif ytg <= 10:
-                        self.play.passPlay(self._selectPassPlay('medium'))
-                    else:
-                        self.play.passPlay(self._selectPassPlay('long'))
+                    self._lateGoForIt(scoreDiff, coach)
                     return
 
                 # 2.5–5 min: go for it based on deficit and distance
                 if secs <= 300:
                     if deficit <= self._maxPossession():
-                        # Down 1 score: go for it on short/medium yardage
-                        if ytg <= 3:
-                            self.play.passPlay(self._selectPassPlay('short'))
+                        # Down 1 score: go for it on short/medium yardage; on long
+                        # yardage good/aggressive coaches go for it, bad/conservative punt
+                        if ytg <= 8 or _random.random() < 0.3 + 0.5 * gameIQ + aggrMod:
+                            self._lateGoForIt(scoreDiff, coach)
                             return
-                        elif ytg <= 8:
-                            self.play.passPlay(self._selectPassPlay('medium'))
-                            return
-                        else:
-                            # Long yardage: good/aggressive coaches go for it, bad/conservative punt
-                            if _random.random() < 0.3 + 0.5 * gameIQ + aggrMod:
-                                self.play.passPlay(self._selectPassPlay('long'))
-                                return
                     elif deficit <= 2 * self._maxPossession():
                         if ytg <= 3:
-                            self.play.passPlay(self._selectPassPlay('short'))
+                            self._lateGoForIt(scoreDiff, coach)
                             return
                         elif ytg <= 5:
                             if _random.random() < 0.7 + 0.2 * gameIQ + aggrMod:
-                                self.play.passPlay(self._selectPassPlay('medium'))
+                                self._lateGoForIt(scoreDiff, coach)
                                 return
                         else:
                             if _random.random() < 0.55 + 0.3 * gameIQ + aggrMod:
-                                self.play.passPlay(self._selectPassPlay('long'))
+                                self._lateGoForIt(scoreDiff, coach)
                                 return
                     else:
                         # Down 17+: always go for it
-                        self.play.passPlay(self._selectPassPlay('long'))
+                        self._lateGoForIt(scoreDiff, coach)
                         return
 
                 # 5+ min: standard trailing behavior
                 if deficit <= self._maxPossession() and ytg <= 2:
-                    self.play.passPlay(self._selectPassPlay('short'))
+                    self._lateGoForIt(scoreDiff, coach)
                     return
                 elif deficit <= self._maxPossession() and ytg <= 5:
                     # Aggressive coaches willing to attempt short yardage with time
                     if _random.random() < max(0, 0.1 + aggrMod):
-                        self.play.passPlay(self._selectPassPlay('short'))
+                        self._lateGoForIt(scoreDiff, coach)
                         return
 
             # Q2 two-minute drill: go for it past midfield with under 60 sec
@@ -5430,6 +5456,10 @@ class Game:
         # clock-IQ judgment, so flat.
         if self._runSpendsTheHalf():
             _flat('run', 0.1)
+        # Behind at the end of the game, a run that does not score loses it
+        # (`_runEndsTheGame`): pass only. Zero also keeps the audible from checking into one.
+        if self._runEndsTheGame():
+            _flat('run', 0.0)
 
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
@@ -8436,9 +8466,15 @@ class Game:
                 from constants import OFFENSE_TIMEOUT_MISREAD
                 # (A multi-score deficit binds only at the end of the GAME: the half ends on
                 # one drive whatever the score.)
-                clockBinds = (multiScore and _periodKind in ('game', 'overtime')) or self._offensiveTimeoutNeeded(
-                    secs, timeoutsLeft, decisionDiff, _periodKind)
-                if not clockBinds:
+                # Nor at the half when nothing is in reach: the half is being played out
+                # (`_halfPlayedOut`), so a timeout saves time nobody will use.
+                playedOut = _periodKind == 'half' and self._halfPlayedOut()
+                clockBinds = not playedOut and (
+                    (multiScore and _periodKind in ('game', 'overtime'))
+                    or self._offensiveTimeoutNeeded(secs, timeoutsLeft, decisionDiff, _periodKind))
+                if playedOut:
+                    toChance = 0.0
+                elif not clockBinds:
                     toChance = (OFFENSE_TIMEOUT_MISREAD * (1.0 - gameIQ)
                                 if secs <= self.gameRules.timeoutClockThreshold else 0.0)
                 elif secs <= self.gameRules.timeoutClockThreshold:
