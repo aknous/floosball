@@ -9027,15 +9027,29 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"recap event record failed ({eventType}): {e}")
 
+    # The detail a forced payroll cut is recorded with. It is written at SEASON END,
+    # before the fresh-offseason wipe below, so the wipe spares it by this prefix.
+    UNPAID_CUT_DETAIL = 'Unpaid:'
+
     def _clearRecapEvents(self, season: int) -> None:
         """Wipe a season's recap event log (called on FRESH offseason entry so a
-        rebuild starts clean; skipped on resume)."""
+        rebuild starts clean; skipped on resume).
+
+        ⚠️ SPARES THE SEASON-END FORCED PAYROLL CUTS. They are recorded just before the
+        offseason starts, so a plain wipe deleted every one of them: the news item went
+        out and the cut never reached the recap or the offseason moves feed. They are
+        not part of a partly built offseason, and the season-end check never re-runs
+        for them (the cut player is already off the roster)."""
         try:
             from database.connection import get_session
             from database.models import SeasonRecapEvent
             s = get_session()
             try:
-                s.query(SeasonRecapEvent).filter_by(season=season).delete()
+                from sqlalchemy import and_, not_
+                unpaidCut = and_(SeasonRecapEvent.event_type == 'cut',
+                                 SeasonRecapEvent.detail.like(f"{self.UNPAID_CUT_DETAIL}%"))
+                s.query(SeasonRecapEvent).filter(SeasonRecapEvent.season == season,
+                                                 not_(unpaidCut)).delete(synchronize_session=False)
                 s.commit()
             finally:
                 s.close()
@@ -12460,7 +12474,7 @@ class SeasonManager:
                 p.onProspectContract = False
                 done.append((team.name, p.name, e['salary']))
                 self._recordOffseasonEvent('cut', team=team, player=p,
-                                           detail=f"Unpaid: payroll short by {gap}F")
+                                           detail=f"{self.UNPAID_CUT_DETAIL} payroll short by {gap}F")
                 self._publishTeamNews('signing', f"Unpaid, {p.name} leaves the {team.name}", team)
                 logger.info(f"Payroll: {team.name} short {gap}F of {owed}F next season "
                             f"(balance {balance}F); cut {p.name} ({e['salary']}F"
