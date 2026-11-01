@@ -1,6 +1,6 @@
 # Treasury, Payroll and Gate Revenue Plan
 
-> **Status:** Direction agreed with the owner (2026-10-21), not built. Numbers below are proposals to be set by the harness in Phase 0, not decisions. Builds on `docs/MARKETS_FACILITIES_PLAN.md` (the treasury and facilities it describes are live) and the fan-income work (Supporter / Spectator, live).
+> **Status:** Direction agreed with the owner (2026-10-21). Phases 1-2 built, Phase 3 (payroll) partly built (§5). Numbers below are proposals to be set by the harness in Phase 0, not decisions. Builds on `docs/MARKETS_FACILITIES_PLAN.md` (the treasury and facilities it describes are live) and the fan-income work (Supporter / Spectator, live).
 
 ## 1. The problem
 
@@ -13,7 +13,7 @@ Measured on the season-7 snapshot (`data/floosball.db`, an older prod copy; prod
 
 - **Rich treasuries sit idle.** Balances run 52,107 (NYS), 51,621 (STL), 46,274 (CHI), 38,325 (LAE) down to under 100 for about ten teams. Maxing all five facilities from zero costs ~43k at the current share unit (~5,300F). NYS could have maxed everything and still holds 52k; its levels are 4/2/5/2/0.
 - **Facilities are throttled by the pipeline, not money.** A project only opens through the season-end fan vote, one per team per season, so a team gains at most one level a season. League-wide ~13 builds a season. After seven seasons nobody holds more than one or two level-5 facilities.
-- **Facilities are already strong.** A full level-5 set measures ~+6.4 wins a season (CLAUDE.md, Facilities Economy). The live league cannot show it because nobody is near a full set.
+- **Facilities are already strong.** A full level-5 set measures ~+8.2 wins a season, counting one offseason of Training and Scouting (CLAUDE.md, Facilities Economy; rebalanced 2026-10-30 so the Locker Room, ~3.3, and the Recovery Center, ~2.3, share the load instead of Recovery carrying ~4.9 of it). The live league cannot show it because nobody is near a full set.
 - **Money does not reach the roster at all.** Players sign by worst-first draft order, re-signs by GM value, and the Appeal gate (`frontOfficeBrain.appealDemand`) keys on age only, deliberately: its docstring says rating was left out so "the best players [don't] pool at the best-funded clubs and the league [doesn't] stratify by treasury". **This plan reverses that decision on purpose**; update that docstring when payroll lands.
 
 ## 2. Design goals
@@ -121,7 +121,7 @@ Built as offseason step `facility_payment` (`seasonManager._runFacilityPayment`)
 ### Budget
 - Payroll is a flow: a team can afford what its balance plus expected income (gate + recent donations) covers. Saved-up treasury is a war chest a team can spend down to win now.
 - **Affordability is checked at signing.** A team signs or re-signs a player only if its balance plus a cautious income estimate covers all its committed salaries for the rest of every contract **and the upkeep of its current facility levels**. Counting upkeep stops a signing from knocking facilities down by accident. A shortfall can then only come from income really dropping (fans leaving, gate revenue falling), not from overspending.
-- **A GM can sacrifice a facility level to sign a big player** (owner, 2026-10-22). When a signing doesn't fit, the GM may count a facility's upkeep as available, accepting that the facility drops a level at the payment run. The money freed is the upkeep saved by holding that facility one level lower for the contract's term. The GM does it only when the player is worth more than the level: it compares the player's value with the wins that level is worth, priced off the measured facility effects (Facilities Economy in CLAUDE.md). It sacrifices the level that costs the least value for the money it needs, ties going to the facility the fans ranked lowest. Fans see it: a news item ("The Waffles let the Stadium slip to sign X") and a line on the team page.
+- **A GM never gives up a facility level to sign a player** (owner, 2026-10-30; reverses the 2026-10-22 sacrifice rule). Fans pay for those levels, and a team letting one slip on purpose would not go over well. A facility loses a level only as the penalty for an empty Treasury: a signing must fit with current upkeep counted, so a level drops only when income really falls short and the payment run, having paid the players first, cannot cover upkeep. The cost is that a team whose upkeep already outruns its balance cannot re-sign anyone until the money comes back (season 11 harness: the Monuments let a 92 and two 89s walk).
 - **No debt.** The balance never goes negative.
 
 ### When a team can't make payroll (owner, 2026-10-22)
@@ -157,6 +157,22 @@ Touches `seasonManager._resignDecision` / `_applyRetentionLimits` and the Front 
 - **The GM values players per Floobit**, not only per rating point: a cheap 84 can beat an expensive 88 for a tight budget.
 - Cuts already cost treasury (`frontOfficeBrain.cutFeeFor`); with salaries, a cut also frees payroll. Revisit the fee so it is not charged twice.
 - Trading is off; when it returns, salaries must travel with players.
+
+### Built (2026-10-26, `feature/treasury-payroll`)
+All sizes provisional; the harness sets them.
+
+- **Salary** (`managers/payroll.py`, `players.salary`, Floobits a season, 0 = grandfathered): asking salary = share unit x (0.01 + 0.95 x `POSITION_VALUE` x x^2.75), x = (rating - 68) / 32. At a 5,453F share unit a QB asks ~270F at 78, ~830F at 84, ~1,900F at 90, ~3,300F at 95; a WR about 73% of that, a kicker 35%. Minimum ~55F. A promoted prospect signs for a quarter of his asking salary. The FA draft's last-resort player signs for the minimum. Stamped at every signing site (FA draft, re-sign, the three promotion paths, trade backfills); the rosters a fresh league starts with are grandfathered like the snapshot's.
+- **Pricing**: contracts signed in the offseason use the season just played as the share unit (`_setPayrollShareUnit`), in-season ones last season's.
+- **Payment run** pays payroll before upkeep (`resolvePaymentRun(payroll=)`); a shortfall pays what it can and logs `PAYROLL SHORT`, never a negative balance.
+- **Budget** (`payroll.maxAffordable`): season s needs committed salaries + upkeep x s <= balance + income x (s - 1). Income is last season's baseline + gate + match + donations at `PAYROLL_INCOME_CAUTION` 0.75 (`_refreshPayrollFinances`, before re-signs and before the FA draft). Every slot still open keeps a minimum salary in reserve. Fails open when a team's finances are unknown.
+- **Re-signs**: the GM's ranking, then kept in order while they fit (`_affordableResigns`). The term is a seeded roll (`payroll.contractTerm`), so the decision, the Front Office desk and step 3 price the same deal.
+- **FA draft**: a team takes only free agents it can pay, widening to "salary fits if upkeep goes unpaid", then to the cheapest player, so no slot is left empty. Value per Floobit: board value x (1 - `FO_SALARY_PRICE_WEIGHT` 0.5 x salary / room). An upgrade cut frees the cut player's salary.
+- **The re-sign limit** is off while payroll is on (`RESIGN_LIMIT_ENABLED`).
+- **Season end** (`_enforcePayrollAtSeasonEnd`): a balance short of next season's committed salaries forces cuts (`payroll.chooseForcedCuts`), no fee, with a news item and a recap row. Protected: fan favorites, the top two by GM value, prospect-contract players projected to 84+. As a last resort protected players are added least valuable first, then nobody whose salary is no longer needed is cut, protected players kept back first. ⚠️ The plan only said to keep back unneeded *protected* players; this also keeps back unneeded unprotected ones, since cutting four players when one star alone closes the gap would cut three for nothing.
+- **League baseline** is share-denominated with payroll on: `FUNDING_BASELINE_SHARES` 0.15 (~820F at a 5,453F share unit), never under the flat 200F. Six minimum salaries plus upkeep on a level-2 set.
+- **API**: `salary` on team roster entries; `payroll` and `minimumSalary` on `/api/teams/{id}/facilities`.
+
+Not built yet: the in-season "payroll short" warning; trading reading payroll (trading is off). **The cut fee stays as it is** (owner, 2026-10-30): no buyout share of the salary owed.
 
 ## 6. Phase 4: make it visible
 
@@ -211,10 +227,10 @@ Use the `FLOOS_FACILITY_FORCE` lesson: compare arms on the same league; never in
 1. G5's N: how many wins the top-funded quarter should gain over the bottom.
 2. ~~Facilities: unlimited levels per offseason, or a per-facility cap.~~ Settled 2026-10-22: one upgrade per facility per season, funded in the order of the fans' ranked ballots (§3).
 3. ~~No debt, forced release, or league cover when funding stops.~~ Settled 2026-10-22: facilities absorb unpaid upkeep at the payment run, and a payroll shortfall found at season end forces cuts then (§5). Protected: fan favorites, the team's top two, prospects the GM projects as stars. As a last resort, protected players are cut from least to most valuable.
-4. ~~Whether fans vote on the split between upkeep and new projects.~~ Settled 2026-10-22: players are signed first in the offseason, the payment run after the FA draft pays payroll, upkeep, then projects in the fans' ranked order, and a GM may sacrifice a facility level for a big signing (§5). The harness sets how the GM prices a level against a player.
+4. ~~Whether fans vote on the split between upkeep and new projects.~~ Settled 2026-10-22: players are signed first in the offseason, the payment run after the FA draft pays payroll, upkeep, then projects in the fans' ranked order. A GM never gives up a facility level for a signing (owner, 2026-10-30, §5); a level drops only when the Treasury cannot cover upkeep.
 5. ~~Gate revenue exponent~~ Settled 2026-10-23: p = 0.85, the 14-day activity window, and gate revenue ships with payroll (§4). The Stadium multiplier is still set by the harness against G2/G3.
 6. Participation boost sizes (proposal 1.35x for one activity, 1.5x for two). League match rate and amount (proposal 2:1 on the first 1,000F) set by the harness.
-7. **League baseline (`FUNDING_BASELINE_PER_TEAM`, 200F): decided with payroll** (owner, 2026-10-22). Sized then to what a team needs to afford a roster at league minimum salaries (G4, G6), plus upkeep. **Flat for every team, not needs-based** (owner, 2026-10-23): a top-up only for teams short of a minimum roster would shrink as fan money came in, so a fanless team's first fan would mostly replace league money instead of adding to it (against G1 and G2). Flat, every Floobit a fan brings lands on top. Until payroll lands, teams without fans keep decaying toward the facility set 200F can hold (see the harness results above); Phase 2 does not change the baseline.
+7. **League baseline (`FUNDING_BASELINE_PER_TEAM`, 200F): decided with payroll** (owner, 2026-10-22). Sized then to what a team needs to afford a roster at league minimum salaries (G4, G6), plus upkeep. **Flat for every team, not needs-based** (owner, 2026-10-23): a top-up only for teams short of a minimum roster would shrink as fan money came in, so a fanless team's first fan would mostly replace league money instead of adding to it (against G1 and G2). Flat, every Floobit a fan brings lands on top. Until payroll lands, teams without fans keep decaying toward the facility set 200F can hold (see the harness results above); Phase 2 does not change the baseline. **Size confirmed at `FUNDING_BASELINE_SHARES` 0.15** (owner, 2026-10-30), about 820F a team at a 5,453F share unit.
 
 ## 10. Later: the merch shop
 

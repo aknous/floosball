@@ -1168,6 +1168,10 @@ CONTRIBUTION_TX_TYPES = ('team_contribution', 'facility_contribution')
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
 FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
+# With payroll on the baseline is share-denominated (`payroll.leagueBaseline`), never under
+# the flat 200 above: six minimum salaries (0.06 shares) plus upkeep on a level-2 set
+# (5 x 0.015 = 0.075), rounded up. ~820F at a 5,453F share unit. PROVISIONAL (owner).
+FUNDING_BASELINE_SHARES = 0.15
 # Tiers are assigned by a team's share of total league funding. A team's
 # ratio = effective_funding / (total_league_funding / num_teams). That is,
 # "how many fair-shares of the league's floobits does this team hold?"
@@ -2144,7 +2148,7 @@ FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
                     'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
-                    'levels': [0.0, 0.004, 0.008, 0.012, 0.016, 0.020]},     # rating edge in every game (Game._applyFacilityEdge)
+                    'levels': [0.0, 0.007, 0.014, 0.021, 0.028, 0.035]},     # rating edge in every game (Game._applyFacilityEdge); its second job is LOCKER_ROOM_SETBACK_CUSHION
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
                     'levels': [0.0, 0.15, 0.35, 0.55, 0.75, 0.90]},        # share of weekly fatigue gain removed (seasonManager._accumulateFatigue); L5 = nearly fresh all season
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
@@ -2152,6 +2156,17 @@ FACILITY_CATALOG = {
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
                     'levels': [0.0, 0.008, 0.016, 0.024, 0.032, 0.040]}, # rating edge in home games (Game._applyFacilityEdge)
 }
+
+# ⚠️ THE LOCKER ROOM'S SECOND JOB: IT ABSORBS SETBACKS (owner, 2026-10-30: the flat edge
+# alone "doesn't move the needle", and fans could not see it working). The share of every
+# confidence / determination LOSS a team's players take that the Locker Room absorbs, by
+# level: a losing streak's post-game hit (Player.postgameChanges), a hot team's complacency
+# drift (SeasonManager._applyMidseasonFormShift), a toxic room's pull
+# (_propagateAttitudeContagion), a cold stretch of the form layer (_updateTeamFormOffsets)
+# and an in-game mistake (Player.updateInGameConfidence). Gains are never touched, and
+# momentum is exempt so its offset can be removed exactly. Read through
+# Team.setbackCushion(), which honors FLOOS_FACILITY_FORCE like facilityEffect.
+LOCKER_ROOM_SETBACK_CUSHION = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
 # Migration: starting level for the four legacy-perk facilities by current tier.
 MIGRATION_TIER_START_LEVEL = {'MEGA_MARKET': 4, 'LARGE_MARKET': 3, 'MID_MARKET': 2, 'SMALL_MARKET': 1}
@@ -2231,6 +2246,33 @@ GATE_STADIUM_MULT = [1.0, 1.08, 1.16, 1.26, 1.38, 1.5]   # by Stadium level 0-5
 DONATION_MATCH_ENABLED = True
 DONATION_MATCH_RATE = 2.0
 DONATION_MATCH_CAP_SHARES = 0.18
+# ── Payroll (docs/TREASURY_PAYROLL_PLAN.md §5) ──────────────────────────────────────────
+# A contract carries a salary, locked at signing and paid from the Treasury at every
+# offseason payment run (before facility upkeep). Share-denominated at signing:
+#   salary = shareUnit x (SALARY_MIN_SHARES
+#                         + SALARY_TOP_SHARES x POSITION_VALUE[pos] x x ** SALARY_EXPONENT)
+#   x = (rating - SALARY_FLOOR_RATING) / (100 - SALARY_FLOOR_RATING), clamped to 0..1
+# ⚠️ PROVISIONAL SIZES (2026-10-26): the harness sets them against G1-G6. At a 5,453F
+# share unit a QB asks ~110F at 72, ~280F at 78, ~880F at 84, ~1,880F at 90, ~3,300F at
+# 95 and ~5,200F at 100; a WR or RB about three quarters of that, a kicker about a third.
+# The minimum, ~55F, is what every roster spot costs at least.
+SALARY_ENABLED = True
+SALARY_MIN_SHARES = 0.01
+SALARY_FLOOR_RATING = 68
+SALARY_TOP_SHARES = 0.95
+SALARY_EXPONENT = 2.75
+# A prospect promoted onto the roster signs for this share of his asking salary (never
+# under the minimum), so the draft stays the poor team's route to talent.
+SALARY_PROSPECT_FRACTION = 0.25
+# A team budgets future seasons on this share of what it brought in last season (league
+# baseline, gate revenue, the donation match and fan donations), so a signing is made
+# against income it can count on rather than its best season.
+PAYROLL_INCOME_CAUTION = 0.75
+# Value per Floobit in the FA draft: a free agent's board value is cut by this share of
+# the fraction of the team's room his salary takes, so a tight budget prefers a cheap 84
+# to an expensive 88 and a rich team simply takes the best. Provisional.
+FO_SALARY_PRICE_WEIGHT = 0.5
+
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
@@ -2365,7 +2407,12 @@ _RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
 RESIGN_ONCE_ENABLED = False
 RESIGN_ONCE_LIMIT = 2             # re-signs allowed with the SAME team before a forced walk
                                   # (only consulted while RESIGN_ONCE_ENABLED)
-RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
+# ⚠️ OFF WHILE PAYROLL IS ON (owner, 2026-10-22, docs/TREASURY_PAYROLL_PLAN.md §5): the
+# treasury limits retention instead, so a rich team keeps its stars and pays for them and a
+# poor team keeps who it can afford. Removed in the same release as salaries, not before.
+# ⚠️ The trade market's `_cannotKeep` still reads RESIGN_LIMIT_PER_OFFSEASON directly;
+# trading is off, and it needs to read payroll before trading returns.
+RESIGN_LIMIT_ENABLED = not _RETENTION_OFF and not SALARY_ENABLED
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
 # ---- Fan sentiment (AFO plan Part D) ----
@@ -4611,7 +4658,11 @@ GAME_FORMAT_DESCRIPTIONS = {
 BASE_FATIGUE_PER_WEEK = 0.0063      # weekly fatigue gain with no Recovery Center
 FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
-FATIGUE_PHYSICAL_IMPACT = 0.5       # Was 0.6 (owner, 2026-10-05): eased once the Recovery Center made fatigue heavy; the gauge fans see is unchanged
+# 0.5 -> 0.3 (owner, 2026-10-30: rebalance so no single facility carries the set). At 0.5 a
+# level-5 Recovery Center was worth ~4.9 of the full set's ~6.4 wins. The fatigue GAUGE fans
+# see is unchanged (level 0 still ends the season ~0.21 fatigued, level 5 ~0.02); only what
+# that fatigue costs on the field is smaller. Env override for the facility harness.
+FATIGUE_PHYSICAL_IMPACT = float(_os.environ.get('FLOOS_FATIGUE_IMPACT', '0.3'))
 FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
 
 # Playoff bye reprieve: the top-2 seeds rest through round 1, so their players

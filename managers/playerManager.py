@@ -4,6 +4,7 @@ Replaces the scattered player-related global variables and functions in floosbal
 """
 
 from typing import List, Optional, Dict, Any, Tuple
+from managers import payroll
 import os
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
@@ -36,6 +37,37 @@ def _perfRating(player, attr: str) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _payrollBudget(team):
+    """The team's payroll budget for an FA-draft signing, or None with payroll off.
+    Contracts are post-decrement here (the draft runs after step 3), each carried
+    with its player so an upgrade cut can free his salary."""
+    from constants import SALARY_ENABLED
+    tid = getattr(team, 'id', None)
+    if not SALARY_ENABLED or not payroll.hasFinances(tid):
+        return None
+    income, upkeep = payroll.financesOf(tid)
+    contracts = []
+    for p in payroll.rosterPlayers(team):
+        sal, runs = payroll.salaryOf(p), payroll.contractRuns(p)
+        if sal > 0 and runs > 0:
+            contracts.append((sal, runs, p))
+    roster = getattr(team, 'rosterDict', None) or {}
+    return {'contracts': contracts, 'balance': payroll.balanceOf(tid),
+            'income': income, 'upkeep': upkeep, 'minimum': payroll.minimumSalary(),
+            'open': sum(1 for s in payroll.ROSTER_SLOTS if roster.get(s) is None)}
+
+
+def _stampSigningSalary(player) -> None:
+    """Lock a salary onto a free agent's new contract: his asking salary, or the minimum
+    for a last-resort generated stopgap."""
+    if getattr(player, '_minimumSalary', False):
+        from constants import SALARY_ENABLED
+        player.salary = payroll.minimumSalary() if SALARY_ENABLED else 0
+        player._minimumSalary = False
+    else:
+        payroll.stampSalary(player)
 
 
 def stampPromotion(player, season) -> None:
@@ -536,6 +568,7 @@ class PlayerManager:
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.onProspectContract = bool(getattr(db_player, 'on_prospect_contract', False))
+            player.salary = int(getattr(db_player, 'salary', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
@@ -1184,7 +1217,7 @@ class PlayerManager:
         left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
         return max(1, int(base), left)
 
-    def _getPlayerTerm(self, player) -> int:
+    def _getPlayerTerm(self, player, rng=None) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
         Rookies (seasonsPlayed == 0) get a standard prove-it contract keyed to
@@ -1193,6 +1226,8 @@ class PlayerManager:
         runs well past their expected retirement (longevity - seasonsPlayed).
         """
         from random import randint
+        if rng is not None:
+            randint = rng.randint   # a seeded roll (`payroll.contractTerm`)
         tier = player.playerTier
         seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
 
@@ -1955,6 +1990,7 @@ class PlayerManager:
                         is_undrafted=bool(getattr(player, 'is_undrafted', False)),
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
                         on_prospect_contract=bool(getattr(player, 'onProspectContract', False)),
+                        salary=int(getattr(player, 'salary', 0) or 0),
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                         will_retire=bool(getattr(player, 'willRetire', False)),
@@ -1989,6 +2025,7 @@ class PlayerManager:
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.on_prospect_contract = bool(getattr(player, 'onProspectContract', False))
+                    db_player.salary = int(getattr(player, 'salary', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
@@ -4168,6 +4205,9 @@ class PlayerManager:
         newPlayer.id = max([p.id for p in self.activePlayers], default=0) + 1
         newPlayer.team = 'Free Agent'
         newPlayer.freeAgentYears = 0
+        # Signs for the minimum salary (docs/TREASURY_PAYROLL_PLAN.md §5, G6): the league
+        # baseline always covers it, so a generated stopgap can never be unaffordable.
+        newPlayer._minimumSalary = True
         self.freeAgents.append(newPlayer)
         if newPlayer not in self.activePlayers:
             self.activePlayers.append(newPlayer)
@@ -5743,7 +5783,52 @@ class PlayerManager:
         # true-rating order, which is the pre-existing behavior.
         board = getattr(self, '_faDraftBoards', {}).get(getattr(team, 'id', None))
 
-        def _bestFaFor(faList, applyReleaseBlock, applyBoard):
+        # ⚠️ PAYROLL (docs/TREASURY_PAYROLL_PLAN.md §5): a team takes only free agents it
+        # can pay, and its GM weighs value against price. `affordMode` widens like the
+        # board tiers below: 'upkeep' (salaries and facility upkeep fit the budget), then
+        # 'payroll' (facilities give way first: the salary fits if upkeep goes unpaid),
+        # then None (nobody fits: take the cheapest so no slot is left empty, G6).
+        budget = _payrollBudget(team)
+        affordMode = ['upkeep']
+        seasonForTerm = self._currentSeasonNumber()
+
+        def _price(p, exclude=None):
+            """(salary, room) for signing p now: his asking salary and the most this
+            team can pay a contract of his term, keeping a minimum salary in reserve
+            for every other open slot. room is None when payroll is off."""
+            if budget is None:
+                return 0, None
+            salary = (payroll.minimumSalary() if getattr(p, '_minimumSalary', False)
+                      else payroll.askingSalary(p))
+            term = payroll.contractTerm(self, p, seasonForTerm)
+            openAfter = budget['open'] - (0 if exclude is not None else 1)
+            contracts = [c for c in budget['contracts']
+                         if exclude is None or c[2] is not exclude]
+            contracts = [(c[0], c[1]) for c in contracts]
+            contracts += [(budget['minimum'], 1)] * max(0, openAfter)
+            room = payroll.maxAffordable(contracts, term, budget['balance'], budget['income'],
+                                         budget['upkeep'],
+                                         includeUpkeep=(affordMode[0] == 'upkeep'))
+            return salary, room
+
+        def _affordable(p, exclude=None):
+            if budget is None or affordMode[0] is None:
+                return True
+            salary, room = _price(p, exclude)
+            return salary <= room
+
+        def _priceFactor(p, exclude=None):
+            """Value per Floobit: a player taking most of what the team can pay is
+            discounted, so a tight budget prefers a cheap 84 to an expensive 88 while a
+            rich team, for whom no salary is a large share, simply takes the best."""
+            if budget is None:
+                return 1.0
+            from constants import FO_SALARY_PRICE_WEIGHT
+            salary, room = _price(p, exclude)
+            share = min(1.0, salary / max(1.0, float(room))) if room and room > 0 else 1.0
+            return max(0.0, 1.0 - float(FO_SALARY_PRICE_WEIGHT) * share)
+
+        def _bestFaFor(faList, applyReleaseBlock, applyBoard, exclude=None):
             """The free agent this team most wants at a position.
 
             With a board, "most wants" is that GM's own valuation over the
@@ -5754,11 +5839,17 @@ class PlayerManager:
             if applyReleaseBlock:
                 eligible = [p for p in eligible
                             if not self._leftThisTeamThisOffseason(p, team)]
+            if budget is not None and affordMode[0] is None:
+                # Nobody fits the budget: the cheapest player keeps the slot filled.
+                return min(eligible, key=lambda p: payroll.askingSalary(p)) if eligible else None
+            eligible = [p for p in eligible if _affordable(p, exclude)]
             if applyBoard and board:
                 onBoard = [p for p in eligible if getattr(p, 'id', None) in board]
                 if onBoard:
-                    return max(onBoard, key=lambda p: board.get(p.id, 0.0))
+                    return max(onBoard, key=lambda p: board.get(p.id, 0.0) * _priceFactor(p, exclude))
                 return None
+            if budget is not None and eligible:
+                return max(eligible, key=lambda p: getattr(p, 'playerRating', 0) * _priceFactor(p, exclude))
             return eligible[0] if eligible else None
 
         # ⚠️ A CLUB MAY ALSO CUT FOR AN OBVIOUS UPGRADE AT A FILLED POSITION (owner,
@@ -5786,12 +5877,6 @@ class PlayerManager:
                 if posVal in firstOpenSlotByPos:
                     continue       # there is a hole here; filling it is not a cut
                 faList = POS_TO_FALIST.get(posVal, [])
-                best = _bestFaFor(faList, True, True)
-                if best is None:
-                    continue
-                bestVal = board.get(getattr(best, 'id', None))
-                if bestVal is None:
-                    continue
                 # replace the WEAKEST man at the position (WR has two slots)
                 # ⚠️ `filledThisDraft` COVERS FA SIGNINGS ONLY, so a prospect promoted
                 # into a slot — by this very function two rounds earlier, or by
@@ -5807,6 +5892,13 @@ class PlayerManager:
                 if not held:
                     continue
                 sl, incumbent, incVal = min(held, key=lambda h: h[2])
+                # The cut ends his contract, so his salary is freed for the upgrade.
+                best = _bestFaFor(faList, True, True, exclude=incumbent)
+                if best is None:
+                    continue
+                bestVal = board.get(getattr(best, 'id', None))
+                if bestVal is None:
+                    continue
                 # The incumbent's board value carries his standing (`buildDraftBoard`
                 # incumbents); the bar is this GM's, moved by its aggressiveness.
                 cutBar = (getattr(self, '_faCutBars', None) or {}).get(
@@ -5871,10 +5963,24 @@ class PlayerManager:
         # raw pool. The last tier is what stops destination preference from ever
         # costing a roster its player — if nobody who'd sign here is left, the
         # club signs whoever remains.
-        candidates = (_gather(applyReleaseBlock=True)
-                      or _gather(applyReleaseBlock=False)
-                      or _gather(applyReleaseBlock=True, applyBoard=False)
-                      or _gather(applyReleaseBlock=False, applyBoard=False))
+        def _gatherAll():
+            return (_gather(applyReleaseBlock=True)
+                    or _gather(applyReleaseBlock=False)
+                    or _gather(applyReleaseBlock=True, applyBoard=False)
+                    or _gather(applyReleaseBlock=False, applyBoard=False))
+        candidates = _gatherAll()
+        if budget is not None:
+            for mode in ('payroll', None):
+                if candidates:
+                    break
+                affordMode[0] = mode
+                candidates = _gatherAll()
+                if candidates:
+                    logger.info(f"Payroll: {team.name} could not afford a free agent with "
+                                f"its facility upkeep counted; widened to "
+                                f"{mode or 'the cheapest available'}")
+            # Upgrades are optional: only ever on a budget that keeps facilities paid.
+            affordMode[0] = 'upkeep'
         # ⚠️ APPENDED, NOT PART OF THE WIDENING CHAIN. The chain widens only when the tier
         # above it found NOTHING, and an upgrade is not a fallback for an unfillable hole --
         # it is an extra option that competes on value. Folding it into the `or` chain would
@@ -5890,11 +5996,14 @@ class PlayerManager:
             valuation, for free agents AND prospects alike, so the comparison
             stays in one currency. Off-board fallbacks use the true rating."""
             player = c[1]
+            factor = 1.0
+            if c[2] in ('fa', 'upgrade'):
+                factor = _priceFactor(player, team.rosterDict.get(c[0]) if c[2] == 'upgrade' else None)
             if board:
                 pid = getattr(player, 'id', None)
                 if pid in board:
-                    return board[pid]
-            return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0))
+                    return board[pid] * factor
+            return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0)) * factor
 
         # Best player available, in this GM's own currency. The fan "fill order"
         # override that used to sit here (FA ballot position priority) is gone with
@@ -6032,8 +6141,11 @@ class PlayerManager:
                             f"{windowTerm[1].name} ({windowTerm[1].playerRating}) for "
                             f"{windowTerm[0]} season(s), his window")
             else:
-                selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
+                # The term the budget check priced (a seeded roll, `payroll.contractTerm`).
+                selectedPlayer.term = payroll.contractTerm(
+                    self, selectedPlayer, self._currentSeasonNumber())
             selectedPlayer.termRemaining = selectedPlayer.term
+            _stampSigningSalary(selectedPlayer)
 
             transactionId = f"{team.name}_{selectedPlayer.name}"
             freeAgencyDict[transactionId] = {
@@ -6081,6 +6193,7 @@ class PlayerManager:
                 team.prospects.remove(promoted)
             promoted.term = promotedTerm
             promoted.termRemaining = promotedTerm
+            payroll.stampSalary(promoted, prospect=True)
             # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
             # later in this same offseason — including two rounds further into this very
             # draft, which `_draftFilledSlots` does not prevent because that set is
@@ -6186,6 +6299,7 @@ class PlayerManager:
         team.assignPlayerNumber(player)
         player.term = self._getPlayerTerm(player)
         player.termRemaining = player.term
+        _stampSigningSalary(player)
         txId = f"{team.name}_{player.name}"
         freeAgencyDict[txId] = {
             'name': player.name, 'pos': player.position.name,
@@ -6227,6 +6341,7 @@ class PlayerManager:
         # Set contract terms
         newPlayer.term = self._getPlayerTerm(newPlayer)
         newPlayer.termRemaining = newPlayer.term
+        _stampSigningSalary(newPlayer)
         
         # Assign to roster
         team.rosterDict[position] = newPlayer

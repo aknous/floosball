@@ -96,7 +96,8 @@ def combinedOrder(levels: dict, ballots: list) -> list:
 # ─── The pure payment-run resolver ───────────────────────────────────────────
 
 def resolvePaymentRun(facilities: list, projects: list, treasury: int, shareUnit: float,
-                      order: list = None, waivedKeys=None, blockedKeys=None) -> dict:
+                      order: list = None, waivedKeys=None, blockedKeys=None,
+                      payroll: int = 0) -> dict:
     """Resolve one team's offseason payment run. PURE — no DB, no mutation of
     inputs; returns the new state + a log.
 
@@ -108,17 +109,32 @@ def resolvePaymentRun(facilities: list, projects: list, treasury: int, shareUnit
                 this year (under construction the year they completed).
     blockedKeys: facilities that may not be upgraded by this run (built mid-season this
                 year: one upgrade per facility per year).
+    payroll:    the coming season's salaries (`payroll.seasonPayroll`), paid FIRST.
 
-    Steps: (1) upkeep, choosing the affordable set that preserves the most value;
+    Steps: (0) payroll; (1) upkeep, choosing the affordable set that preserves the most value;
     (2) decay of anything unpaid; (3) projects in ranked order, at most one level per
     facility, a project whose facility decayed retargeting to the level it lost.
 
     Returns {'facilities':[{key,level,upkeepMet,upkeepPaid,upkeepCost}],
              'projects':[{id,facility_key,funded,built,target_level,cost_shares}],
-             'leftover':int, 'log':[...]}.
+             'payrollPaid':int, 'payrollShort':int, 'leftover':int, 'log':[...]}.
     """
     pot = int(treasury)
     log = []
+
+    # 0. PAYROLL — PLAYERS GET FIRST CLAIM (docs/TREASURY_PAYROLL_PLAN.md §5). A team
+    # short of money pays its players and lets its facilities go unpaid. A shortfall here
+    # should not happen (signings are checked for affordability and a payroll the
+    # season-end balance cannot cover forces cuts before the offseason), so if one does it
+    # pays what it can and logs it: the balance never goes negative.
+    owed = max(0, int(payroll or 0))
+    payrollPaid = min(owed, pot)
+    pot -= payrollPaid
+    payrollShort = owed - payrollPaid
+    if owed:
+        log.append(f"payroll {payrollPaid}/{owed}")
+    if payrollShort:
+        log.append(f"PAYROLL SHORT by {payrollShort}")
     waivedKeys = set(waivedKeys or [])
     blockedKeys = set(blockedKeys or [])
 
@@ -246,7 +262,8 @@ def resolvePaymentRun(facilities: list, projects: list, treasury: int, shareUnit
                'upkeepPaid': facByKey.get(k, {}).get('upkeepPaid', 0),
                'upkeepCost': facByKey.get(k, {}).get('upkeepCost', 0)}
               for k in newLevels]
-    return {'facilities': outFac, 'projects': projState, 'leftover': max(0, pot), 'log': log}
+    return {'facilities': outFac, 'projects': projState, 'payrollPaid': payrollPaid,
+            'payrollShort': payrollShort, 'leftover': max(0, pot), 'log': log}
 
 
 # ─── DB-bound helpers (live use) ─────────────────────────────────────────────
@@ -562,6 +579,13 @@ def applyPaymentRun(session, teamObjs: list, season: int, shareUnit: float) -> l
     for team in teamObjs:
         facRows = session.query(TeamFacility).filter_by(team_id=team.id).all()
         if not facRows:
+            # No facilities to keep up, but the players still get paid.
+            from managers import payroll
+            owed = payroll.seasonPayroll(team)
+            if owed:
+                bal = getTreasury(session, team.id)
+                setTreasury(session, team.id, bal - min(owed, bal))
+                logs.append((getattr(team, 'name', team.id), [f"payroll {min(owed, bal)}/{owed}"]))
             continue
         levels = {f.facility_key: f.level for f in facRows}
         ensureOpenProjects(session, team.id, levels, season)
@@ -572,9 +596,11 @@ def applyPaymentRun(session, teamObjs: list, season: int, shareUnit: float) -> l
                       for f in facRows]
         projects = [{'id': p.id, 'facility_key': p.facility_key, 'target_level': p.target_level,
                      'cost_shares': p.cost_shares, 'funded': p.funded} for p in projRows]
+        from managers import payroll
         res = resolvePaymentRun(facilities, projects, treasury, shareUnit,
                                 order=teamOrder(session, team.id, levels),
-                                waivedKeys=fanBuilt, blockedKeys=fanBuilt)
+                                waivedKeys=fanBuilt, blockedKeys=fanBuilt,
+                                payroll=payroll.seasonPayroll(team))
         levelByKey = {f['key']: f['level'] for f in res['facilities']}
         paidByKey = {f['key']: f.get('upkeepPaid', 0) for f in res['facilities']}
         for f in facRows:

@@ -204,6 +204,11 @@ class Player(Base):
     # While set he can only stay rostered or be traded, never cut (see
     # `playerManager.isCutProtected`). Travels with him through a trade.
     on_prospect_contract: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Salary in Floobits a season, LOCKED when the contract is signed and paid from the
+    # team's Treasury at each payment run for the contract's term (managers/payroll.py).
+    # 0 = no salary: a contract signed before payroll shipped (grandfathered) or a
+    # player not under contract.
+    salary: Mapped[int] = mapped_column(Integer, default=0)
     drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     # True after _generateRookieClass, before the offseason rookie draft.
     # Upcoming rookies are visible to fans all season for scouting/voting but

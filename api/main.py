@@ -767,6 +767,8 @@ async def get_team(team_id: int, response: Response):
                     'defensiveRatingStars': PlayerResponseBuilder.calculateStarRating(player.defensiveRating),
                     'defensivePosition': player.defensivePosition.value if player.defensivePosition else None,
                     'termRemaining': player.termRemaining,
+                    # Floobits a season, locked at signing; 0 = a contract from before payroll.
+                    'salary': int(getattr(player, 'salary', 0) or 0),
                     # Promoted prospect on his promotion contract: rostered or traded, never cut.
                     'protectedProspect': bool(getattr(player, 'onProspectContract', False)),
                     'tier': player.playerTier.name if hasattr(player.playerTier, 'name') else str(player.playerTier),
@@ -7968,6 +7970,24 @@ def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+def _teamPayroll(teamId: int) -> int:
+    try:
+        from managers import payroll
+        tm = floosball_app.teamManager if floosball_app else None
+        team = next((t for t in (tm.teams if tm else []) if t.id == teamId), None)
+        return payroll.seasonPayroll(team) if team else 0
+    except Exception:
+        return 0
+
+
+def _payrollMinimum() -> int:
+    try:
+        from managers import payroll
+        return payroll.minimumSalary()
+    except Exception:
+        return 0
+
 @app.get("/api/teams/{team_id}/facilities")
 def get_team_facilities(team_id: int):
     """Team facilities state (Markets→Facilities): levels + effects + upkeep,
@@ -8024,6 +8044,10 @@ def get_team_facilities(team_id: int):
             'projects': projects,
             'order': order,
             'paymentRunDone': facilitiesManager.paymentRunDone(session, season),
+            # Payroll (docs/TREASURY_PAYROLL_PLAN.md §5): this season's salaries, paid first
+            # at the payment run, and what a roster spot costs at least.
+            'payroll': _teamPayroll(team_id),
+            'minimumSalary': _payrollMinimum(),
         })
     finally:
         session.close()

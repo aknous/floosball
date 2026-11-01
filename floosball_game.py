@@ -12165,15 +12165,15 @@ class Game:
                     self._setMomentumOffset(player, confTarget, detTarget)
 
     def _setMomentumOffset(self, player, confTarget, detTarget):
-        """Move a player's applied momentum offset to (confTarget, detTarget). No
-        `source`, so the confidence shock absorbers stay out of it and the offset can be
-        removed exactly."""
+        """Move a player's applied momentum offset to (confTarget, detTarget). Tagged
+        source='momentum', so neither the confidence shock absorbers nor the Locker Room's
+        setback cushion touch it and the offset can be removed exactly."""
         applied = self._momentumApplied.get(id(player))
         conf0, det0 = (applied[1], applied[2]) if applied else (0.0, 0.0)
         if abs(confTarget - conf0) > 1e-9:
-            player.updateInGameConfidence(confTarget - conf0)
+            player.updateInGameConfidence(confTarget - conf0, source='momentum')
         if abs(detTarget - det0) > 1e-9:
-            player.updateInGameDetermination(detTarget - det0)
+            player.updateInGameDetermination(detTarget - det0, source='momentum')
         self._momentumApplied[id(player)] = (player, confTarget, detTarget)
 
     def _clearMomentumEffect(self):

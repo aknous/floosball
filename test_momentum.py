@@ -479,8 +479,9 @@ def testMomentumEffectActive():
     assert abs(conf - MOMENTUM_CONFIDENCE_AT_50 * 0.8) < 1e-9, conf
     assert abs(homeQb.updateInGameDetermination.call_args[0][0] - MOMENTUM_DETERMINATION_AT_50 * 0.8) < 1e-9
     assert abs(awayQb.updateInGameConfidence.call_args[0][0] + conf) < 1e-9, 'the drag mirrors the boost'
-    # no shock-absorber source, so the offset can be taken back out exactly
-    assert homeQb.updateInGameConfidence.call_args.kwargs.get('source') is None
+    # tagged 'momentum', which the shock absorbers and the Locker Room cushion both skip,
+    # so the offset can be taken back out exactly
+    assert homeQb.updateInGameConfidence.call_args.kwargs.get('source') == 'momentum'
     print("    PASSED")
 
 

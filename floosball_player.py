@@ -294,6 +294,7 @@ class Player:
         self.term = 0
         self.termRemaining = 0
         self.capHit = 0
+        self.salary = 0            # Floobits a season, locked at signing (managers/payroll.py)
         self.teamResignCount = 0   # times current team has re-signed (retention limit)
         # willRetire: set during the regular season when a retirement-eligible
         # player is determined to be calling it after this season. Surfaces
@@ -397,10 +398,12 @@ class Player:
                     shortfall = 1.0 - resolve  # 0=full resolve, 1=none
                     confPenaltyMax = max(0, round(20 * shortfall * confStability))
                     detPenaltyMax = max(0, round(20 * shortfall))
+                    # The Locker Room absorbs part of the hit (LOCKER_ROOM_SETBACK_CUSHION).
+                    keep = 1.0 - self._setbackCushion()
                     if confPenaltyMax > 0:
-                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-confPenaltyMax, 0)/100), 3)
+                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + keep * (batched_randint(-confPenaltyMax, 0)/100), 3)
                     if detPenaltyMax > 0:
-                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-detPenaltyMax, 0)/100), 3)
+                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + keep * (batched_randint(-detPenaltyMax, 0)/100), 3)
 
             if self.attributes.confidenceModifier > 5:
                 self.attributes.confidenceModifier = 5
@@ -441,9 +444,21 @@ class Player:
     def updateRating(self):
         pass
 
-    def updateInGameDetermination(self, value):
+    def updateInGameDetermination(self, value, source=None):
+        if value < 0 and source != 'momentum':
+            value *= 1.0 - self._setbackCushion()
         self.gameAttributes.determinationModifier = round(self.gameAttributes.determinationModifier + value, 3)
         self.updateInGameRating()
+
+    def _setbackCushion(self):
+        """Share of a confidence / determination loss this player's Locker Room absorbs
+        (Team.setbackCushion). Momentum is exempt (source='momentum') so its offset can be
+        taken back out exactly."""
+        team = getattr(self, 'team', None)
+        try:
+            return float(team.setbackCushion()) if hasattr(team, 'setbackCushion') else 0.0
+        except Exception:
+            return 0.0
 
     def updateInGameConfidence(self, value, source=None):
         """Adjust the in-game confidence state. The two shock absorbers gate
@@ -456,6 +471,8 @@ class Player:
                     else self.gameAttributes.selfBelief)
             scale = 1.0 - max(-1.0, min(1.0, (attr - 80) / 20.0))
             value *= scale
+        if value < 0 and source != 'momentum':
+            value *= 1.0 - self._setbackCushion()
         self.gameAttributes.confidenceModifier = round(self.gameAttributes.confidenceModifier + value, 3)
         self.updateInGameRating()
 

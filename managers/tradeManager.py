@@ -25,6 +25,7 @@ simply stops listing.
 See docs/TRADING_PLAN.md §3.
 """
 
+from managers import payroll
 import logging
 
 import trading
@@ -2852,6 +2853,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
             team.prospects.remove(person)
         person.term = personTerm
         person.termRemaining = personTerm
+        payroll.stampSalary(person, prospect=True)
     else:
         pm = seasonManager.playerManager
         if person in getattr(pm, 'freeAgents', []):
@@ -2864,6 +2866,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
         # replacement, converting a roster hole into an asset.
         person.term = int(TRADE_MIDSEASON_SIGNING_TERM)
         person.termRemaining = person.term
+        payroll.stampSalary(person)
     team.rosterDict[slot] = person
     # ⚠️ DELIBERATELY NOT STAMPED `wasAcquiredThisSeason`. Signing a free agent and trading
     # him on is legitimate if somebody wants him (owner, 2026-09-15: "I dont think its an

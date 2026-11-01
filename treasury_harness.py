@@ -28,8 +28,10 @@ experiment; the real treasuries are background shared by every arm.
 ⚠️ THE SIM DOES NOT STOP AT A SEASON BOUNDARY, so each run is killed once the last season's
 Floos Bowl is final, gated on the Floos Bowl ROW (see tools_preseason.py for why not a count).
 
-⚠️ Payroll and gate revenue do not exist yet. Today this measures facilities alone; the plan's
-G1-G6 checks are added here as those phases land.
+Payroll (2026-10-26): `arms` also reports mean payroll and roster rating for even vs odd teams,
+forced payroll cuts, refused re-signs, FA picks that had to widen past the budget, and short
+rosters. The snapshot's contracts predate payroll, so they are grandfathered and payroll phases
+in as they expire.
 """
 import argparse
 import json
@@ -256,19 +258,27 @@ def readLevels(db):
             lv[t][k] = l
         tr = dict(c.execute("SELECT team_id, balance FROM team_treasury").fetchall())
         season = c.execute("SELECT current_season FROM simulation_state").fetchone()[0]
+        # Rostered payroll, roster size and roster rating, per team.
+        roster = {}
+        for t, n, sal, rating in c.execute(
+                "SELECT team_id, COUNT(*), COALESCE(SUM(salary), 0), AVG(player_rating) "
+                "FROM players WHERE team_id IS NOT NULL AND COALESCE(is_prospect, 0) = 0 "
+                "AND COALESCE(service_time, '') != 'Retired' GROUP BY team_id"):
+            roster[t] = (n, sal, rating)
         c.close()
-        return season, dict(lv), tr
+        return season, dict(lv), tr, roster
     except Exception:
         return None
 
 
-def runOne(label, runId, port, snapshot, lastSeason, inject, timeoutSecs):
+def runOne(label, runId, port, snapshot, lastSeason, inject, timeoutSecs, extraEnv=None):
     d = os.path.join(SCRATCH, f'{label}_run{runId}')
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     db = os.path.join(d, 'floosball.db')
     shutil.copy(snapshot, db)
     env = dict(os.environ, DATABASE_DIR=d, PORT=str(port), FLOOS_TREASURY_INJECT=inject)
+    env.update(extraEnv or {})
     log = open(os.path.join(d, 'log.txt'), 'w')
     proc = subprocess.Popen([sys.executable, 'run_api.py', '--timing=fast'], cwd=REPO, env=env,
                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -284,7 +294,7 @@ def runOne(label, runId, port, snapshot, lastSeason, inject, timeoutSecs):
                 # The FIRST view of each season: the payment run happens in that season's
                 # offseason (which runs under the same number), so a later view would show
                 # levels the season was not played at.
-                levelsBySeason[snap[0]] = (snap[1], snap[2])
+                levelsBySeason[snap[0]] = (snap[1], snap[2], snap[3])
             if bowlIsFinal(db, lastSeason):
                 ok = True
                 break
@@ -315,14 +325,35 @@ def runOne(label, runId, port, snapshot, lastSeason, inject, timeoutSecs):
         else:
             wins[season][h] += 0.5
             wins[season][a] += 0.5
-    errors = sum(1 for line in open(os.path.join(d, 'log.txt'), errors='ignore')
-                 if ' - ERROR - ' in line or 'Traceback' in line)
+    errors = 0
+    payrollLines = defaultdict(int)
+    for line in open(os.path.join(d, 'log.txt'), errors='ignore'):
+        if ' - ERROR - ' in line or 'Traceback' in line:
+            errors += 1
+        # ⚠️ Every record is logged twice (the formatted handler and a bare `INFO:name:`
+        # one), so count only the timestamped copy.
+        if not line[:2].isdigit():
+            continue
+        for key in ('PAYROLL SHORT', 'cannot afford to re-sign', 'could not afford a free agent'):
+            if key in line:
+                payrollLines[key] += 1
+    forcedCuts = defaultdict(int)
+    try:
+        for season, n in c.execute(
+                "SELECT season, COUNT(*) FROM season_recap_events WHERE event_type='cut' "
+                "AND detail LIKE 'Unpaid%' GROUP BY season"):
+            forcedCuts[season] = n
+    except Exception:
+        pass
     c.close()
     return {
         'wins': {s: dict(w) for s, w in wins.items()},
         'playoffs': {s: sorted(p) for s, p in playoffs.items()},
-        'levels': {s: lv for s, (lv, tr) in levelsBySeason.items()},
-        'treasury': {s: tr for s, (lv, tr) in levelsBySeason.items()},
+        'levels': {s: v[0] for s, v in levelsBySeason.items()},
+        'treasury': {s: v[1] for s, v in levelsBySeason.items()},
+        'roster': {s: v[2] for s, v in levelsBySeason.items()},
+        'forcedCuts': dict(forcedCuts),
+        'payrollLines': dict(payrollLines),
         'errors': errors,
     }, d
 
@@ -333,7 +364,12 @@ def cmdArms(args):
     lastSeason = startSeason + args.seasons - 1
     print(f"snapshot: season {state[0]} week {state[1]} offseason={bool(state[2])}; "
           f"playing through season {lastSeason}")
-    arms = [int(x) for x in args.inject.split(',')]
+    # --force: arms are facility sets read at level 5 on even teams and 0 on odd ones
+    # (FLOOS_FACILITY_FORCE) instead of Floobit injections; 'none' is the control.
+    if args.force:
+        arms = [x.strip() for x in args.force.split(';') if x.strip()]
+    else:
+        arms = [int(x) for x in args.inject.split(',')]
     jobs = [(amt, r) for amt in arms for r in range(1, args.runs + 1)]
     results = defaultdict(list)
     os.makedirs(SCRATCH, exist_ok=True)
@@ -342,18 +378,24 @@ def cmdArms(args):
     with cf.ThreadPoolExecutor(max_workers=args.parallel) as ex:
         futs = {}
         for i, (amt, r) in enumerate(jobs):
-            inject = f"even={amt},odd=0" if amt else ''
-            futs[ex.submit(runOne, f"inj{amt}", r, BASE_PORT + i, args.db, lastSeason, inject,
-                           args.timeout * args.seasons)] = (amt, r)
+            if args.force:
+                inject = ''
+                extra = {} if amt == 'none' else {'FLOOS_FACILITY_FORCE': amt}
+                label = 'force_' + amt.replace(',', '+')
+            else:
+                inject = f"even={amt},odd=0" if amt else ''
+                extra, label = {}, f"inj{amt}"
+            futs[ex.submit(runOne, label, r, BASE_PORT + i, args.db, lastSeason, inject,
+                           args.timeout * args.seasons, extra)] = (amt, r)
         for fut in cf.as_completed(futs):
             amt, r = futs[fut]
             res, d = fut.result()
             if res:
                 results[amt].append(res)
-                print(f"  arm {amt:>6}F run {r}: done, {res['errors']} error lines "
+                print(f"  arm {str(amt):>6} run {r}: done, {res['errors']} error lines "
                       f"({time.time() - started:.0f}s)")
             else:
-                print(f"  arm {amt:>6}F run {r}: FAILED (timeout or died), log kept at {d}")
+                print(f"  arm {str(amt):>6} run {r}: FAILED (timeout or died), log kept at {d}")
                 continue
             if not args.keep:
                 shutil.rmtree(d, ignore_errors=True)
@@ -395,7 +437,7 @@ def _ms(xs):
 
 def reportArms(results, startSeason, lastSeason):
     seasons = list(range(startSeason, lastSeason + 1))
-    control = results.get(0, [])
+    control = results.get(0) or results.get('none') or []
     print("\nEVEN-MINUS-ODD REGULAR-SEASON WINS (mean +- standard error over runs)")
     print("  The control arm's gap is the league's own even/odd difference; an arm's effect is "
           "its gap minus the control's.\n")
@@ -406,9 +448,9 @@ def reportArms(results, startSeason, lastSeason):
         cells = ''
         for s in seasons:
             m, se = _ms([_gap(r, s) for r in results[amt]])
-            eff = m - base[s] if amt and not math.isnan(base[s]) else None
+            eff = m - base[s] if amt not in (0, 'none') and not math.isnan(base[s]) else None
             cells += f"{m:+7.2f}+-{se:4.2f}" + (f" ({eff:+5.2f})" if eff is not None else ' ' * 8)
-        print(f"  {amt:>7}F {len(results[amt]):>4d}{cells}")
+        print(f"  {str(amt):>8s} {len(results[amt]):>4d}{cells}")
     print("\n  (in parentheses: the effect over control, in wins per 28-game season)")
 
     print("\nTOTAL FACILITY LEVELS, EVEN vs ODD (out of 25, season it was played at)")
@@ -419,7 +461,7 @@ def reportArms(results, startSeason, lastSeason):
             ev = [p[0] for p in pairs if p[0] is not None]
             od = [p[1] for p in pairs if p[1] is not None]
             cells += (f"{statistics.mean(ev):10.1f} vs {statistics.mean(od):4.1f}  " if ev and od else ' ' * 22)
-        print(f"  {amt:>7}F     {cells}")
+        print(f"  {str(amt):>8s}     {cells}")
 
     print("\nMEAN TREASURY, EVEN vs ODD (at the start of each season)")
     for amt in sorted(results):
@@ -431,7 +473,43 @@ def reportArms(results, startSeason, lastSeason):
                 for t, b in tr.items():
                     (ev if int(t) % 2 == 0 else od).append(b)
             cells += (f"{statistics.mean(ev):10,.0f} vs {statistics.mean(od):6,.0f}" if ev and od else ' ' * 20)
-        print(f"  {amt:>7}F     {cells}")
+        print(f"  {str(amt):>8s}     {cells}")
+
+    def _evenOdd(r, s, idx):
+        ro = r.get('roster', {}).get(s) or r.get('roster', {}).get(str(s)) or {}
+        ev = [v[idx] for t, v in ro.items() if int(t) % 2 == 0 and v[idx] is not None]
+        od = [v[idx] for t, v in ro.items() if int(t) % 2 == 1 and v[idx] is not None]
+        return ev, od
+
+    for title, idx, fmt in (("MEAN PAYROLL, EVEN vs ODD (F a season, at the start of each season)", 1, ',.0f'),
+                            ("MEAN ROSTER RATING, EVEN vs ODD", 2, '.1f')):
+        print(f"\n{title}")
+        for amt in sorted(results):
+            cells = ''
+            for s in seasons:
+                ev, od = [], []
+                for r in results[amt]:
+                    e, o = _evenOdd(r, s, idx)
+                    ev += e
+                    od += o
+                cells += (f"{statistics.mean(ev):10{fmt}} vs {statistics.mean(od):6{fmt}}" if ev and od else ' ' * 20)
+            print(f"  {str(amt):>8s}     {cells}")
+
+    print("\nPAYROLL EVENTS PER RUN (mean)")
+    for amt in sorted(results):
+        rs = results[amt]
+        if not rs:
+            continue
+        cuts = statistics.mean(sum(r.get('forcedCuts', {}).values()) for r in rs)
+        short = [statistics.mean(r.get('payrollLines', {}).get(k, 0) for r in rs)
+                 for k in ('PAYROLL SHORT', 'cannot afford to re-sign', 'could not afford a free agent')]
+        under = 0
+        for r in rs:
+            for s, ro in (r.get('roster') or {}).items():
+                under += sum(1 for v in ro.values() if v[0] < 6)
+        print(f"  {str(amt):>8s} forced cuts {cuts:5.1f}  payroll short {short[0]:5.1f}  "
+              f"re-signs refused {short[1]:5.1f}  FA widened {short[2]:5.1f}  "
+              f"short-roster team-seasons {under / len(rs):4.1f}")
 
     errs = sum(r['errors'] for rs in results.values() for r in rs)
     print(f"\n  error lines across all runs: {errs}")
@@ -452,6 +530,8 @@ def main():
     a.add_argument('--runs', type=int, default=6, help='runs per arm')
     a.add_argument('--inject', default='0,10000,30000',
                    help='comma-separated Floobits handed to each even-id team before every payment run; 0 is the control')
+    a.add_argument('--force', help="semicolon-separated facility sets for FLOOS_FACILITY_FORCE arms, "
+                   "e.g. 'none;locker_room;recovery;all' ('none' is the control); replaces --inject")
     a.add_argument('--parallel', type=int, default=8)
     a.add_argument('--timeout', type=int, default=900, help='seconds per season per run')
     a.add_argument('--json')

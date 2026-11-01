@@ -826,6 +826,7 @@ def _runPendingMigrations():
             ('is_undrafted', 'BOOLEAN DEFAULT 0'),
             ('prospect_seasons', 'INTEGER DEFAULT 0'),
             ('on_prospect_contract', 'BOOLEAN DEFAULT 0'),
+            ('salary', 'INTEGER DEFAULT 0'),
             ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
             ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
             ('will_retire', 'BOOLEAN DEFAULT 0'),
