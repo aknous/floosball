@@ -28,7 +28,8 @@ from constants import (FA_MARKET_ENABLED, FA_MARKET_ROUNDS, FA_ASK_DECAY, FA_MIN
                        FA_COMFORT_PULL, FA_OPPORTUNITY_ASK, FA_HISTORY_SEASONS,
                        FA_MOTIVE_PERSONALITY, FA_RESIGN_RESERVATION)
 
-logger = logging.getLogger('floosball.faMarket')
+from logger_config import get_logger
+logger = get_logger('floosball.faMarket')
 
 MOTIVES = ('hometown', 'winner', 'comfort', 'opportunity')
 SLOTS = ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')

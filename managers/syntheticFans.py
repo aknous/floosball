@@ -29,7 +29,8 @@ import math
 import os
 from datetime import datetime
 
-logger = logging.getLogger('floosball.syntheticFans')
+from logger_config import get_logger
+logger = get_logger('floosball.syntheticFans')
 
 WEEKS = 28
 _profile = None

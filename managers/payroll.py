@@ -18,7 +18,8 @@ import logging
 from constants import (POSITION_VALUE, SALARY_ENABLED, SALARY_MIN_SHARES, SALARY_FLOOR_RATING,
                        SALARY_TOP_SHARES, SALARY_EXPONENT, SALARY_PROSPECT_FRACTION)
 
-logger = logging.getLogger('floosball.payroll')
+from logger_config import get_logger
+logger = get_logger('floosball.payroll')
 
 ROSTER_SLOTS = ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')
 
