@@ -7147,6 +7147,16 @@ class SeasonManager:
                     if hasattr(prospect, 'id'):
                         teamDevRating[prospect.id] = coachDevRating
                         teamFundingBonus[prospect.id] = fundingBonus
+            # Development luck drifts relative to the league's own mean environment, so the
+            # league neither gains nor loses talent from it whatever its facility levels.
+            try:
+                from player_development import PlayerDevelopment as _PD
+                envs = [_PD.developmentBias(getattr(getattr(t, 'coach', None), 'playerDevelopment', 80) or 80,
+                                            t.facilityEffect('dev_bonus'))
+                        for t in teamManager.teams]
+                _PD.leagueNeutralBias = sum(envs) / len(envs) if envs else None
+            except Exception as e:
+                logger.warning(f"Step 7: league development baseline unavailable ({e})")
             for player in self.playerManager.activePlayers:
                 if hasattr(player, 'offseasonTraining'):
                     pid = getattr(player, 'id', None)

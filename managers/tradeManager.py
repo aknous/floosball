@@ -1081,9 +1081,9 @@ class TradeMarket:
         coach = getattr(team, 'coach', None)
         current = float(getattr(player, 'playerRating', 0) or 0)
         if self.brain.classifyArc(player) == ARC_DEVELOPING:
-            expected = float(player.computeExpectedRating())
+            expected = float(self.brain.expectedFor(player, team))
             ceiling = float(self.brain._ceilingRating(player, team))
-            devLean = float(self.brain._attrLean(coach, 'playerDevelopment'))
+            devLean = float(self.brain.developmentLean(coach, team))
             return max(current, expected + max(0.0, ceiling - expected)
                        * FO_CEILING_CREDIT * devLean)
         return float(self.brain.trueForwardRating(player, coach, team))

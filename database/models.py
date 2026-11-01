@@ -198,6 +198,8 @@ class Player(Base):
     # lost on the first restart, and since nothing else records it there would be no error
     # — just a prospect who quietly never blooms. Nullable: 0/NULL means none pending.
     late_bloom_pending: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    # Hidden talent (docs/PROSPECT_UNCERTAINTY_PLAN.md): attribute points already in trueSkill/potential that the public consensus does not know about.
+    talent_shift: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
     prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
     # True from the moment a prospect is promoted until that promotion contract expires.

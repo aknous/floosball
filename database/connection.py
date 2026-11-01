@@ -1388,6 +1388,16 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # A prospect's hidden talent shift (docs/PROSPECT_UNCERTAINTY_PLAN.md). It is
+        # already inside his trueSkill/potential; this is what the public consensus takes
+        # back out, so losing it on a restart would hand every fan the truth.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN talent_shift INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: players.talent_shift")
+        except Exception:
+            conn.rollback()
+
         # The reasoning behind a settled trade. The manifest always built these; the row
         # did not carry them, so the durable record was a list of names with no account of
         # why anybody did it. Nullable — trades settled before this keep no reasoning, and

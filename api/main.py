@@ -1220,20 +1220,21 @@ def _viewingClubFor(user):
 
 
 def _prospectProjection(player):
-    """A player's TRUE projection for fans: `{expected, ceiling}`, or None.
+    """A player's PUBLIC projection for fans: `{expected, ceiling}`, or None.
 
     expected = overall at trueSkill (natural development)
     ceiling  = overall at potential (perfect development)
 
-    ⚠️ FANS SEE THE TRUTH; ONLY THE CLUBS GUESS (owner, 2026-09-27). Each club's scouted
-    read (the scouting model) is what its GM acts on, and it is never presented anywhere.
-    Blurred bands made sense when fans voted on prospects as the GM; the front office is
-    autonomous now, so a fan is watching, not deciding. Serving per-club bands is also
-    what made the same prospect read 81/88 on his team page and 72/74 on his profile.
+    ⚠️ FANS SEE THE PUBLIC CONSENSUS (owner, 2026-10-30, docs/PROSPECT_UNCERTAINTY_PLAN.md).
+    It used to be the truth (2026-09-27), and the truth is now partly hidden talent that only
+    good scouts can see: showing it would tell fans who the busts and diamonds are before any
+    GM knew. The consensus is the projection with the unrevealed part of the shift taken back
+    out (`Player.projectionFor(0)`); it closes on the truth as the player develops. ⚠️ The
+    2026-09-27 rule's real point stands: ONE number on every page, never a per-club band.
     """
     try:
-        return {"expected": round(float(player.computeExpectedRating()), 1),
-                "ceiling": round(float(player.computeCeilingRating()), 1)}
+        expected, ceiling = player.projectionFor(0.0)
+        return {"expected": round(float(expected), 1), "ceiling": round(float(ceiling), 1)}
     except Exception:
         return None
 
@@ -9208,13 +9209,13 @@ def get_player_rating_history(player_id: int):
     #   ceiling  = top rating at potential (perfect development)
     # Only for active players (live attrs); hidden for undrafted prospects so the
     # profile can't leak what the rookie-ballot scouting range deliberately blurs.
-    # True values for every active player, prospects included (see `_prospectProjection`).
+    # The public consensus for every active player, prospects included (see
+    # `_prospectProjection`): hidden talent stays hidden here too.
     expected = None
     ceiling = None
-    if player is not None and hasattr(player, 'computeCeilingRating'):
+    if player is not None and hasattr(player, 'projectionFor'):
         try:
-            expected = player.computeExpectedRating()
-            ceiling = player.computeCeilingRating()
+            expected, ceiling = player.projectionFor(0.0)
         except Exception:
             expected = None
             ceiling = None

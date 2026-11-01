@@ -1,13 +1,14 @@
-"""Fans see a prospect's TRUE expected and ceiling, on every surface.
+"""Fans see ONE projection for a prospect, the public consensus, on every surface.
 
 Reported from prod: prospect Dialup McAvoy read expected 81 / ceiling 88 on his team page
 and 72 / 74 on his profile. The team page served the drafting team's scouted band (drawn
 at its widest in the offseason), the draft class the viewer's team's band, and the
 profile chart the truth.
 
-Owner ruling (2026-09-27): fans always see the true values. Only the teams guess, through
-their own scouting, and those guesses are never presented. Blurred bands made sense while
-fans voted on prospects as the GM; the front office is autonomous now.
+Owner ruling (2026-09-27): one number everywhere, never a per-team band. Revised 2026-10-30
+(docs/PROSPECT_UNCERTAINTY_PLAN.md): that number is the public CONSENSUS, not the truth,
+because the truth now carries hidden talent only good scouts can see. Only the teams guess
+beyond it, and those guesses are never presented.
 
 Run: .venv/bin/python test_prospect_read_consistency.py
 """
@@ -31,11 +32,14 @@ def _prospect(drafted=True):
     return types.SimpleNamespace(
         id=276, is_prospect=drafted, is_upcoming_rookie=not drafted,
         drafting_team_id=3 if drafted else None, playerRating=70.0,
-        computeCeilingRating=lambda: 74.0, computeExpectedRating=lambda: 72.0)
+        computeCeilingRating=lambda unseen=0.0: 74.0, computeExpectedRating=lambda unseen=0.0: 72.0,
+        # The consensus (vision 0) differs from the truth (vision 1) for a prospect
+        # carrying hidden talent.
+        projectionFor=lambda vision=0.0: (72.0, 74.0) if vision == 0 else (80.0, 84.0))
 
 
 class ProspectProjectionTest(unittest.TestCase):
-    def test_projection_is_the_truth_drafted_or_not(self):
+    def test_projection_is_the_public_consensus_drafted_or_not(self):
         for drafted in (True, False):
             self.assertEqual(M._prospectProjection(_prospect(drafted)),
                              {'expected': 72.0, 'ceiling': 74.0})

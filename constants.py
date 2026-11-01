@@ -61,7 +61,7 @@ POTENTIAL_HEADROOM = 15
 # applied up front would show up in every team's scouted range and the player would go
 # first overall, which is the opposite of the story. It is held as a hidden number and
 # applied during a development season, after the draft, after teams have committed.
-LATE_BLOOM_ENABLED = True
+LATE_BLOOM_ENABLED = False   # retired 2026-10-30: folded into PROSPECT_TALENT_* (the upper tail), see below. Pending blooms already rolled still fire.
 # Per prospect, at class generation. At a 32-player class this is ~0.6 a season.
 LATE_BLOOM_CHANCE = 0.02
 # Points added to trueSkill AND potential on every trained attribute when it fires.
@@ -96,6 +96,83 @@ LATE_BLOOM_FIRE_PER_BIAS = 0.10
 # future 5-star looks like a solid 3-4-star as a rookie. Founding/FA-generated
 # (non-rookie) players skip the discount — they enter already at their level.
 PROSPECT_ENTRY_DISCOUNT = 11
+
+# ── Prospect uncertainty (docs/PROSPECT_UNCERTAINTY_PLAN.md, owner 2026-10-30) ──────────
+# A prospect's projection was his destiny: every trained attribute climbed to a fixed
+# trueSkill cap that fans and (within a few points) every GM could read, so redrafting a
+# class five seasons later kept the #1 pick 85% of the time and nobody from the last five
+# picks ever rose into the 5-15 range (NFL 2000-15, same test: 26% and 67%). Two sources
+# of uncertainty now, split three quarters / one quarter (owner):
+#
+# HIDDEN TALENT (what good scouts can see). At class generation every prospect draws a
+# shift `talentShift`, in attribute points, added to every trained attribute's trueSkill
+# AND potential (one shared draw, like the old late bloom: per-attribute draws average
+# away). The public consensus is computed as if it were 0; a team sees `vision` of it.
+# A two-part mixture: most prospects near 0 (CORE), a few far out (TAIL), either sign,
+# so most picks are roughly right and a few are badly wrong. Mean zero, so the league's
+# talent does not drift.
+PROSPECT_TALENT_SHIFT_ENABLED = True
+PROSPECT_TALENT_CORE_SD = float(_os.environ.get('FLOOS_TALENT_CORE_SD', '7.0'))
+PROSPECT_TALENT_TAIL_SHARE = float(_os.environ.get('FLOOS_TALENT_TAIL_SHARE', '0.3'))
+PROSPECT_TALENT_TAIL_SD = float(_os.environ.get('FLOOS_TALENT_TAIL_SD', '20.0'))
+PROSPECT_TALENT_SHIFT_MAX = 30          # clamp, attribute points
+# ⚠️ SIZED BY THE REDRAFT TEST (prospect_redraft_check.py, 2 seeds x 40 classes, average
+# environment), against the NFL reference: the consensus board keeps its #1 30-33% of the
+# time (NFL 26%), has a last-5 pick rise into 5-15 in 45-47% of classes (67%), drops 12-14%
+# of top-5 picks below 16th (8%), and ranks the redraft at 0.56-0.57 (0.56). An elite scout
+# ranks it at 0.86-0.88. About two thirds of the reshuffle is visible to an elite scout, not
+# the three quarters asked for: the development noise the engine already had (old model
+# 0.94) caps what any read can see, and shrinking DEV_LUCK_SD further barely moved it.
+# How much of the shift the public has seen, by career seasons (pro + pipeline). Revealed
+# gradually as he develops (owner: gradual, no reveal moment). Index past the end = 1.0.
+PROSPECT_TALENT_REVEALED = [0.0, 0.35, 0.65, 0.85, 1.0]
+#
+# DEVELOPMENT LUCK (what nobody can see). Each offseason a RISING player's trueSkill and
+# potential take one shared step: N(drift, DEV_LUCK_SD), drift = (devBias - the league's
+# average devBias) x DEV_LUCK_DRIFT_PER_BIAS. A good coach + Training Facility pushes a
+# player toward his upside, a poor one wastes it (owner: the environment changes the
+# outcome). Zero on average at an average environment.
+DEV_LUCK_ENABLED = True
+# ⚠️ TALENT HAS TO SHOW UP INSIDE THE REVEAL WINDOW. A diamond with +20 hidden sits ~31
+# points under his true level at debut against everyone else's PROSPECT_ENTRY_DISCOUNT
+# (11), and the ordinary rising range (DEV_RISE_RANGE + devBias, ~+5 a season) cannot close
+# that in five seasons, so he was still climbing when the redraft judged him and an elite
+# scout read the class no better than an average one (0.83 rank correlation each). A
+# rising attribute further below its trueSkill than the debut gap grows faster by
+# DEV_CATCHUP_RATE of the excess a season (PlayerDevelopment._settle). An ordinary
+# prospect sits inside the gap and is untouched.
+DEV_CATCHUP_GAP = 11
+DEV_CATCHUP_RATE = float(_os.environ.get('FLOOS_DEV_CATCHUP', '0.35'))
+DEV_LUCK_SD = float(_os.environ.get('FLOOS_DEV_LUCK_SD', '0.8'))
+DEV_LUCK_DRIFT_PER_BIAS = float(_os.environ.get('FLOOS_DEV_LUCK_DRIFT', '0.6'))
+DEV_LUCK_NEUTRAL_BIAS = 3.4             # fallback only: the offseason sets PlayerDevelopment.leagueNeutralBias to the league's live mean (prod ~3.4, 2026-10-30)
+#
+# THE DEVELOPMENT ENVIRONMENT: coach 40%, Training Facility 60% (owner, 2026-10-30: fans
+# control the facilities and not the coach, so the facilities must carry more). devBias =
+# coach part (DEV_BIAS_COACH_MAX x (playerDevelopment - 60) / 40) + the Training level's
+# FACILITY_CATALOG value (0..3.6). Same maximum (6) and, at 2026-10-30 levels, the same
+# league average (~3.4) as the old coach 0-4 + facility 0-2, so players do not grow faster
+# or slower on average. See player_development.developmentBias.
+DEV_BIAS_COACH_MAX = 2.4
+# THE SCOUTING READ: coach 40%, Scouting Department 60%, the same reasoning. vision =
+# SCOUT_VISION_COACH_SHARE x coach lean + (1 - share) x the department's FACILITY_CATALOG
+# value (0..1). Best coach + level 5 sees everything; worst coach + level 5 sees 60%.
+SCOUT_VISION_COACH_SHARE = 0.4
+# ⚠️ AND A FLOOR (owner, 2026-10-31: soften the drop). Vision feeds EVERY GM read, free
+# agents and re-signs included, and with no floor the league average fell from ~0.78 to
+# ~0.49 at season-11 levels (eight teams with no department read at the coach's 40%
+# alone). Every GM now reads at least SCOUT_VISION_FLOOR; the 40/60 coach/department split
+# applies to the rest: worst coach + no department 0.25, best coach + none 0.55, worst
+# coach + level 5 0.70, best + level 5 1.0. League average ~0.62.
+SCOUT_VISION_FLOOR = 0.25
+#
+# THE CLASS IS BIGGER THAN THE DRAFT (owner, 2026-10-30): ROOKIE_CLASS_PER_TEAM prospects
+# per team, so the last picks are real choices and a diamond has somewhere to hide. The
+# undrafted wash out (removed, name back to the pool), except as many at each position as
+# that position needs to stay at the supply floor, who become free agents
+# (playerManager.washOutUndrafted). Without that a low-value position (kickers) would be
+# washed out every year and the floor would generate replacements with fresh names.
+ROOKIE_CLASS_PER_TEAM = 1.5
 
 # ---- Career-arc development (player_development.py) ----
 # Players rise toward a per-player PEAK season (a jittered fraction of their
@@ -2193,13 +2270,13 @@ FACILITY_MAX_LEVEL = 5
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
 FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
-                    'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
+                    'levels': [0, 0.72, 1.44, 2.16, 2.88, 3.6]},          # player-dev bias (player_development.developmentBias); facilities carry 60% of it (owner, 2026-10-30)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
                     'levels': [0.0, 0.004, 0.008, 0.012, 0.016, 0.020]},     # rating edge in every game (Game._applyFacilityEdge)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
                     'levels': [0.0, 0.15, 0.35, 0.55, 0.75, 0.90]},        # share of weekly fatigue gain removed (seasonManager._accumulateFatigue); L5 = nearly fresh all season
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
-                    'levels': [0, 4, 8, 12, 16, 20]},                    # points added to the GM's scouting judgment (60-100)
+                    'levels': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]},           # department share of the GM's vision (frontOfficeBrain.scoutingVision); facilities carry 60% (owner, 2026-10-30)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
                     'levels': [0.0, 0.008, 0.016, 0.024, 0.032, 0.040]}, # rating edge in home games (Game._applyFacilityEdge)
 }
@@ -2771,7 +2848,7 @@ FA_SELF_DEV_YEARS_CAP = 2     # ... up to this much, so nobody trains into a sup
 # coached formula's own ceiling, (100 - 60) / 10, so the two cannot drift apart: an
 # unsigned player can at best match the best coach in the league and never beat one who
 # also has a funded training facility.
-FA_SELF_DEV_TOTAL_CAP = 4
+FA_SELF_DEV_TOTAL_CAP = 2   # the coach's share alone tops out at DEV_BIAS_COACH_MAX (2.4); see below
 
 # ---- Coach generation: specialists, not uniformly good/bad (AFO plan Part B) ----
 # Coaches used to draw every attribute from normal(center, 10) around ONE

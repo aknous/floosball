@@ -290,37 +290,39 @@ class FrontOfficeBrain:
             return int(getattr(player, 'playerRating', 0) or 0)
 
     def _ceilingRating(self, player, team=None) -> int:
-        """Rating the player reaches only with good development (potential).
+        """Rating the player reaches only with good development (potential), as THIS team
+        sees it.
 
-        Ground truth for a player who has actually played — a club has watched him in
-        practice for years and his ceiling is a projection, not a mystery.
-
-        ⚠️ FOR A DRAFT PROSPECT IT IS A BELIEF, AND IT MUST BE **THE SAME BELIEF THE
-        FANS ARE SHOWN**. A prospect's ceiling is the scouted quantity: the club has
-        seen him play nothing. Left as ground truth here, the GM would price him off
-        the true number while the team page showed a band drawn from a different
-        random seed — so a club would visibly pay for a player its own supporters were
-        told it rated differently, and every draft pick would look irrational from the
-        outside. `prospect_scouting.believedPotential` is the one opinion; the band is
-        just how that opinion is DISPLAYED.
+        ⚠️ IT IS A READ, NOT THE TRUTH, for anyone whose hidden talent is not fully revealed
+        (docs/PROSPECT_UNCERTAINTY_PLAN.md): the public consensus plus the part of the
+        shift this team's scouting sees (`projectionFor`). A draft prospect also carries
+        this club's standing scouting error (`prospect_scouting.believedPotential`), drawn
+        once and held, so a GM who overrates a player overrates him consistently. A
+        player with nothing hidden reads as before: his real potential.
         """
-        fn = getattr(player, 'computeCeilingRating', None)
-        if not callable(fn):
-            return int(getattr(player, 'playerRating', 0) or 0)
         try:
-            trueCeiling = int(fn())
+            _exp, ceiling = self.projectionFor(player, team)
+            ceiling = int(round(ceiling))
         except Exception:
             return int(getattr(player, 'playerRating', 0) or 0)
         if team is None or not isScoutable(player):
-            return trueCeiling
+            return ceiling
         try:
             from prospect_scouting import believedPotential
             return int(round(believedPotential(
-                trueCeiling, getattr(team, 'id', None) or 0,
+                ceiling, getattr(team, 'id', None) or 0,
                 getattr(player, 'id', 0) or 0, self.season,
                 self.scoutingVision(getattr(team, 'coach', None), team), self.week)))
         except Exception:
-            return trueCeiling
+            return ceiling
+
+    def expectedFor(self, player, team=None) -> float:
+        """The rating this team expects the player to grow into (his trueSkill level), as
+        it sees him; see `projectionFor`."""
+        try:
+            return float(self.projectionFor(player, team)[0])
+        except Exception:
+            return float(getattr(player, 'playerRating', 0) or 0)
 
     # ---------------------------------------------------------- projection
 
@@ -340,7 +342,7 @@ class FrontOfficeBrain:
         # trained physical attributes age, floored at 80% of peak), while the guess took
         # 4 to 28. Now it is the offseason's rules at their average, so the two cannot
         # drift apart.
-        nextSeason = self._nextSeasonRatingPastPeak(player, coach)
+        nextSeason = self._nextSeasonRatingPastPeak(player, coach, team)
         if nextSeason is not None:
             return float(nextSeason)
 
@@ -351,12 +353,12 @@ class FrontOfficeBrain:
             # Growth is coach-driven, so a strong developer rationally values
             # raw talent higher than a weak one does — the plan's second-order
             # effect (sharp scout + good developer takes on the project player).
-            devLean = self._attrLean(coach, 'playerDevelopment')
+            devLean = self.developmentLean(coach, team)
             return current + (ceiling - current) * FO_CEILING_CREDIT * devLean
 
         return current
 
-    def _nextSeasonRatingPastPeak(self, player, coach=None):
+    def _nextSeasonRatingPastPeak(self, player, coach=None, team=None):
         """The sim's expected rating next season for a player at or past his peak
         season; None for one still rising (or anything that cannot be projected), which
         the caller values on its developing/prime reading instead."""
@@ -366,7 +368,14 @@ class FrontOfficeBrain:
         # The same devBias the offseason applies for this coach (it only moves the
         # overshoot chance at the peak season; decline ignores it).
         devRating = getattr(coach, 'playerDevelopment', None) or 80
-        devBias = round((devRating - 60) / 10)
+        from player_development import PlayerDevelopment as _PD
+        training = 0.0
+        if team is not None:
+            try:
+                training = float(team.facilityEffect('dev_bonus') or 0.0)
+            except Exception:
+                training = 0.0
+        devBias = int(round(_PD.developmentBias(devRating, training)))
         # Cached for the brain's life (one offseason): every team values every player,
         # several passes over, and a projection costs ~50us against the old formula's
         # near-nothing. Keyed on what it reads, so a player whose rating or clock moved
@@ -401,22 +410,67 @@ class FrontOfficeBrain:
         return _clamp((raw - FO_SCOUT_VISION_FLOOR) / span, 0.0, 1.0)
 
     def scoutingVision(self, coach, team=None) -> float:
-        """How much of a player's forward arc this front office actually sees.
+        """How much of a player's forward arc, and of a prospect's hidden talent, this
+        front office actually sees (0..1).
 
-        The GM's own `scouting` plus whatever their Scouting Department buys
-        them: up to +20 attribute points at level 5, half the 40-point vision span,
-        so a poor evaluator with a full department sees like a good one (owner,
-        2026-10-03: scouting "is supposed to help the GM evaluate their players and
-        make better decisions on who to draft or sign"). It was +7, which moved a
-        GM's draft picks by nothing measurable.
+        ⚠️ FACILITIES CARRY 60% (owner, 2026-10-30: fans control the facilities and have
+        no say over the coach, so the Scouting Department has to matter). The GM's own
+        `scouting` lean is SCOUT_VISION_COACH_SHARE (0.4) of it and the department's
+        FACILITY_CATALOG value (0..1) the rest, above a floor every GM reads at
+        (SCOUT_VISION_FLOOR, 0.25): the best coach with a level-5 department sees
+        everything, the worst coach with one 0.70, the best coach with none 0.55.
+        It used to be additive points with the coach spanning the whole range alone, so
+        most department levels changed nothing for a GM already near the top.
         """
-        bonus = 0.0
+        from constants import SCOUT_VISION_COACH_SHARE, SCOUT_VISION_FLOOR
+        coachLean = self._attrLean(coach, 'scouting')
+        dept = 0.0
         if FO_SCOUT_FACILITY_ENABLED and team is not None:
             try:
-                bonus = float(team.facilityEffect('scouting_bonus') or 0.0)
+                dept = float(team.facilityEffect('scouting_bonus') or 0.0)
             except Exception:
-                bonus = 0.0
-        return self._attrLean(coach, 'scouting', bonus=bonus)
+                dept = 0.0
+        if team is None:
+            # No team to read a department from (a bare valuation): the coach alone, on
+            # the scale he had before, so a teamless call is not silently half-blind.
+            return coachLean
+        blend = SCOUT_VISION_COACH_SHARE * coachLean + (1.0 - SCOUT_VISION_COACH_SHARE) * dept
+        return _clamp(SCOUT_VISION_FLOOR + (1.0 - SCOUT_VISION_FLOOR) * blend, 0.0, 1.0)
+
+    def developmentLean(self, coach, team=None) -> float:
+        """How much of a player's remaining growth this team expects to realise (0..1):
+        its development environment, coach plus Training Facility, as a share of the best
+        possible (player_development.developmentBias). Facilities carry 60% of it (owner,
+        2026-10-30), the same split the offseason develops players with. With no team, the
+        coach's playerDevelopment lean alone, as before."""
+        if team is None:
+            return self._attrLean(coach, 'playerDevelopment')
+        from constants import DEV_BIAS_COACH_MAX, FACILITY_CATALOG
+        from player_development import PlayerDevelopment as _PD
+        try:
+            training = float(team.facilityEffect('dev_bonus') or 0.0)
+        except Exception:
+            training = 0.0
+        devRating = getattr(coach, 'playerDevelopment', None) if coach is not None else None
+        best = DEV_BIAS_COACH_MAX + max(FACILITY_CATALOG['training']['levels'])
+        return _clamp(_PD.developmentBias(devRating if devRating is not None else 80, training) / best, 0.0, 1.0)
+
+    def projectionFor(self, player, team=None, coach=None):
+        """(expected, ceiling) as this team sees the player: the public consensus plus
+        the part of his hidden talent its scouting sees (Player.projectionFor). With no
+        team, the public consensus. Expected is what he grows into, ceiling what he
+        reaches with good development."""
+        fn = getattr(player, 'projectionFor', None)
+        if not callable(fn):
+            exp = getattr(player, 'computeExpectedRating', None)
+            ceil = getattr(player, 'computeCeilingRating', None)
+            cur = float(getattr(player, 'playerRating', 0) or 0)
+            return (float(exp()) if callable(exp) else cur, float(ceil()) if callable(ceil) else cur)
+        vision = 0.0
+        if team is not None:
+            vision = self.scoutingVision(coach if coach is not None else getattr(team, 'coach', None), team)
+        e, c = fn(vision)
+        return float(e), float(c)
 
     # ------------------------------------------------------------- value
 
@@ -769,7 +823,7 @@ class FrontOfficeBrain:
         GM believes in the curve, in both directions.
         """
         try:
-            nextSeason = self._nextSeasonRatingPastPeak(starter, coach)
+            nextSeason = self._nextSeasonRatingPastPeak(starter, coach, team)
         except Exception:
             nextSeason = None
         if nextSeason is None:
@@ -867,7 +921,7 @@ class FrontOfficeBrain:
         A player at or past his peak gets nothing here (his decline is `_agingDrag`)."""
         if not FO_STANDING_ENABLED or player is None:
             return 0.0
-        if self._nextSeasonRatingPastPeak(player, coach) is not None:
+        if self._nextSeasonRatingPastPeak(player, coach, team) is not None:
             return 0.0
         try:
             if self.classifyArc(player) != ARC_DEVELOPING:
@@ -879,7 +933,7 @@ class FrontOfficeBrain:
         if gap <= 0:
             return 0.0
         horizon = max(1, int(FO_STANDING_HORIZON_SEASONS))
-        f = _clamp(FO_CEILING_CREDIT * self._attrLean(coach, 'playerDevelopment'), 0.0, 1.0)
+        f = _clamp(FO_CEILING_CREDIT * self.developmentLean(coach, team), 0.0, 1.0)
         extra = gap * ((1.0 - f) - (1.0 - f) ** horizon)
         if extra <= 0:
             return 0.0
@@ -1410,9 +1464,9 @@ class FrontOfficeBrain:
         try:
             if self.classifyArc(player) != ARC_DEVELOPING:
                 return False
-            expected = float(player.computeExpectedRating())
+            expected = self.expectedFor(player, team)
             ceiling = float(self._ceilingRating(player, team))
-            devLean = float(self._attrLean(coach, 'playerDevelopment'))
+            devLean = float(self.developmentLean(coach, team))
             projected = max(rating, expected + max(0.0, ceiling - expected)
                             * FO_CEILING_CREDIT * devLean)
         except Exception:

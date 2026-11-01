@@ -10,6 +10,7 @@ See docs/PROSPECT_DRAFT_PLAN.md §1b.
 import subprocess
 import sys
 
+import pytest
 import prospect_scouting as ps
 from constants import (SCOUTING_BANDS, SCOUT_BAND_EARLY, SCOUT_BAND_LATE,
                        FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, GM_ACTIVE_WEEK)
@@ -20,7 +21,7 @@ def _visionFor(accuracy):
     return (accuracy - FO_SCOUT_VISION_FLOOR) / (FO_SCOUT_VISION_CEILING - FO_SCOUT_VISION_FLOOR)
 
 
-TEN_POINT_TIER = _visionFor(70)     # the ±10 band the plan's worked table uses
+TEN_POINT_TIER = 1.0 / 3.0          # the vision whose band is ±10 (continuous since 2026-10-30)
 
 
 class FakeProspect:
@@ -36,20 +37,22 @@ class FakeProspect:
 # ------------------------------------------------------- the band table
 
 def test_band_follows_the_scouting_tiers():
-    """`SCOUTING_BANDS` is keyed on the 60-100 ATTRIBUTE scale while `scoutingVision`
-    returns 0..1 — the two have to be reconciled in ONE place or every call site
-    reconciles them differently."""
-    assert ps.bandFor(_visionFor(96)) == 0        # elite: the exact number
-    assert ps.bandFor(_visionFor(85)) == 5
-    assert ps.bandFor(_visionFor(70)) == 10
-    assert ps.bandFor(_visionFor(60)) == 15
-    print("PASS band tiers: 0 / 5 / 10 / 15")
+    """⚠️ CONTINUOUS SINCE 2026-10-30. The band was a four-step table keyed on the 60-100
+    attribute scale (0 / 5 / 10 / 15), so most Scouting Department levels crossed no step
+    and changed nothing. Now every point of vision narrows it: the widest width at vision
+    0, exact at vision 1, linear between."""
+    assert ps.bandFor(0.0) == 15
+    assert ps.bandFor(1.0) == 0
+    assert ps.bandFor(0.5) == pytest.approx(7.5)
+    widths = [ps.bandFor(v / 10) for v in range(11)]
+    assert all(b < a for a, b in zip(widths, widths[1:])), widths
+    print("PASS band is continuous in vision")
 
 
 def test_the_plans_worked_table_reproduces():
     """±14 / ±10.7 / ±7.3 / ±4 at weeks 1 / 8 / 15 / 22 on the ±10 tier."""
     got = [round(ps.bandWidth(TEN_POINT_TIER, wk), 1) for wk in (1, 8, 15, 22)]
-    assert got == [14.0, 10.7, 7.3, 4.0], got
+    assert got == pytest.approx([14.0, 10.7, 7.3, 4.0], abs=0.06), got
     print(f"PASS worked table reproduces: {got}")
 
 
@@ -59,7 +62,7 @@ def test_the_ramp_ends_at_the_trade_deadline():
     pick at week 22 is a priced asset both clubs can see. Anchored four weeks later, the
     band would still be ±6.2 at the deadline — after which nobody can act on it."""
     assert ps.seasonProgress(GM_ACTIVE_WEEK) == 1.0
-    assert ps.bandWidth(TEN_POINT_TIER, GM_ACTIVE_WEEK) == 10 * SCOUT_BAND_LATE
+    assert ps.bandWidth(TEN_POINT_TIER, GM_ACTIVE_WEEK) == pytest.approx(10 * SCOUT_BAND_LATE)
     print(f"PASS the band is fully sharpened at week {GM_ACTIVE_WEEK}")
 
 
@@ -85,7 +88,7 @@ def test_a_perfect_scout_is_unaffected_by_time():
     """✅ `SCOUTING_BANDS` gives ±0 at accuracy >= 95, and zero times any scale is still
     zero — so an elite scouting operation sees the exact number in week 1 and has
     nothing to gain from waiting. That is the Department's ceiling being worth having."""
-    elite = _visionFor(96)
+    elite = 1.0
     assert ps.bandWidth(elite, 1) == 0
     assert ps.bandWidth(elite, 22) == 0
     view = ps.scoutedView(FakeProspect(1, 70, 88), 5, 3, elite, 1)
@@ -212,5 +215,5 @@ def test_the_view_never_leaks_the_exact_number_to_a_fallible_scout():
     for tier in (60, 70, 85):
         view = ps.scoutedView(FakeProspect(77, 70, 88), 5, 3, _visionFor(tier), 1)
         assert view['exact'] is None, (tier, view)
-    assert ps.scoutedView(FakeProspect(77, 70, 88), 5, 3, _visionFor(96), 1)['exact'] == 88
+    assert ps.scoutedView(FakeProspect(77, 70, 88), 5, 3, 1.0, 1)['exact'] == 88
     print("PASS only a perfect scout is handed the exact value")
