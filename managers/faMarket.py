@@ -471,8 +471,13 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             f.term = w.term or payroll.contractTerm(pm, f, season)
             f.termRemaining = f.term
             f.salary = int(salary) if payroll.salariesActive() else 0
-            payroll.recordContract(f, f.salary, 'market', season)
             motive = motives[pid]
+            # Measured against the price he was offered against: his ask this pass (85% of it
+            # for an 'opportunity' player). The market never opens below that, so the premium
+            # is 1.0 uncontested and above it in a bidding war; a player taking less from a team
+            # he likes only narrows how far above.
+            reference = asks[pid] * (FA_OPPORTUNITY_ASK if motive == 'opportunity' else 1.0)
+            payroll.recordContract(f, f.salary, 'market', season, ask=reference)
             reason = REASONS[motive] if pull(pid, team.id) > 0 or motive == 'opportunity' else 'for the money'
             freeAgencyDict[f"{team.name}_{f.name}"] = {
                 'name': f.name, 'pos': f.position.name, 'rating': f.attributes.skillRating,

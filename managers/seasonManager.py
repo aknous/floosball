@@ -8869,7 +8869,11 @@ class SeasonManager:
         # list and we want them to survive into the FA phase so a mid-FA
         # refresh still shows the full offseason history. The single wipe
         # at the start of _handleOffseason covers the between-season reset.
-        currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
+        # ⚠️ IT TESTED `hasattr(self, 'currentSeasonNumber')`, an attribute nothing sets, so this
+        # was ALWAYS 1. Harmless while the FA draft only used it for a log file name; the free
+        # agency market seeds contract terms, records comparable contracts and checks
+        # promoted-this-offseason protection with it.
+        currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 1) or 1
 
         from managers import faMarket
         if faMarket.marketActive():
@@ -9423,8 +9427,6 @@ class SeasonManager:
                     else:
                         payroll.stampSalary(player)
                     player._resignSalary = None
-                    payroll.recordContract(player, player.salary, 'resign',
-                                           getattr(self.currentSeason, 'seasonNumber', 0))
                     player.teamResignCount = int(getattr(player, 'teamResignCount', 0) or 0) + 1
                     player._gmResigned = False
                     leagueHighlights.insert(0, {

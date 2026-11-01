@@ -764,10 +764,9 @@ class FacilityVote(Base):
 
 
 class ContractSigning(Base):
-    """One contract a player signed (docs/FREE_AGENCY_MARKET_PLAN.md, comparable contracts):
-    the salary against the curve price at signing (`base_ask`). The recent ones set the
-    market rate every asking salary is scaled by (`payroll.marketRate`). Promoted prospects'
-    fixed cheap deals are not recorded."""
+    """One free agency market contract (docs/FREE_AGENCY_MARKET_PLAN.md, comparable
+    contracts): the salary, the ask it was offered against, and the PREMIUM paid over that ask. The recent ones set the
+    market rate every asking salary is scaled by (`payroll.marketRate`)."""
     __tablename__ = "contract_signings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -776,8 +775,9 @@ class ContractSigning(Base):
     position: Mapped[str] = mapped_column(String(4), nullable=False)
     rating: Mapped[float] = mapped_column(Float, nullable=False)
     salary: Mapped[int] = mapped_column(Integer, nullable=False)
-    base_ask: Mapped[int] = mapped_column(Integer, nullable=False)
-    kind: Mapped[str] = mapped_column(String(12), nullable=False)   # market | resign | fill
+    ask: Mapped[int] = mapped_column(Integer, nullable=False)
+    premium: Mapped[float] = mapped_column(Float, nullable=False)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)   # market
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

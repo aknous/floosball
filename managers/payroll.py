@@ -117,49 +117,57 @@ def askingSalary(player, unit: float = None, prospect: bool = False) -> int:
 # ... contracts are based on what a comparable player recently received. this should be an
 # incentive to not overspend because that will make players more expensive"
 #
-# Kept in memory as (season, position, rating, salary / curve price at signing): loaded
-# from `contract_signings` at the safe points the season manager already reads finances
-# (`_refreshPayrollFinances`), appended live as contracts are signed, and written back in
-# a batch after step 3 and after the FA step. ⚠️ NEVER a database read inside a signing:
+# Every free agency market signing records its PREMIUM: the salary over the asking price he
+# was offered against. The market never opens below that ask, so an uncontested signing is
+# 1.0 and a bidding war is above it, up to the bid cap. The market rate is 1 plus the recency- and rating-weighted average premium of
+# recent comparables, shrunk toward 1.0. ⚠️ MEASURED AGAINST THE ASK, NOT THE CURVE: a ratio
+# to the curve feeds the market rate back into itself (a signing at today's rate reads as
+# today's rate, and every discount compounds), which drifted prices down every offseason
+# on the first run. Against the ask nothing compounds: overpaying raises prices, and they
+# return to the curve as those contracts age out. Re-signs and hole fills sign at their
+# ask by definition and carry no signal, so only market signings are recorded.
+#
+# Kept in memory as (season, position, rating, premium): loaded from `contract_signings` at
+# the safe points the season manager already reads finances (`_refreshPayrollFinances`),
+# appended live, written back after the FA step. ⚠️ NEVER a database read inside a signing:
 # those run inside other open writes, and SQLite has one writer. Not loaded means no
 # comparables, a market rate of 1.0.
 
-_comps = []            # [(season, position, rating, ratio)]
+_comps = []            # [(season, position, rating, premium)]
 _compSeason = 0
 _pendingContracts = []
 
 
 def marketRate(positionKey: str, rating: float) -> float:
-    """Recent comparable contracts at this position and a similar rating, as salary over
-    the curve price, weighted by recency and rating distance, shrunk toward 1.0 by
-    `FA_COMP_PRIOR` contracts at exactly the curve price, and capped."""
+    """1 plus the weighted average premium recent comparable contracts paid over their ask,
+    shrunk toward 1.0 by `FA_COMP_PRIOR` contracts at exactly the ask, and capped."""
     from constants import (FA_COMP_RECENCY, FA_COMP_RATING_WINDOW, FA_COMP_PRIOR,
                            FA_COMP_MIN, FA_COMP_MAX)
-    num, den = float(FA_COMP_PRIOR), float(FA_COMP_PRIOR)
-    for season, pos, r, ratio in _comps:
+    num, den = 0.0, float(FA_COMP_PRIOR)
+    for season, pos, r, premium in _comps:
         if pos != positionKey:
             continue
         near = 1.0 - abs(float(rating) - float(r)) / float(FA_COMP_RATING_WINDOW)
         if near <= 0:
             continue
         w = near * float(FA_COMP_RECENCY) ** max(0, _compSeason - season)
-        num += w * ratio
+        num += w * (premium - 1.0)
         den += w
-    return max(float(FA_COMP_MIN), min(float(FA_COMP_MAX), num / den))
+    return max(float(FA_COMP_MIN), min(float(FA_COMP_MAX), 1.0 + num / den))
 
 
-def recordContract(player, salary: int, kind: str, season: int) -> None:
-    """A contract was signed: it counts as a comparable from now on."""
+def recordContract(player, salary: int, kind: str, season: int, ask: float = None) -> None:
+    """A market contract was signed: its premium over `ask` counts as a comparable."""
     global _compSeason
-    if not salariesActive() or not salary:
+    if not salariesActive() or not salary or not ask:
         return
-    base = baseAskingSalary(player)
+    premium = float(salary) / max(1.0, float(ask))
     pos, rating = _positionKey(player), float(getattr(player, 'playerRating', 0) or 0)
     _compSeason = max(_compSeason, int(season or 0))
-    _comps.append((int(season or 0), pos, rating, float(salary) / max(1, base)))
+    _comps.append((int(season or 0), pos, rating, premium))
     _pendingContracts.append({'season': int(season or 0), 'player_id': getattr(player, 'id', None),
                               'position': pos, 'rating': rating, 'salary': int(salary),
-                              'base_ask': int(base), 'kind': kind})
+                              'ask': int(round(ask)), 'premium': premium, 'kind': kind})
 
 
 def flushContracts() -> int:
@@ -198,8 +206,7 @@ def loadContracts(season: int) -> None:
             rows = (session.query(ContractSigning)
                     .filter(ContractSigning.season > int(season) - int(FA_COMP_SEASONS),
                             ContractSigning.season <= int(season)).all())
-            _comps = [(r.season, r.position, float(r.rating), float(r.salary) / max(1, r.base_ask))
-                      for r in rows]
+            _comps = [(r.season, r.position, float(r.rating), float(r.premium)) for r in rows]
             _compSeason = int(season)
         finally:
             session.close()

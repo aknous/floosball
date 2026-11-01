@@ -2431,10 +2431,10 @@ FA_OPPORTUNITY_ASK = 0.85       # an 'opportunity' player signs the first offer 
 FA_HISTORY_SEASONS = 5          # seasons of titles and playoff runs a 'winner' looks at
 # Comparable contracts (owner, 2026-11-01: "contracts are based on what a comparable player
 # recently received ... an incentive to not overspend"). A player's asking salary is the curve
-# price times a market rate: the recent contracts at his position and a similar rating, each as
-# salary / the curve price at signing, shrunk toward 1.0 and capped. An overpay raises
-# comparable players' prices (in later market passes, next offseason's re-sign offers and asks);
-# a discount or a late signing at a reduced price lowers them.
+# price times a market rate: 1 plus the premium recent market contracts at his position and a
+# similar rating paid over the ask they were offered against, shrunk toward 1.0 and capped. An
+# overpay raises comparable players' prices (in later market passes, next offseason's re-sign
+# offers and asks); prices return to the curve as those contracts age out.
 FA_COMP_SEASONS = 2             # offseasons of contracts that count
 FA_COMP_RECENCY = 0.5           # weight of last offseason's contracts against this one's
 FA_COMP_RATING_WINDOW = 5       # a contract counts fully at the same rating, not at all 5 away
