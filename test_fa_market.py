@@ -119,6 +119,11 @@ def test_walkAwayPriceGrowsWithTheEdgeOverTheNextOption():
     assert faMarket.walkAwayPrice(1000, 60, 50) > 1000
 
 
+def test_noBiddingWarGoesPastTheCap():
+    import constants
+    assert faMarket.walkAwayPrice(1000, 500, 10) == round(1000 * constants.FA_MAX_BID_CAP)
+
+
 def test_aMotiveIsStableAndLeansOnPersonality():
     p = SimpleNamespace(id=4242, faMotive=None, attributes=SimpleNamespace(personality='wholesome'))
     m = faMarket.motiveOf(p)

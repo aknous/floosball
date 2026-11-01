@@ -24,7 +24,7 @@ import random
 from dataclasses import dataclass, field
 
 from constants import (FA_MARKET_ENABLED, FA_MARKET_ROUNDS, FA_ASK_DECAY, FA_MIN_RAISE,
-                       FA_MAX_BID_EDGE, FA_LIST_LENGTH, FA_HOMETOWN_DISCOUNT, FA_WINNER_PULL,
+                       FA_MAX_BID_EDGE, FA_MAX_BID_CAP, FA_LIST_LENGTH, FA_HOMETOWN_DISCOUNT, FA_WINNER_PULL,
                        FA_COMFORT_PULL, FA_OPPORTUNITY_ASK, FA_HISTORY_SEASONS,
                        FA_MOTIVE_PERSONALITY, FA_RESIGN_RESERVATION)
 
@@ -232,9 +232,9 @@ def resolve(asks: dict, motives: dict, wants: list, rank: dict, pull, room: dict
 
 def walkAwayPrice(ask: int, value: float, nextValue: float) -> int:
     """The most a team pays: the asking salary, scaled up by how much better this player
-    is than its next option (`FA_MAX_BID_EDGE`)."""
+    is than its next option (`FA_MAX_BID_EDGE`), never past `FA_MAX_BID_CAP` times it."""
     edge = max(0.0, (value - nextValue) / max(1.0, abs(nextValue)))
-    return int(round(ask * (1.0 + FA_MAX_BID_EDGE * edge)))
+    return int(round(ask * min(float(FA_MAX_BID_CAP), 1.0 + FA_MAX_BID_EDGE * edge)))
 
 
 # ─── The adapter: one signing period in a real league ────────────────────────────────────

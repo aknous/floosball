@@ -2418,7 +2418,10 @@ FA_MARKET_ENABLED = True
 FA_MARKET_ROUNDS = 4            # market passes; each later one only for leftovers
 FA_ASK_DECAY = 0.15             # an unsigned player's asking salary falls this share a pass
 FA_MIN_RAISE = 0.05             # a raise beats the leading offer by this share of his ask
-FA_MAX_BID_EDGE = 1.0           # walk-away price = ask x (1 + this x edge over the next option)
+FA_MAX_BID_EDGE = 0.5           # walk-away price = ask x (1 + this x edge over the next option)
+# ...never above this multiple of the ask (owner, 2026-11-01: "ideally prices in bidding wars
+# dont go to 2x"; at an edge weight of 1.0 and no cap, top salaries ran to ~2x the ask).
+FA_MAX_BID_CAP = 1.4
 FA_LIST_LENGTH = 8              # free agents a team will try for one slot
 # Motives: the pull, as a share of the player's asking salary, toward the teams he likes.
 FA_HOMETOWN_DISCOUNT = 0.20     # for his home team (the team that drafted him)
