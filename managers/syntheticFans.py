@@ -8,8 +8,8 @@ season is then measuring that collapse.
 
 This replays a REFERENCE season's real fan economy every regular-season week instead:
 
-  - activity: the reference season's fans stay logged in, so they count toward gate
-    revenue (participation boosts are not faked: auto-picks never count, and banked
+  - activity: the reference season's EARNERS (fans with Floobit income that season)
+    stay logged in, so they count toward gate revenue (participation boosts are not faked: auto-picks never count, and banked
     lineups carry on by themselves);
   - income: the league's Floobit grants are topped up to the reference season's weekly
     rate, shared among its earners in proportion to what they earned, so the share unit
@@ -75,9 +75,14 @@ def runWeek(seasonManager, season: int, week: int) -> None:
             _profile = _buildProfile(session, ref)
         users = _profile['users']
         fans = {u.id: u for u in session.query(User).filter(User.id.in_(list(users))).all()}
+        # ⚠️ ONLY THE REFERENCE SEASON'S EARNERS PLAY. Every fan with any transaction
+        # that season includes ~150 dormant accounts whose leftover Floobits the
+        # season-end deposit sweeps (median deposit 9F); keeping them logged in paid gate
+        # revenue for ~160 active fans against a real 25-45 (first synthetic run).
         now = datetime.utcnow()
-        for u in fans.values():
-            u.last_login_at = now
+        for uid in _profile['earners']:
+            if uid in fans:
+                fans[uid].last_login_at = now
 
         def _wallet(uid):
             w = session.query(UserCurrency).filter_by(user_id=uid).first()
