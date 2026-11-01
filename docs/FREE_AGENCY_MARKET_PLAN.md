@@ -29,30 +29,52 @@ on prod-snapshot runs with synthetic fans (2026-11-01, seasons 11-16):
 ## 2. The signing period
 
 Runs where the FA draft runs (after the rookie draft and the supply floor, before the
-payment run), in rounds:
+payment run).
 
-1. **Offers.** Each team's GM offers contracts to the free agents it wants: a salary at or
-   above the player's current asking salary, and a term. A team can only offer what its
-   budget covers with facility upkeep counted (`payroll.maxAffordable`, unchanged), and its
-   offers in a round must fit together. A team with no open slot at the position may name a
-   starter it would release if the offer is accepted; never anyone signed or re-signed this
-   offseason, filled earlier in the period, or cut-protected (the existing rules).
-2. **Players choose.** Every free agent with offers scores each one (section 3) and either
-   accepts the best or waits for a better one, depending on his motive and the round.
-3. **Prices fall.** A player with no offer in a round lowers his asking salary
-   (`FA_ASK_DECAY` a round, never under the minimum), so a star nobody can afford ends up
-   with a team that can.
-4. **Holes are filled.** After the last round (`FA_MARKET_ROUNDS`), a team with an empty
-   slot signs the cheapest remaining player at the position, as the FA draft's last tier
-   does now, then the last-resort generation if the pool is empty. No roster is left short.
+### Nothing is final until the market closes (owner, 2026-11-01)
 
-**Walk-year players enter the market** instead of a re-sign step before it: a team keeps a
-player by out-offering everyone else, and a loyal player gives the team that drafted him a
-discount (section 3). Whether the old team also gets to **match** the best outside offer is
-an open decision (section 7).
+One-shot rounds would make losing a bid cost a team its whole backup plan: it would shop
+again in the next round after the good alternatives had signed elsewhere. So offers are
+**held, not signed**, until no team has a move left (deferred acceptance, with bidding):
+
+1. **Lists.** Each team's GM ranks the free agents it wants for each open slot (or each slot
+   it would upgrade), with the most it would pay each one (section 4), and offers its top
+   choice his asking salary. A team with no open slot at the position may name a starter it
+   would release if the offer is accepted: never anyone signed or re-signed this offseason,
+   filled earlier in the period, or cut-protected (the existing rules). The release only
+   happens if the offer is accepted.
+2. **Players hold their best offer.** Each player keeps the offer that scores highest for him
+   (salary plus his motive's pull, section 3) and signs nothing yet.
+3. **An outbid team can match or beat** (owner, 2026-11-01: "teams that had offers surpass
+   theirs should be able to match or beat it"). When a player drops a team for a better
+   offer, that team either raises (by at least `FA_MIN_RAISE` of his asking salary, up to
+   the most it would pay) or moves on to the next player on its list. Every team in the war
+   keeps responding until nobody will go higher. Matching is on the player's SCORE, so his
+   drafting team needs a lower salary to match an outsider for a hometown player. An exact
+   tie goes to the team his motive favors, then to the worse team (last season's record).
+4. **Waiting never costs a backup.** A team that loses its star and moves on can still win
+   its second choice even if he is holding someone else's offer, by out-scoring it; that
+   team can then respond in turn. Nothing locks until the end.
+5. **The market closes** when no team will raise or has anyone left to try. Every held offer
+   becomes a signing; conditional releases happen.
+6. **Prices fall for the leftovers.** A player still unsigned lowers his asking salary
+   (`FA_ASK_DECAY`, never under the minimum) and the market reopens only for teams that
+   still want someone at his position, a few times (`FA_MARKET_ROUNDS`). Nothing already
+   signed is reopened.
+7. **Holes are filled.** A team still short signs the cheapest remaining player at the
+   position (the FA draft's last tier now), then the last-resort generation if the pool is
+   empty. No roster is left short. In the synthetic-fan runs 25-45 slots opened each
+   offseason against a pool of 50-90, and the supply floor covers every position.
+
+Budget: every offer a team is holding out counts against its budget at once, and a raise
+must still fit (`payroll.maxAffordable`, upkeep counted).
+
+**Walk-year players enter the market** instead of a re-sign step before it. A team keeps one
+by winning him like anyone else: it can respond to outside offers the same way every outbid
+team can, with no special right, and a hometown player's discount favors his drafting team.
 
 Prospects: the team's own prospect-versus-free-agent choice (`prospectTakesSlot`) is made
-before the period opens for each open slot; a promoted prospect fills the slot and the team
+before the market opens for each open slot; a promoted prospect fills the slot and the team
 shops elsewhere. Window-length deals for a free agent who beats a prospect stay.
 
 ## 3. Why a player signs somewhere: motives
@@ -88,12 +110,15 @@ with `motivePull` in Floobits, so a motive is literally the discount a player gi
 - **Opportunity:** no team pull. Instead he accepts the first offer at or above
   `FA_OPPORTUNITY_ASK` (proposal 85%) of his asking salary rather than waiting for better.
 
-Other motives wait: a player with offers accepts the best only if it clears his asking
-salary or the period is in its last rounds; otherwise he holds a round to see if a better
-one comes. A player who holds and gets nothing better takes his best standing offer.
+- **Opportunity** players also **sign at once**: the first offer clearing
+  `FA_OPPORTUNITY_ASK` is final, with no bidding war. They are the dependable backups a
+  cautious team can lock in early, and the reason a poorer team can count on someone.
+- **Hometown** players wait for their drafting team's offer while one is still possible;
+  once that team has filled the position or dropped him from its list, they choose like
+  everyone else.
 
-Ties go to the worse team (last season's record), which is the one place worst-first order
-survives.
+Exact ties go to the team the motive favors, then the worse team (last season's record),
+the one place worst-first order survives.
 
 ## 4. How a GM makes offers
 
@@ -101,15 +126,19 @@ survives.
   vision, position value, standing) and makes offers where a player beats its current
   starter (or fills a hole) by its bar. The value per Floobit rule (`FO_SALARY_PRICE_WEIGHT`)
   carries over.
-- **How much:** at least the asking salary. A GM offers more for a player it values well
-  above the alternatives, up to what that edge is worth to it and what it can afford, and
-  knows the player's motive (it is public: "a hometown player", "wants a winner").
-- **How many:** at most one open offer per roster slot it is shopping, so a team cannot tie
+- **How much:** the opening offer is the asking salary. The most it would pay (its walk-away
+  price in a bidding war) is the asking salary scaled up by how much better the player is
+  than its next option (`FA_MAX_BID_EDGE`), capped by what its budget covers for the whole
+  term. It knows the player's motive (it is public: "a hometown player", "wants a winner"),
+  so it knows how much a pull is worth against it.
+- **How many:** at most one held offer per roster slot it is shopping, so a team cannot tie
   up the market.
 
 ## 5. What fans see
 
-The live FA draft becomes a **signing period feed**: offers ("3 teams are after X"),
+The live FA draft becomes a **signing period feed**. The market resolves instantly, but the
+feed replays it as a few signing days: opening offers ("3 teams are after X"), bidding wars
+("the Midnights raise to 2,400F for X; the Waffles match"), players turning teams down,
 signings with the reason ("X signs with the Waffles, his hometown team, for 1,200F a
 season"; "X takes the Midnights' offer to chase a title"), players lowering their price, and
 walks. Each player's motive shows on his profile and in the free agent list, so a fan can
@@ -134,11 +163,12 @@ team wealth.
 
 ## 7. Open decisions (owner)
 
-1. **Matching rights:** does a player's old team get to match the best outside offer on its
-   walk-year players? Recommendation: no; the hometown discount already favors his drafting
-   team, and matching would let rich teams keep everyone.
+1. ~~Matching rights for the old team.~~ Settled 2026-11-01: every outbid team can match or
+   beat, the old team included, with no special right.
 2. Motive mix and pull sizes (`FA_HOMETOWN_DISCOUNT`, `FA_WINNER_PULL`, `FA_COMFORT_PULL`,
-   `FA_OPPORTUNITY_ASK`), rounds and price decay: set by the harness.
+   `FA_OPPORTUNITY_ASK`), the bidding sizes (`FA_MIN_RAISE`, `FA_MAX_BID_EDGE`), rounds and
+   price decay: set by the harness. Watch whether rich teams win every war; the walk-away
+   price is the lever.
 3. Whether a player's motive can change over a career (for example, a veteran turning
    winner late).
 
@@ -146,8 +176,9 @@ team wealth.
 
 1. `players.fa_motive` (model, inline migration, load/save), rolled at generation, and a
    one-shot backfill for existing players from their personality.
-2. The market engine: offers, choices, price decay, the fill step; pure functions with
-   tests, the same split as `payroll.py`.
+2. The market engine: lists, held offers, bidding wars, price decay, the fill step; pure
+   functions with tests, the same split as `payroll.py`. It must always terminate (every
+   raise is at least `FA_MIN_RAISE` and capped by a finite walk-away price).
 3. Wire it in place of `freeAgencyPickGenerator` / `conductFreeAgencySimulation`, with the
    walk-year players moved into the market from the re-sign step, behind a switch so the FA
    draft can stay live until it is tuned.
