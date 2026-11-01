@@ -3321,14 +3321,17 @@ class PlayerManager:
 
                 # Attempt to fill ONE open roster spot
                 # Returns True if roster complete, False if not complete (has open positions)
+                turnEvents = []
                 rosterComplete = self._attemptRosterFill(
                     team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                     freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                    eventLog=eventLog
+                    eventLog=turnEvents
                 )
+                if eventLog is not None:
+                    eventLog.extend(turnEvents)
 
-                if rosterComplete:
-                    # No open positions - team is complete
+                if self._draftTeamIsDone(rosterComplete, turnEvents):
+                    # Full, and this turn found no move worth making - team is complete
                     teamsComplete += 1
                     team.freeAgencyComplete = True
                     if eventLog is not None:
@@ -3463,9 +3466,14 @@ class PlayerManager:
             return
 
         for team in teams:
-            openPositions = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')
-                            if team.rosterDict.get(k) is None]
-            team.freeAgencyComplete = len(openPositions) == 0
+            # ⚠️ A FULL ROSTER STILL GETS TURNS (owner, 2026-11-01: "a team should be able
+            # to cut a roster player (that wasnt just signed that offseason) to sign a
+            # better player"). A team that started the draft full used to be marked done
+            # here and never reached `_upgradeCandidates`, so the only teams that could
+            # upgrade were ones still filling a hole, and a rich team with a full roster
+            # sat on its Treasury while a 90-rated free agent went unsigned. A team is done
+            # once its roster is full and a turn makes no move (`_draftTeamIsDone`).
+            team.freeAgencyComplete = False
             # ⚠️ CLEARED PER DRAFT. It lives on the Team, which outlives the offseason, so
             # leaving it would make every slot filled in season N permanently un-upgradable.
             team._draftFilledSlots = set()
@@ -3512,8 +3520,12 @@ class PlayerManager:
 
                 teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 
-                # Yield on-the-clock before attempting pick
-                yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
+                # A team with an open slot is on the clock before it picks. A full team only
+                # goes on the clock if it makes an upgrade: every on_clock waits out the live
+                # pick delay, and a full roster passing is not a pick worth showing.
+                startsFull = self._rosterIsFull(team)
+                if not startsFull:
+                    yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
                 # Priority order: walk fan directives (which may interleave FA
                 # and prospect IDs). Fan-ranked #1 prospects were already
@@ -3539,6 +3551,8 @@ class PlayerManager:
                         freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                         eventLog=pickEvents,
                     )
+                    if startsFull and self._turnMadeAMove(pickEvents):
+                        yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
                     for ev in pickEvents:
                         # Log path mirrors the directive walk so the FA log
@@ -3582,7 +3596,7 @@ class PlayerManager:
                                 logFa(f"  LAST-RESORT SIGN: {team.name} signs {ev['player']} at {ev.get('slot', '?')}")
                                 yield ev
 
-                    if rosterComplete:
+                    if self._draftTeamIsDone(rosterComplete, pickEvents):
                         teamsComplete += 1
                         team.freeAgencyComplete = True
                         yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
@@ -5504,6 +5518,23 @@ class PlayerManager:
             getattr(player, 'previousTeam', None) == team.name
             and getattr(player, 'freeAgentYears', 1) == 0
         )
+
+    @staticmethod
+    def _rosterIsFull(team) -> bool:
+        return all(team.rosterDict.get(k) is not None for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'))
+
+    @staticmethod
+    def _turnMadeAMove(events) -> bool:
+        """A signing or a promotion: something that changed the roster this turn."""
+        return any(ev.get('type') == 'pick' for ev in (events or []))
+
+    @classmethod
+    def _draftTeamIsDone(cls, rosterComplete: bool, events) -> bool:
+        """A team leaves the FA draft once its roster is full and a turn makes no move.
+        A team that just made one (filled a hole, or cut for an upgrade) gets another turn,
+        since the next free agent down the board may be worth another upgrade. Bounded: a
+        slot filled during the draft cannot be cut again (`_draftFilledSlots`)."""
+        return bool(rosterComplete) and not cls._turnMadeAMove(events)
 
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
