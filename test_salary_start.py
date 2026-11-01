@@ -46,15 +46,22 @@ def _player():
     return SimpleNamespace(playerRating=90, position=SimpleNamespace(name='QB'), salary=0)
 
 
+def _markFunded(season):
+    s = get_session()
+    payroll.markFundedSeasonStarted(season, s)
+    s.commit()
+    s.close()
+
+
 def test_theFirstFundedSeasonSignsForNothing():
-    payroll.markFundedSeasonStarted(13)
+    _markFunded(13)
     assert not payroll.salariesActive()
     assert payroll.stampSalary(_player()) == 0
     assert SeasonManager._resignLimitOn()
 
 
 def test_salariesStartWhenThatSeasonEnds():
-    payroll.markFundedSeasonStarted(13)
+    _markFunded(13)
     assert payroll.markSalariesStartIfDue(12) is False     # an earlier season ending
     assert not payroll.salariesActive()
     assert payroll.markSalariesStartIfDue(13) is True
@@ -65,8 +72,22 @@ def test_salariesStartWhenThatSeasonEnds():
 
 
 def test_onlyTheFirstFundedSeasonIsKept():
-    payroll.markFundedSeasonStarted(13)
-    payroll.markFundedSeasonStarted(14)
+    _markFunded(13)
+    _markFunded(14)
+    assert payroll._readSetting(payroll.FIRST_FUNDED_KEY) == '13'
+
+
+def test_theStampWritesOnTheCallersOpenWrite():
+    # The caller holds a pending write; a second session would wait on SQLite's lock.
+    from database.models import TeamFunding
+    s = get_session()
+    s.add(TeamFunding(team_id=1, season=13, baseline_funding=200, fan_contributions=0,
+                      current_funding=200, carried_funding=0, effective_funding=200,
+                      tier_locked_funding=200))
+    s.flush()
+    payroll.markFundedSeasonStarted(13, s)
+    s.commit()
+    s.close()
     assert payroll._readSetting(payroll.FIRST_FUNDED_KEY) == '13'
 
 

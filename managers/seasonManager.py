@@ -1657,6 +1657,13 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to unlock equipped cards for week {week}: {e}")
 
+        # Sims only (FLOOS_SYNTH_FANS): replay a real season's fan economy so a run from a
+        # snapshot does not measure the faucet collapsing once the real fans are gone.
+        if not in_playoffs:
+            from managers import syntheticFans
+            if syntheticFans.enabled():
+                syntheticFans.runWeek(self, self.currentSeason.seasonNumber, week)
+
         # The Cores narrate the slate that just finished. Before the week_end broadcast so
         # a client refreshing off that event already has the lines.
         self._publishCoresWeekNews(week)
@@ -13122,7 +13129,7 @@ class SeasonManager:
 
                 session.flush()
                 try:
-                    payroll.markFundedSeasonStarted(currentSeason)
+                    payroll.markFundedSeasonStarted(currentSeason, session)
                 except Exception as e:
                     logger.warning(f"Could not stamp the first funded season: {e}")
 

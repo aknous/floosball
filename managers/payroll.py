@@ -18,7 +18,7 @@ import logging
 from constants import (POSITION_VALUE, SALARY_ENABLED, SALARY_MIN_SHARES, SALARY_FLOOR_RATING,
                        SALARY_TOP_SHARES, SALARY_EXPONENT, SALARY_PROSPECT_FRACTION)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('floosball.payroll')
 
 ROSTER_SLOTS = ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')
 
@@ -146,13 +146,19 @@ def resetSalariesActiveCache() -> None:
     _activeCache = (0.0, None)
 
 
-def markFundedSeasonStarted(season: int) -> None:
-    """A season created its funding records under this code. Only the first is kept."""
+def markFundedSeasonStarted(season: int, session) -> None:
+    """A season created its funding records under this code. Only the first is kept.
+
+    ⚠️ WRITES ON THE CALLER'S SESSION, which commits. The caller
+    (`_initializeTeamFunding`) holds an open write, and SQLite has one writer: a second
+    session here waits out the 30s busy_timeout and fails "database is locked" (measured on
+    the first run), which also freezes the event loop the API shares."""
     if not SALARY_ENABLED:
         return
-    from game_rules import _writeAppSetting
-    if _readSetting(FIRST_FUNDED_KEY) is None:
-        _writeAppSetting(FIRST_FUNDED_KEY, str(int(season)))
+    from database.models import AppSetting
+    if session.query(AppSetting).filter_by(key=FIRST_FUNDED_KEY).first() is None:
+        session.add(AppSetting(key=FIRST_FUNDED_KEY, value=str(int(season))))
+        session.flush()
         logger.info(f"Payroll: season {season} is the first funded season; salaries start at its end")
 
 
