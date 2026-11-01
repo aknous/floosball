@@ -62,6 +62,7 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
+    _backfillHomeTeams()
     _backfillFacilityRankings()
     _backfillTradeMoves()
     _reconcileTeamTitles()
@@ -1445,6 +1446,14 @@ def _runPendingMigrations():
             logger.info("  Migration: players.talent_shift")
         except Exception:
             conn.rollback()
+        # Free agency motives (docs/FREE_AGENCY_MARKET_PLAN.md).
+        for col, ddl in (('fa_motive', 'VARCHAR(16)'), ('home_team_id', 'INTEGER')):
+            try:
+                conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {ddl}"))
+                conn.commit()
+                logger.info(f"  Migration: players.{col}")
+            except Exception:
+                conn.rollback()
 
         # The reasoning behind a settled trade. The manifest always built these; the row
         # did not carry them, so the durable record was a list of names with no account of
@@ -4003,6 +4012,42 @@ def _backfillFacilityRankings():
 
 
 _PROSPECT_CONTRACT_MARKER = 'prospect_contracts_backfilled'
+
+
+def _backfillHomeTeams():
+    """ONE-SHOT (marker `home_teams_backfilled`): each player's home team, which a
+    'hometown' free agent gives a discount to (docs/FREE_AGENCY_MARKET_PLAN.md). The
+    team that drafted him, from the `rookie_pick` recap rows (since season 6); failing
+    that, the first team he has a season row with. Players with neither stay NULL.
+    Only fills NULLs, and the rookie draft writes it live from now on."""
+    from sqlalchemy import text as _text
+    try:
+        with engine.connect() as conn:
+            done = conn.execute(_text("SELECT 1 FROM app_settings WHERE key='home_teams_backfilled'")).first()
+            if done:
+                return
+            drafted = conn.execute(_text("""
+                UPDATE players SET home_team_id = (
+                    SELECT e.team_id FROM season_recap_events e
+                    WHERE e.player_id = players.id AND e.event_type = 'rookie_pick' AND e.team_id IS NOT NULL
+                    ORDER BY e.season LIMIT 1)
+                WHERE home_team_id IS NULL AND EXISTS (
+                    SELECT 1 FROM season_recap_events e
+                    WHERE e.player_id = players.id AND e.event_type = 'rookie_pick' AND e.team_id IS NOT NULL)""")).rowcount
+            first = conn.execute(_text("""
+                UPDATE players SET home_team_id = (
+                    SELECT s.team_id FROM player_season_stats s
+                    WHERE s.player_id = players.id AND s.team_id IS NOT NULL
+                    ORDER BY s.season LIMIT 1)
+                WHERE home_team_id IS NULL AND EXISTS (
+                    SELECT 1 FROM player_season_stats s
+                    WHERE s.player_id = players.id AND s.team_id IS NOT NULL)""")).rowcount
+            conn.execute(_text("INSERT INTO app_settings (key, value, updated_at) "
+                               "VALUES ('home_teams_backfilled', '1', CURRENT_TIMESTAMP)"))
+            conn.commit()
+            logger.info(f"Home teams backfilled: {drafted} from the draft, {first} from a first team")
+    except Exception as e:
+        logger.warning(f"Home team backfill skipped: {e}")
 
 
 def _backfillProspectContracts():

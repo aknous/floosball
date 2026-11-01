@@ -564,6 +564,8 @@ class PlayerManager:
             player.is_prospect = bool(getattr(db_player, 'is_prospect', False))
             player.lateBloomPending = int(getattr(db_player, 'late_bloom_pending', 0) or 0)
             player.talentShift = int(getattr(db_player, 'talent_shift', 0) or 0)
+            player.faMotive = getattr(db_player, 'fa_motive', None)
+            player.homeTeamId = getattr(db_player, 'home_team_id', None)
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.onProspectContract = bool(getattr(db_player, 'on_prospect_contract', False))
@@ -1989,6 +1991,8 @@ class PlayerManager:
                         is_undrafted=bool(getattr(player, 'is_undrafted', False)),
                         late_bloom_pending=int(getattr(player, 'lateBloomPending', 0) or 0),
                         talent_shift=int(getattr(player, 'talentShift', 0) or 0),
+                        fa_motive=getattr(player, 'faMotive', None),
+                        home_team_id=getattr(player, 'homeTeamId', None),
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
                         on_prospect_contract=bool(getattr(player, 'onProspectContract', False)),
                         salary=int(getattr(player, 'salary', 0) or 0),
@@ -2024,6 +2028,8 @@ class PlayerManager:
                     db_player.is_prospect = bool(getattr(player, 'is_prospect', False))
                     db_player.late_bloom_pending = int(getattr(player, 'lateBloomPending', 0) or 0)
                     db_player.talent_shift = int(getattr(player, 'talentShift', 0) or 0)
+                    db_player.fa_motive = getattr(player, 'faMotive', None)
+                    db_player.home_team_id = getattr(player, 'homeTeamId', None)
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.on_prospect_contract = bool(getattr(player, 'onProspectContract', False))
@@ -5028,6 +5034,7 @@ class PlayerManager:
             pick.is_prospect = True
             pick.is_upcoming_rookie = False
             pick.drafting_team_id = team.id
+            pick.homeTeamId = team.id          # a 'hometown' free agent's discount goes here
             pick.prospect_seasons = 0
             pick.team = 'Prospect'
             if not hasattr(team, 'prospects') or team.prospects is None:

@@ -200,6 +200,13 @@ class Player(Base):
     late_bloom_pending: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     # Hidden talent (docs/PROSPECT_UNCERTAINTY_PLAN.md): attribute points already in trueSkill/potential that the public consensus does not know about.
     talent_shift: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    # Why this player signs where he does in free agency (docs/FREE_AGENCY_MARKET_PLAN.md):
+    # 'hometown' | 'winner' | 'comfort' | 'opportunity'. NULL until first needed, when it is
+    # rolled from his personality on a seed fixed by his id (`faMarket.motiveOf`).
+    fa_motive: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # The team that drafted him (or, before the draft records, the first team he played
+    # for): a 'hometown' player takes a discount to sign there.
+    home_team_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
     prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
     # True from the moment a prospect is promoted until that promotion contract expires.

@@ -296,6 +296,10 @@ class Player:
         # computed with the unrevealed part taken back out (`unrevealedShift`), and a team
         # sees `vision` of it. 0 for everyone not generated in a class under this rule.
         self.talentShift = 0
+        # Free agency (docs/FREE_AGENCY_MARKET_PLAN.md): why he signs where he does, and the
+        # team that drafted him. `faMarket.motiveOf` rolls the motive when first needed.
+        self.faMotive = None
+        self.homeTeamId = None
         self.gamesPlayed = 0
         self.term = 0
         self.termRemaining = 0

@@ -2401,6 +2401,34 @@ PAYROLL_INCOME_CAUTION = 0.75
 # to an expensive 88 and a rich team simply takes the best. Provisional.
 FO_SALARY_PRICE_WEIGHT = 0.5
 
+# ---- Free agency market (docs/FREE_AGENCY_MARKET_PLAN.md) ----
+# A signing period where players choose replaces the FA draft once salaries charge
+# (`faMarket.marketActive`: this switch AND `payroll.salariesActive()`). Teams offer
+# contracts, each player holds his best offer (salary + his motive's pull), an outbid team
+# can match or beat, and nothing is final until no team has a move left. Leftover players
+# lower their asking salary and the market reopens; holes still open after that are filled
+# by the FA draft's machinery with upgrades off. PROVISIONAL SIZES: the synthetic-fan
+# harness sets them.
+FA_MARKET_ENABLED = True
+FA_MARKET_ROUNDS = 3            # market passes; each later one only for leftovers
+FA_ASK_DECAY = 0.15             # an unsigned player's asking salary falls this share a pass
+FA_MIN_RAISE = 0.05             # a raise beats the leading offer by this share of his ask
+FA_MAX_BID_EDGE = 1.0           # walk-away price = ask x (1 + this x edge over the next option)
+FA_LIST_LENGTH = 8              # free agents a team will try for one slot
+# Motives: the pull, as a share of the player's asking salary, toward the teams he likes.
+FA_HOMETOWN_DISCOUNT = 0.20     # for his home team (the team that drafted him)
+FA_WINNER_PULL = 0.20           # x the team's recent success, 0-1 relative to the league
+FA_COMFORT_PULL = 0.20          # x the team's Appeal, 0-1 relative to the league
+FA_OPPORTUNITY_ASK = 0.85       # an 'opportunity' player signs the first offer at this share
+FA_HISTORY_SEASONS = 5          # seasons of titles and playoff runs a 'winner' looks at
+# Every motive starts at weight 1; a personality adds to the motives it leans toward.
+FA_MOTIVE_PERSONALITY = {
+    'hometown':    {'wholesome': 3, 'knight': 3, 'stoic': 2, 'melancholy': 2, 'poetic': 1},
+    'winner':      {'fiery': 3, 'perfectionist': 3, 'trash_talker': 3, 'dramatic': 2, 'lively': 1},
+    'comfort':     {'vain': 3, 'cool': 3, 'prankster': 2, 'fossil': 2, 'android': 1},
+    'opportunity': {'chill': 3, 'goofy': 3, 'oblivious': 3, 'cursed': 2, 'unhinged': 1},
+}
+
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
