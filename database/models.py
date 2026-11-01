@@ -763,6 +763,24 @@ class FacilityVote(Base):
         return f"<FacilityVote(team={self.team_id}, user={self.user_id}, {self.facility_key}, S{self.season})>"
 
 
+class ContractSigning(Base):
+    """One contract a player signed (docs/FREE_AGENCY_MARKET_PLAN.md, comparable contracts):
+    the salary against the curve price at signing (`base_ask`). The recent ones set the
+    market rate every asking salary is scaled by (`payroll.marketRate`). Promoted prospects'
+    fixed cheap deals are not recorded."""
+    __tablename__ = "contract_signings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    player_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    position: Mapped[str] = mapped_column(String(4), nullable=False)
+    rating: Mapped[float] = mapped_column(Float, nullable=False)
+    salary: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_ask: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)   # market | resign | fill
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class TreasuryIncome(Base):
     """League money paid into a team's Treasury (docs/TREASURY_PAYROLL_PLAN.md §4).
 

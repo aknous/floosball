@@ -2355,7 +2355,10 @@ FACILITY_SHARE_CAP_MIN_USERS = 8
 # Stadium curve against G2/G3. At a 5,453F share unit, 0.02 is ~109F a week, ~3,050F a
 # season, for one fan at weight 1.0 and a level-0 Stadium.
 GATE_REVENUE_ENABLED = True
-GATE_SHARES_PER_WEEK = float(_os.environ.get('FLOOS_GATE_SHARES', '0.02'))
+# Halved from 0.02 (owner, 2026-11-01): at 0.02 the best-fanned teams out-earned everything money
+# could buy and the most-fanned quarter won ~8.5 more games a season than the least; at 0.01 the top
+# team's gate is ~13,000F a season and the gap ~6 wins, the owner's target for now.
+GATE_SHARES_PER_WEEK = float(_os.environ.get('FLOOS_GATE_SHARES', '0.01'))
 # 0.85 (owner, 2026-10-23): a second fan adds ~80% of the first. At 0.6 it added only 51%,
 # so one fantasy donor out-funded a second fan joining, against G3. Still concave, so the
 # first fan is worth the most and 17 fans do not earn 17x one.
@@ -2380,15 +2383,17 @@ DONATION_MATCH_CAP_SHARES = 0.18
 #   salary = shareUnit x (SALARY_MIN_SHARES
 #                         + SALARY_TOP_SHARES x POSITION_VALUE[pos] x x ** SALARY_EXPONENT)
 #   x = (rating - SALARY_FLOOR_RATING) / (100 - SALARY_FLOOR_RATING), clamped to 0..1
-# ⚠️ PROVISIONAL SIZES (2026-10-26): the harness sets them against G1-G6. At a 5,453F
-# share unit a QB asks ~110F at 72, ~280F at 78, ~880F at 84, ~1,880F at 90, ~3,300F at
-# 95 and ~5,200F at 100; a WR or RB about three quarters of that, a kicker about a third.
+# STEEPER FOR STARS (owner, 2026-11-01): top 2.26 / exponent 4.0 (was 0.95 / 2.75), anchored
+# so an 84 costs what it did. At a 5,850F share unit a QB asks ~185F at 78 (was 285), ~885F at
+# 84, ~3,000F at 90 (was 2,040) and ~6,760F at 95 (was 3,540); six 95s cost ~28,100F a season
+# (was 14,800). A WR or RB about three quarters of that, a kicker about a third. Still
+# provisional; the asking price is then scaled by comparable contracts (`marketRate`).
 # The minimum, ~55F, is what every roster spot costs at least.
 SALARY_ENABLED = True
 SALARY_MIN_SHARES = 0.01
 SALARY_FLOOR_RATING = 68
-SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '0.95'))
-SALARY_EXPONENT = float(_os.environ.get('FLOOS_SALARY_EXP', '2.75'))
+SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '2.26'))
+SALARY_EXPONENT = float(_os.environ.get('FLOOS_SALARY_EXP', '4.0'))
 # A prospect promoted onto the roster signs for this share of his asking salary (never
 # under the minimum), so the draft stays the poor team's route to talent.
 SALARY_PROSPECT_FRACTION = 0.25
@@ -2410,7 +2415,7 @@ FO_SALARY_PRICE_WEIGHT = 0.5
 # by the FA draft's machinery with upgrades off. PROVISIONAL SIZES: the synthetic-fan
 # harness sets them.
 FA_MARKET_ENABLED = True
-FA_MARKET_ROUNDS = 3            # market passes; each later one only for leftovers
+FA_MARKET_ROUNDS = 4            # market passes; each later one only for leftovers
 FA_ASK_DECAY = 0.15             # an unsigned player's asking salary falls this share a pass
 FA_MIN_RAISE = 0.05             # a raise beats the leading offer by this share of his ask
 FA_MAX_BID_EDGE = 1.0           # walk-away price = ask x (1 + this x edge over the next option)
@@ -2421,6 +2426,18 @@ FA_WINNER_PULL = 0.20           # x the team's recent success, 0-1 relative to t
 FA_COMFORT_PULL = 0.20          # x the team's Appeal, 0-1 relative to the league
 FA_OPPORTUNITY_ASK = 0.85       # an 'opportunity' player signs the first offer at this share
 FA_HISTORY_SEASONS = 5          # seasons of titles and playoff runs a 'winner' looks at
+# Comparable contracts (owner, 2026-11-01: "contracts are based on what a comparable player
+# recently received ... an incentive to not overspend"). A player's asking salary is the curve
+# price times a market rate: the recent contracts at his position and a similar rating, each as
+# salary / the curve price at signing, shrunk toward 1.0 and capped. An overpay raises
+# comparable players' prices (in later market passes, next offseason's re-sign offers and asks);
+# a discount or a late signing at a reduced price lowers them.
+FA_COMP_SEASONS = 2             # offseasons of contracts that count
+FA_COMP_RECENCY = 0.5           # weight of last offseason's contracts against this one's
+FA_COMP_RATING_WINDOW = 5       # a contract counts fully at the same rating, not at all 5 away
+FA_COMP_PRIOR = 3.0             # as if this many contracts at exactly the curve price
+FA_COMP_MIN = 0.7
+FA_COMP_MAX = 1.6
 # The re-sign head start (owner, 2026-11-01): a team offers its walk-year players first, at
 # their asking salary less their pull toward it. A player accepts if offer + pull reaches
 # what he thinks he is worth this offseason, a share of his ask drawn in this range (seeded

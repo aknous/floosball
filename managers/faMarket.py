@@ -313,6 +313,7 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
     success, comfort = _teamStanding(teams, season, brain)
     released = {t.id: set() for t in teams}        # players a team let go in this market
     asks = {}
+    unsignedPasses = {}                            # passes a player has gone unsigned
 
     # The team's own prospect takes an open slot first when he beats the best free agent
     # it could sign there (`prospectTakesSlot`, unchanged from the FA draft).
@@ -343,9 +344,12 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                 and getattr(f, 'id', None) is not None]
         if not pool:
             break
+        # Re-priced every pass: the curve price times the market rate of comparable
+        # contracts, which this market's own signings have just moved (an overpay raises
+        # the players like him), less what he has dropped for going unsigned.
         for f in pool:
-            if f.id not in asks:
-                asks[f.id] = payroll.askingSalary(f)
+            asks[f.id] = max(payroll.minimumSalary(), int(round(
+                payroll.askingSalary(f) * (1.0 - FA_ASK_DECAY) ** unsignedPasses.get(f.id, 0))))
         motives = {f.id: motiveOf(f) for f in pool}
         poolById = {f.id: f for f in pool}
 
@@ -467,6 +471,7 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             f.term = w.term or payroll.contractTerm(pm, f, season)
             f.termRemaining = f.term
             f.salary = int(salary) if payroll.salariesActive() else 0
+            payroll.recordContract(f, f.salary, 'market', season)
             motive = motives[pid]
             reason = REASONS[motive] if pull(pid, team.id) > 0 or motive == 'opportunity' else 'for the money'
             freeAgencyDict[f"{team.name}_{f.name}"] = {
@@ -485,6 +490,13 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
         signedIds = set(signings)
         for f in pool:
             if f.id not in signedIds:
-                asks[f.id] = max(payroll.minimumSalary(), int(round(asks[f.id] * (1.0 - FA_ASK_DECAY))))
+                unsignedPasses[f.id] = unsignedPasses.get(f.id, 0) + 1
         logger.info(f"FA market pass {passNo}: {len(signings)} signing(s), {len(offers)} offer(s)")
+    # Whoever the market could not place keeps the price he fell to for the hole-filling
+    # step that follows (`payroll.askingSalary` honors `_marketAsk`), instead of jumping
+    # back to his full price: a star nobody could afford signs cheaper rather than sitting.
+    for f in pm.freeAgents:
+        if getattr(f, 'id', None) in unsignedPasses:
+            f._marketAsk = max(payroll.minimumSalary(), int(round(
+                payroll.askingSalary(f) * (1.0 - FA_ASK_DECAY) ** unsignedPasses[f.id])))
     return events

@@ -6006,7 +6006,12 @@ class PlayerManager:
                 selectedPlayer.term = payroll.contractTerm(
                     self, selectedPlayer, self._currentSeasonNumber())
             selectedPlayer.termRemaining = selectedPlayer.term
+            minimumStopgap = getattr(selectedPlayer, '_minimumSalary', False)
             _stampSigningSalary(selectedPlayer)
+            if not minimumStopgap:
+                # A comparable contract (`payroll.marketRate`); a generated stopgap is not one.
+                payroll.recordContract(selectedPlayer, selectedPlayer.salary, 'fill',
+                                       self._currentSeasonNumber())
 
             transactionId = f"{team.name}_{selectedPlayer.name}"
             freeAgencyDict[transactionId] = {

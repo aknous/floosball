@@ -6820,6 +6820,8 @@ class SeasonManager:
             # STEP 3: Process contract decrements and retirements for rostered players
             logger.info("Step 3: Contract decrements and team retirements")
             await self._processRosteredPlayerContracts()
+            from managers import payroll
+            payroll.flushContracts()        # the re-signs, as comparable contracts
 
             # STEP 3.5: (was: resolve cut votes). Cuts are now the GM brain's
             # cut-for-upgrade call, made during the STEP 2.7 assessment sweep.
@@ -9000,9 +9002,16 @@ class SeasonManager:
                 logger.info(f"FA market: {e['text']}")
                 continue
             yield e
-        yield from self.playerManager.freeAgencyPickGenerator(
-            freeAgencyOrder=freeAgencyOrder, currentSeason=season,
-            leagueHighlights=leagueHighlights, skipRetirements=True, allowUpgrades=False)
+        try:
+            yield from self.playerManager.freeAgencyPickGenerator(
+                freeAgencyOrder=freeAgencyOrder, currentSeason=season,
+                leagueHighlights=leagueHighlights, skipRetirements=True, allowUpgrades=False)
+        finally:
+            # The market's reduced asks only hold for this FA step.
+            from managers import payroll
+            for p in self.playerManager.freeAgents:
+                p._marketAsk = None
+            payroll.flushContracts()
 
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
@@ -9414,6 +9423,8 @@ class SeasonManager:
                     else:
                         payroll.stampSalary(player)
                     player._resignSalary = None
+                    payroll.recordContract(player, player.salary, 'resign',
+                                           getattr(self.currentSeason, 'seasonNumber', 0))
                     player.teamResignCount = int(getattr(player, 'teamResignCount', 0) or 0) + 1
                     player._gmResigned = False
                     leagueHighlights.insert(0, {
@@ -12633,6 +12644,9 @@ class SeasonManager:
                              for lv in levels.get(tid, []))
                 finances[tid] = (income, upkeep)
             payroll.setFinances(finances)
+            # The comparable contracts every asking salary is scaled by (`marketRate`),
+            # read here, where no write is open, never inside a signing.
+            payroll.loadContracts(season)
         except Exception as e:
             logger.error(f"Could not refresh payroll finances: {e}")
 

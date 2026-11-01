@@ -1,7 +1,10 @@
 # Free Agency Market Plan: players choose
 
 > **Status:** Direction from the owner (2026-11-01): replace the FA draft with a signing
-> period where **players choose**, each for their own reasons. Not built. Numbers below are
+> period where **players choose**, each for their own reasons. **Built** on `next-season`
+> (`managers/faMarket.py`), live once salaries charge: the re-sign head start, held offers with
+> match-or-beat, motives, cut fees on releases and comparable-contract pricing; the frontend
+> feed is not built. Numbers below are
 > proposals for the synthetic-fan harness to set, not decisions. Needed before salaries
 > first charge (the end of the first funded season, `payroll.salariesActive`); the
 > facilities and prospect changes do not wait on it.
@@ -171,6 +174,17 @@ team wealth.
    price is the lever.
 3. Whether a player's motive can change over a career (for example, a veteran turning
    winner late).
+
+## 7b. Comparable contracts (owner, 2026-11-01)
+
+"contracts are based on what a comparable player recently received. this should be an
+incentive to not overspend because that will make players more expensive." Every contract
+is recorded against the curve price at signing; a player's asking salary is the curve price
+times the weighted ratio of recent comparables (same position, rating within 5, last
+offseason at half weight), shrunk toward 1.0 by three curve-price contracts and capped at
+0.7-1.6 (`payroll.marketRate`). It re-prices between market passes, so a bidding war in the
+first pass raises the next pass's asks, and it carries into next offseason's re-sign offers.
+Discounts and late signings at a reduced price pull it back down.
 
 ## 8. Build order
 

@@ -81,19 +81,130 @@ def minimumSalary(unit: float = None) -> int:
     return max(1, int(round(float(SALARY_MIN_SHARES) * float(unit or shareUnit()))))
 
 
-def askingSalary(player, unit: float = None, prospect: bool = False) -> int:
-    """The salary this player asks for a contract signed now, in Floobits a season.
-
-    A prospect promoted onto the roster signs a cheap deal (`SALARY_PROSPECT_FRACTION`
-    of his asking salary, never under the minimum): the draft stays the poor team's
-    route to talent.
-    """
+def baseAskingSalary(player, unit: float = None) -> int:
+    """The curve price alone: what the asking salary would be with no comparables."""
     unit = float(unit or shareUnit())
     shares = salaryShares(getattr(player, 'playerRating', 0) or 0, _positionKey(player))
-    floobits = int(round(shares * unit))
+    return max(minimumSalary(unit), int(round(shares * unit)))
+
+
+def askingSalary(player, unit: float = None, prospect: bool = False) -> int:
+    """The salary this player asks for a contract signed now, in Floobits a season: the
+    curve price times the market rate of comparable contracts (`marketRate`).
+
+    A prospect promoted onto the roster signs a cheap deal (`SALARY_PROSPECT_FRACTION`
+    of the curve price, never under the minimum, comparables ignored): the draft stays the
+    poor team's route to talent.
+
+    `player._marketAsk`, set by the free agency market for a player it could not place,
+    caps the ask for the rest of that FA step, so the hole-filling step after it signs him
+    at the price he had fallen to rather than his full price.
+    """
+    base = baseAskingSalary(player, unit)
+    minimum = minimumSalary(unit)
     if prospect:
-        floobits = int(round(floobits * float(SALARY_PROSPECT_FRACTION)))
-    return max(minimumSalary(unit), floobits)
+        return max(minimum, int(round(base * float(SALARY_PROSPECT_FRACTION))))
+    ask = int(round(base * marketRate(_positionKey(player), getattr(player, 'playerRating', 0) or 0)))
+    capped = getattr(player, '_marketAsk', None)
+    if capped is not None:
+        ask = min(ask, int(capped))
+    return max(minimum, ask)
+
+
+# ─── Comparable contracts (owner, 2026-11-01) ───────────────────────────────────────────
+#
+# "if a player signs for that high of a price, shouldnt that drive prices for other players?
+# ... contracts are based on what a comparable player recently received. this should be an
+# incentive to not overspend because that will make players more expensive"
+#
+# Kept in memory as (season, position, rating, salary / curve price at signing): loaded
+# from `contract_signings` at the safe points the season manager already reads finances
+# (`_refreshPayrollFinances`), appended live as contracts are signed, and written back in
+# a batch after step 3 and after the FA step. ⚠️ NEVER a database read inside a signing:
+# those run inside other open writes, and SQLite has one writer. Not loaded means no
+# comparables, a market rate of 1.0.
+
+_comps = []            # [(season, position, rating, ratio)]
+_compSeason = 0
+_pendingContracts = []
+
+
+def marketRate(positionKey: str, rating: float) -> float:
+    """Recent comparable contracts at this position and a similar rating, as salary over
+    the curve price, weighted by recency and rating distance, shrunk toward 1.0 by
+    `FA_COMP_PRIOR` contracts at exactly the curve price, and capped."""
+    from constants import (FA_COMP_RECENCY, FA_COMP_RATING_WINDOW, FA_COMP_PRIOR,
+                           FA_COMP_MIN, FA_COMP_MAX)
+    num, den = float(FA_COMP_PRIOR), float(FA_COMP_PRIOR)
+    for season, pos, r, ratio in _comps:
+        if pos != positionKey:
+            continue
+        near = 1.0 - abs(float(rating) - float(r)) / float(FA_COMP_RATING_WINDOW)
+        if near <= 0:
+            continue
+        w = near * float(FA_COMP_RECENCY) ** max(0, _compSeason - season)
+        num += w * ratio
+        den += w
+    return max(float(FA_COMP_MIN), min(float(FA_COMP_MAX), num / den))
+
+
+def recordContract(player, salary: int, kind: str, season: int) -> None:
+    """A contract was signed: it counts as a comparable from now on."""
+    global _compSeason
+    if not salariesActive() or not salary:
+        return
+    base = baseAskingSalary(player)
+    pos, rating = _positionKey(player), float(getattr(player, 'playerRating', 0) or 0)
+    _compSeason = max(_compSeason, int(season or 0))
+    _comps.append((int(season or 0), pos, rating, float(salary) / max(1, base)))
+    _pendingContracts.append({'season': int(season or 0), 'player_id': getattr(player, 'id', None),
+                              'position': pos, 'rating': rating, 'salary': int(salary),
+                              'base_ask': int(base), 'kind': kind})
+
+
+def flushContracts() -> int:
+    """Write the contracts recorded since the last flush. Call where no write is open."""
+    global _pendingContracts
+    if not _pendingContracts:
+        return 0
+    rows, _pendingContracts = _pendingContracts, []
+    try:
+        from database.connection import get_session
+        from database.models import ContractSigning
+        session = get_session()
+        try:
+            session.add_all([ContractSigning(**r) for r in rows])
+            session.commit()
+        finally:
+            session.close()
+        return len(rows)
+    except Exception as e:
+        logger.warning(f"Payroll: could not save {len(rows)} contract(s): {e}")
+        return 0
+
+
+def loadContracts(season: int) -> None:
+    """Load the comparables for an offseason running under `season` (its own contracts
+    and the ones before it within `FA_COMP_SEASONS`). Flushes first so nothing recorded is
+    lost. Call where no write is open."""
+    global _comps, _compSeason
+    from constants import FA_COMP_SEASONS
+    flushContracts()
+    try:
+        from database.connection import get_session
+        from database.models import ContractSigning
+        session = get_session()
+        try:
+            rows = (session.query(ContractSigning)
+                    .filter(ContractSigning.season > int(season) - int(FA_COMP_SEASONS),
+                            ContractSigning.season <= int(season)).all())
+            _comps = [(r.season, r.position, float(r.rating), float(r.salary) / max(1, r.base_ask))
+                      for r in rows]
+            _compSeason = int(season)
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Payroll: could not load comparable contracts: {e}")
 
 
 # ─── When salaries start (owner, 2026-11-01) ───────────────────────────────────────────
