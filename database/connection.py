@@ -62,6 +62,7 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
+    _backfillFacilityRankings()
     _backfillTradeMoves()
     _reconcileTeamTitles()
     _normalizeNamePool()
@@ -825,6 +826,7 @@ def _runPendingMigrations():
             ('is_undrafted', 'BOOLEAN DEFAULT 0'),
             ('prospect_seasons', 'INTEGER DEFAULT 0'),
             ('on_prospect_contract', 'BOOLEAN DEFAULT 0'),
+            ('salary', 'INTEGER DEFAULT 0'),
             ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
             ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
             ('will_retire', 'BOOLEAN DEFAULT 0'),
@@ -1333,6 +1335,52 @@ def _runPendingMigrations():
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_vote_team_season ON facility_votes(team_id, season)"))
             conn.commit()
             logger.info("  Migration: ensured facility_projects + team_treasury + upkeep_funded + facility_votes")
+        except Exception:
+            conn.rollback()
+
+        # Ranked facility ballots + who built a project (owner, 2026-10-22): one upgrade
+        # per facility per year needs to tell a payment-run build from a fan-funded one.
+        try:
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(facility_projects)")).fetchall()]
+            if 'built_by' not in cols:
+                conn.execute(text("ALTER TABLE facility_projects ADD COLUMN built_by VARCHAR(8)"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS facility_rankings ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "user_id INTEGER NOT NULL, "
+                "ranking_json TEXT NOT NULL, "
+                "updated_at DATETIME, "
+                "UNIQUE(team_id, user_id))"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_ranking_team ON facility_rankings(team_id)"))
+            conn.commit()
+            logger.info("  Migration: ensured facility_projects.built_by + facility_rankings")
+        except Exception:
+            conn.rollback()
+
+        # Gate revenue + the donation match ledger (docs/TREASURY_PAYROLL_PLAN.md §4).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS treasury_income ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL DEFAULT 0, "
+                "kind VARCHAR(8) NOT NULL, "
+                "user_id INTEGER, "
+                "basis INTEGER NOT NULL DEFAULT 0, "
+                "amount INTEGER NOT NULL DEFAULT 0, "
+                "detail_json TEXT, "
+                "created_at DATETIME)"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_treasury_income_team_season ON treasury_income(team_id, season)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_treasury_income_user_season ON treasury_income(user_id, season)"))
+            # One gate row per team per week: a re-run of the week is a no-op.
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_treasury_income_gate "
+                              "ON treasury_income(team_id, season, week) WHERE kind = 'gate'"))
+            conn.commit()
+            logger.info("  Migration: ensured treasury_income")
         except Exception:
             conn.rollback()
 
@@ -3898,6 +3946,56 @@ def baseName(name: str) -> str:
         previous = name
         name = _NAME_SUFFIX_RE.sub('', name).strip()
     return name
+
+
+_FACILITY_RANKINGS_MARKER = 'facility_rankings_backfilled'
+
+
+def _backfillFacilityRankings():
+    """ONE-SHOT: seed each fan's ranked facility ballot from their single vote.
+
+    Ranked ballots replaced the one-vote-per-season ballot (owner, 2026-10-22). A fan's
+    most recent vote for a team becomes their FIRST choice, and the rest of the list is
+    the fallback order (weakest facility first). Only fans who still have that team as
+    their favorite are seeded; anyone else would not count toward it anyway.
+
+    One-shot because rankings are written live from here on, and re-running it could
+    overwrite a ranking a fan has since changed.
+    """
+    import json
+    import datetime
+    from database.models import FacilityVote, FacilityRanking, TeamFacility, User, AppSetting
+    session = SessionLocal()
+    try:
+        if session.query(AppSetting).filter(AppSetting.key == _FACILITY_RANKINGS_MARKER).first():
+            return
+        from managers.facilitiesManager import normalizeBallot
+        levelsByTeam = {}
+        for f in session.query(TeamFacility).all():
+            levelsByTeam.setdefault(f.team_id, {})[f.facility_key] = f.level
+        latest = {}
+        for v in session.query(FacilityVote).order_by(FacilityVote.season, FacilityVote.id).all():
+            latest[(v.team_id, v.user_id)] = v.facility_key
+        favorites = dict(session.query(User.id, User.favorite_team_id).all())
+        existing = {(r.team_id, r.user_id) for r in session.query(FacilityRanking).all()}
+        now = datetime.datetime.utcnow()
+        seeded = 0
+        for (teamId, userId), key in latest.items():
+            if favorites.get(userId) != teamId or (teamId, userId) in existing:
+                continue
+            ballot = normalizeBallot([key], levelsByTeam.get(teamId, {}))
+            session.add(FacilityRanking(team_id=teamId, user_id=userId,
+                                        ranking_json=json.dumps(ballot), updated_at=now))
+            seeded += 1
+        session.add(AppSetting(key=_FACILITY_RANKINGS_MARKER, value=str(seeded)))
+        session.commit()
+        if seeded:
+            logger.info(f"Facility rankings: seeded {seeded} ballot(s) from fans' last votes")
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Facility ranking backfill failed: {e}")
+    finally:
+        session.close()
 
 
 _PROSPECT_CONTRACT_MARKER = 'prospect_contracts_backfilled'

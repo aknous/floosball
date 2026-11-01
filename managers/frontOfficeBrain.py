@@ -1124,10 +1124,13 @@ class FrontOfficeBrain:
     def appealDemand(self, player) -> float:
         """The minimum team Appeal this player will sign for.
 
-        AGE ONLY, by design. Rating is deliberately not an input: if demand
-        tracked talent then the best players would pool at the best-funded
-        clubs and the league would stratify by treasury. Keyed on service time,
-        what money buys you is veterans, not talent.
+        AGE ONLY. Rating is not an input here, and no longer needs to be: money
+        now buys talent through PAYROLL instead (docs/TREASURY_PAYROLL_PLAN.md §5),
+        a convex asking salary every team must be able to pay, which reverses the
+        old rule that the league must not stratify by treasury ON PURPOSE. Adding
+        rating here as well would make the best players refuse poor teams on top of
+        being unaffordable to them. Keyed on service time, what Appeal buys you is
+        veterans.
 
         The per-player jitter is scaled by the veteran term, so rookies cluster
         at zero (they go anywhere for a shot) while two equally old players can

@@ -1,7 +1,7 @@
 """Facilities economy harness — does fair-share cost scaling cause teams to bunch
 at the same upgrade level, and how would a per-team cost tilt change that?
 
-Drives the REAL managers.facilitiesManager.resolveSeasonEnd over many seasons for
+Drives the REAL managers.facilitiesManager.resolvePaymentRun over many seasons for
 24 teams under a per-team funding distribution, and reads the equilibrium spread
 of total facility levels.
 
@@ -98,11 +98,11 @@ def runLeague(incomes, share, tiltMode="flat", tilt=0.5):
                 k = decide(t)
                 if k is not None:
                     tg = t["lv"][k] + 1
-                    # cost_shares carries the tilt so resolveSeasonEnd charges the tilted price
+                    # cost_shares carries the tilt so resolvePaymentRun charges the tilted price
                     t["proj"] = {"id": 1, "facility_key": k, "target_level": tg,
                                  "cost_shares": FACILITY_UPGRADE_COST_SHARES[tg] * t["mult"],
                                  "funded": 0, "opened_season": s}
-            # upkeep_funded pre-pays the tilt delta so resolveSeasonEnd's (untilted) upkeep waterfall
+            # upkeep_funded pre-pays the tilt delta so resolvePaymentRun's (untilted) upkeep waterfall
             # charges the tilted amount: it bills UPKEEP_SHARES[level]*share; we top it to *mult.
             facilities = []
             for k in KEYS:
@@ -113,7 +113,7 @@ def runLeague(incomes, share, tiltMode="flat", tilt=0.5):
                 treasury -= max(0, int(round(tiltDelta)))      # pay the tilt surcharge up front
             treasury = max(0, treasury)
             projects = [t["proj"]] if t["proj"] else []
-            res = FM.resolveSeasonEnd(facilities, projects, treasury, share, s)
+            res = FM.resolvePaymentRun(facilities, projects, treasury, share, order=[t["proj"]["facility_key"]] if t["proj"] else None)
             for f in res["facilities"]:
                 t["lv"][f["key"]] = f["level"]
             if t["proj"]:

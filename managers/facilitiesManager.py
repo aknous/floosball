@@ -1,11 +1,19 @@
-"""Facility economy engine (Markets→Facilities system, Phase 2).
+"""Facility economy engine (Markets→Facilities system).
 
-Share-denominated costs, direct contributions, and the season-end waterfall
-(upkeep first, then the oldest open project), plus offseason decay/construction.
+Share-denominated costs, direct contributions, fans' ranked ballots, and the
+offseason PAYMENT RUN (upkeep first, then projects in the team's ranked order,
+one upgrade per facility per year), plus decay/construction.
 
-The core resolver (`resolveSeasonEnd`) is a PURE function over plain dicts so it
-can be exhaustively validated by the economy harness without a DB. The DB-bound
-helpers below wrap it for live use. See docs/MARKETS_FACILITIES_PLAN.md §3/§5.
+The core resolver (`resolvePaymentRun`) is a PURE function over plain dicts so it
+can be validated without a DB. The DB-bound helpers below wrap it for live use.
+See docs/MARKETS_FACILITIES_PLAN.md and docs/TREASURY_PAYROLL_PLAN.md §3.
+
+⚠️ ONE UPGRADE PER FACILITY PER YEAR (owner, 2026-10-22). A "year" runs from one
+payment run to the next. A facility built by the run cannot be built again by fan
+funding until the next run; a facility fans built mid-season is skipped by the run
+that follows. Projects record who built them in `built_by` ('run' | 'fans'), which
+is what lets the two halves of that rule be told apart. Legacy rows (NULL) were
+all season-end or mid-season builds under the old system and are read as 'fans'.
 """
 from logging import getLogger
 from constants import (FACILITY_CATALOG, FACILITY_MAX_LEVEL,
@@ -47,32 +55,88 @@ def computeAppeal(facilities: dict) -> float:
                for k in FACILITY_CATALOG)
 
 
-# ─── The pure season-end resolver ────────────────────────────────────────────
+# ─── Ranked ballots ──────────────────────────────────────────────────────────
 
-def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
-                     shareUnit: float, season: int, builtThisSeasonKeys=None) -> dict:
-    """Resolve one season-end for a single team. PURE — no DB, no mutation of
+def fallbackOrder(levels: dict) -> list:
+    """Weakest facility first, ties in catalog order. The order a team with no
+    ballots builds in, and the tie-break for the combined ranking."""
+    catalog = list(FACILITY_CATALOG)
+    return sorted(catalog, key=lambda k: ((levels or {}).get(k, 0), catalog.index(k)))
+
+
+def normalizeBallot(ballot, levels: dict) -> list:
+    """A fan's ranking as a full ordering of the catalog: unknown keys and repeats
+    dropped, anything they left out appended in the fallback order."""
+    seen, out = set(), []
+    for k in (ballot or []):
+        if k in FACILITY_CATALOG and k not in seen:
+            out.append(k)
+            seen.add(k)
+    out.extend(k for k in fallbackOrder(levels) if k not in seen)
+    return out
+
+
+def combinedOrder(levels: dict, ballots: list) -> list:
+    """The team's build order from its fans' ranked ballots (owner, 2026-10-22).
+
+    A points count: with n facilities, a fan's first choice scores n, the last 1.
+    Ties go to the facility the team is weakest in, then catalog order. With no
+    ballots this is exactly `fallbackOrder`. A team with one fan follows that
+    fan's list.
+    """
+    n = len(FACILITY_CATALOG)
+    points = {k: 0 for k in FACILITY_CATALOG}
+    for ballot in (ballots or []):
+        for i, k in enumerate(normalizeBallot(ballot, levels)):
+            points[k] += n - i
+    tieBreak = {k: i for i, k in enumerate(fallbackOrder(levels))}
+    return sorted(FACILITY_CATALOG, key=lambda k: (-points[k], tieBreak[k]))
+
+
+# ─── The pure payment-run resolver ───────────────────────────────────────────
+
+def resolvePaymentRun(facilities: list, projects: list, treasury: int, shareUnit: float,
+                      order: list = None, waivedKeys=None, blockedKeys=None,
+                      payroll: int = 0) -> dict:
+    """Resolve one team's offseason payment run. PURE — no DB, no mutation of
     inputs; returns the new state + a log.
 
-    facilities: [{'key','level','upkeep_funded'}]  (upkeep_funded = direct funding so far this season)
-    projects:   [{'id','facility_key','target_level','cost_shares','funded','opened_season'}]  (OPEN only)
-    treasury:   Floobits available at season end (carried + baseline + deposits), BEFORE the waterfall.
-    builtThisSeasonKeys: facility keys whose upgrade was FULLY FUNDED + built mid-season
-                         this year (immediate build) — they waive upkeep this season too.
-    Returns {'facilities':[{key,level,upkeepMet}], 'projects':[{id,funded,built}],
-             'leftover':int, 'log':[...]}.
+    facilities: [{'key','level','upkeep_funded'}]  (upkeep_funded = direct fan funding this season)
+    projects:   [{'id','facility_key','target_level','cost_shares','funded'}]  (OPEN only, at most one per facility)
+    treasury:   Floobits available to the run.
+    order:      the team's build order (`combinedOrder`); defaults to the fallback order.
+    waivedKeys: facilities whose upkeep is waived this run — those fans built mid-season
+                this year (under construction the year they completed).
+    blockedKeys: facilities that may not be upgraded by this run (built mid-season this
+                year: one upgrade per facility per year).
+    payroll:    the coming season's salaries (`payroll.seasonPayroll`), paid FIRST.
+
+    Steps: (0) payroll; (1) upkeep, choosing the affordable set that preserves the most value;
+    (2) decay of anything unpaid; (3) projects in ranked order, at most one level per
+    facility, a project whose facility decayed retargeting to the level it lost.
+
+    Returns {'facilities':[{key,level,upkeepMet,upkeepPaid,upkeepCost}],
+             'projects':[{id,facility_key,funded,built,target_level,cost_shares}],
+             'payrollPaid':int, 'payrollShort':int, 'leftover':int, 'log':[...]}.
     """
     pot = int(treasury)
     log = []
 
-    # A facility with an open upgrade project is UNDER CONSTRUCTION — its upkeep
-    # is waived this season (no double-paying to maintain a level you're
-    # replacing) and it can't decay. The Treasury that would've gone to its
-    # upkeep is left in the pot to help fund the upgrade instead.
-    # A facility that was FULLY FUNDED + built mid-season this year is treated the
-    # same: it was under construction for the year it was completed, so no upkeep
-    # is owed until the following season.
-    upgradingKeys = {p['facility_key'] for p in projects} | set(builtThisSeasonKeys or [])
+    # 0. PAYROLL — PLAYERS GET FIRST CLAIM (docs/TREASURY_PAYROLL_PLAN.md §5). A team
+    # short of money pays its players and lets its facilities go unpaid. A shortfall here
+    # should not happen (signings are checked for affordability and a payroll the
+    # season-end balance cannot cover forces cuts before the offseason), so if one does it
+    # pays what it can and logs it: the balance never goes negative.
+    owed = max(0, int(payroll or 0))
+    payrollPaid = min(owed, pot)
+    pot -= payrollPaid
+    payrollShort = owed - payrollPaid
+    if owed:
+        log.append(f"payroll {payrollPaid}/{owed}")
+    if payrollShort:
+        log.append(f"PAYROLL SHORT by {payrollShort}")
+    waivedKeys = set(waivedKeys or [])
+    blockedKeys = set(blockedKeys or [])
 
     # 1. UPKEEP — SAVE THE MOST VALUE THE POT CAN ACTUALLY BUY.
     #
@@ -98,10 +162,15 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
     # 2**n subsets are enumerable and the answer is exact. Ordering by level is kept only
     # as the tie-break, so "most investment protected first" still decides between sets of
     # equal value.
+    #
+    # ⚠️ AN OPEN PROJECT NO LONGER WAIVES UPKEEP. Under the single vote a project was a
+    # deliberate choice and its facility was "under construction"; with ranked ballots
+    # every facility below the top level always has its next level open, so that rule
+    # would waive every bill. Only a facility fans actually BUILT this year is waived.
     facState = []
     candidates = []          # (key, level, cost, funded, shortfall, value)
     for f in facilities:
-        if f['key'] in upgradingKeys:
+        if f['key'] in waivedKeys:
             facState.append({'key': f['key'], 'level': f['level'], 'upkeepMet': True,
                              'upkeepCost': 0, 'upkeepPaid': 0})
             continue
@@ -143,20 +212,7 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
         if not met:
             log.append(f"upkeep short on {key} (Lv{level}): {funded}/{cost}")
 
-    # 2. REMAINING POT → OLDEST OPEN PROJECT(S) (FIFO by opened_season, then id).
-    projState = []
-    for p in sorted(projects, key=lambda x: (x['opened_season'], x['id'])):
-        target = projectCostFloobits(p['cost_shares'], shareUnit)
-        funded = int(p.get('funded', 0))
-        need = max(0, target - funded)
-        pay = min(need, pot) if pot > 0 else 0
-        funded += pay
-        pot -= pay
-        projState.append({'id': p['id'], 'facility_key': p['facility_key'],
-                          'target_level': p['target_level'], 'funded': funded,
-                          'target': target, 'built': funded >= target})
-
-    # 3. OFFSEASON RESOLUTION — decay then construction (construction wins ties).
+    # 2. DECAY — anything whose upkeep went unpaid drops a level.
     newLevels = {}
     for f in facState:
         lvl = f['level']
@@ -164,23 +220,50 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
             lvl = max(0, lvl - FACILITY_DECAY_LEVELS)
             log.append(f"DECAY {f['key']}: Lv{f['level']}→Lv{lvl}")
         newLevels[f['key']] = lvl
-    builtProjects = []
-    for p in projState:
-        if p['built']:
-            newLevels[p['facility_key']] = p['target_level']
-            builtProjects.append(p['id'])
-            log.append(f"BUILT {p['facility_key']}→Lv{p['target_level']}")
 
-    # upkeepPaid is carried out so the caller can persist it onto the facility row —
-    # otherwise a treasury-paid upkeep reads as unfunded in the UI until next season.
+    # 3. PROJECTS IN RANKED ORDER, ONE LEVEL PER FACILITY.
+    # Every project is visited even once the pot is empty, because one fans already
+    # funded in full needs nothing from it and still builds.
+    projByKey = {p['facility_key']: p for p in projects}
+    projState = []
+    for key in (order or fallbackOrder(newLevels)):
+        p = projByKey.get(key)
+        if p is None or key not in newLevels:
+            continue
+        lvl = newLevels[key]
+        funded = int(p.get('funded', 0))
+        target, costShares = p['target_level'], p['cost_shares']
+        if lvl >= FACILITY_MAX_LEVEL:
+            projState.append({'id': p['id'], 'facility_key': key, 'funded': funded, 'built': False,
+                              'target_level': target, 'cost_shares': costShares})
+            continue
+        # A facility that decayed rebuilds the level it lost rather than the one above it.
+        if target != lvl + 1:
+            target, costShares = lvl + 1, FACILITY_UPGRADE_COST_SHARES[lvl + 1]
+        targetF = projectCostFloobits(costShares, shareUnit)
+        if funded > targetF:
+            pot += funded - targetF       # a retarget made it cheaper: the excess goes back
+            funded = targetF
+        built = False
+        if key not in blockedKeys:
+            pay = min(max(0, targetF - funded), pot)
+            funded += pay
+            pot -= pay
+            built = funded >= targetF
+            if built:
+                newLevels[key] = target
+                log.append(f"BUILT {key}→Lv{target}")
+        projState.append({'id': p['id'], 'facility_key': key, 'funded': funded, 'built': built,
+                          'target_level': target, 'cost_shares': costShares})
+
     facByKey = {f['key']: f for f in facState}
     outFac = [{'key': k, 'level': newLevels[k],
                'upkeepMet': facByKey.get(k, {}).get('upkeepMet', True),
                'upkeepPaid': facByKey.get(k, {}).get('upkeepPaid', 0),
                'upkeepCost': facByKey.get(k, {}).get('upkeepCost', 0)}
               for k in newLevels]
-    outProj = [{'id': p['id'], 'funded': p['funded'], 'built': p['built']} for p in projState]
-    return {'facilities': outFac, 'projects': outProj, 'leftover': max(0, pot), 'log': log}
+    return {'facilities': outFac, 'projects': projState, 'payrollPaid': payrollPaid,
+            'payrollShort': payrollShort, 'leftover': max(0, pot), 'log': log}
 
 
 # ─── DB-bound helpers (live use) ─────────────────────────────────────────────
@@ -302,81 +385,259 @@ def prepareSeasonStart(session, teamIds: list, carriedByTeam: dict, baseline: in
             row.balance = max(0, int(row.balance) + baseline)
 
 
-def applySeasonEnd(session, teamObjs: list, season: int, shareUnit: float) -> list:
-    """Run the season-end waterfall + offseason construction for every team and
-    PERSIST the result (facility levels, project funding/builds, Treasury
-    leftover, in-memory team.facilities). Treasury is assumed already credited
-    with this season's deposit/contributions. Returns per-team logs.
+def _builtKeys(session, teamId: int, season: int, builtBy) -> set:
+    """Facility keys this team built in `season` by the given builder(s)."""
+    from database.models import FacilityProject
+    from sqlalchemy import or_
+    q = session.query(FacilityProject.facility_key).filter_by(
+        team_id=teamId, status='built', built_season=season)
+    if 'fans' in builtBy:
+        q = q.filter(or_(FacilityProject.built_by.in_(builtBy), FacilityProject.built_by.is_(None)))
+    else:
+        q = q.filter(FacilityProject.built_by.in_(builtBy))
+    return {r[0] for r in q.all()}
+
+
+def fanBuiltThisYear(session, teamId: int, season: int) -> set:
+    """Facilities fans built mid-season `season`. The payment run that follows skips
+    their upgrade (one per year) and waives their upkeep (under construction)."""
+    return _builtKeys(session, teamId, season, ('fans',))
+
+
+PAYMENT_RUN_KEY = 'facility_payment_due'
+
+
+def paymentRunDone(session, season: int) -> bool:
+    """Whether this season's offseason payment run has already happened."""
+    from database.models import AppSetting
+    row = session.query(AppSetting).filter_by(key=PAYMENT_RUN_KEY).first()
+    return bool(row and row.value == f"done:{season}")
+
+
+def midSeasonBlocked(session, teamId: int, facilityKey: str, season: int) -> bool:
+    """Whether fans may NOT build `facilityKey` now, during season `season` or its
+    offseason: the payment run upgraded it last offseason (which runs under season - 1),
+    fans already built it this season, or this season's payment run has happened.
+
+    ⚠️ AFTER THE RUN, EVERY FAN BUILD WAITS FOR SEASON START. A build then would be
+    stamped with this season's number, which the NEXT run and next season's builds
+    would not see, so a facility could take two upgrades between one run and the next.
+    `buildPendingProjects` builds it at season start instead.
     """
+    return (facilityKey in _builtKeys(session, teamId, season - 1, ('run',))
+            or facilityKey in _builtKeys(session, teamId, season, ('fans',))
+            or paymentRunDone(session, season))
+
+
+def ensureOpenProjects(session, teamId: int, levels: dict, season: int) -> None:
+    """Every facility below the top level always has its next level open for funding
+    (ranked ballots replace the vote that used to open one project a season). A project
+    whose facility moved under it (a decay) is retargeted to the level above where the
+    facility actually is; its funding carries over."""
+    from database.models import FacilityProject
+    openRows = session.query(FacilityProject).filter_by(team_id=teamId, status='open').all()
+    byKey = {}
+    for p in openRows:
+        if p.facility_key in byKey:
+            # Duplicates cannot be created here; fold any legacy one into the first.
+            byKey[p.facility_key].funded = (byKey[p.facility_key].funded or 0) + (p.funded or 0)
+            session.delete(p)
+        else:
+            byKey[p.facility_key] = p
+    for key in FACILITY_CATALOG:
+        lvl = (levels or {}).get(key, 0)
+        p = byKey.get(key)
+        if lvl >= FACILITY_MAX_LEVEL:
+            if p is not None:
+                if p.funded:
+                    addTreasury(session, teamId, p.funded)
+                session.delete(p)
+            continue
+        target = lvl + 1
+        if p is None:
+            session.add(FacilityProject(
+                team_id=teamId, facility_key=key, kind=('new' if lvl == 0 else 'upgrade'),
+                target_level=target, cost_shares=FACILITY_UPGRADE_COST_SHARES[target],
+                funded=0, opened_season=season, status='open'))
+        elif p.target_level != target:
+            p.target_level = target
+            p.kind = 'new' if lvl == 0 else 'upgrade'
+            p.cost_shares = FACILITY_UPGRADE_COST_SHARES[target]
+    session.flush()
+
+
+def teamBallots(session, teamId: int) -> list:
+    """The ranked ballots of the team's CURRENT fans (a fan who switched teams no
+    longer counts here), each a list of facility keys."""
+    import json
+    from database.models import FacilityRanking, User
+    rows = (session.query(FacilityRanking.ranking_json)
+            .join(User, User.id == FacilityRanking.user_id)
+            .filter(FacilityRanking.team_id == teamId, User.favorite_team_id == teamId).all())
+    out = []
+    for (raw,) in rows:
+        try:
+            ballot = json.loads(raw or '[]')
+        except Exception:
+            continue
+        if isinstance(ballot, list):
+            out.append(ballot)
+    return out
+
+
+def getRanking(session, teamId: int, userId: int):
+    """The fan's saved ranking for this team, or None."""
+    import json
+    from database.models import FacilityRanking
+    row = session.query(FacilityRanking).filter_by(team_id=teamId, user_id=userId).first()
+    if not row:
+        return None
+    try:
+        ballot = json.loads(row.ranking_json or '[]')
+    except Exception:
+        return None
+    return ballot if isinstance(ballot, list) else None
+
+
+def setRanking(session, teamId: int, userId: int, ranking: list) -> list:
+    """Save a fan's ranking. It must be an ordering of every facility. It persists
+    across seasons until the fan changes it."""
+    import json
+    import datetime
+    from database.models import FacilityRanking
+    if (not isinstance(ranking, list) or len(ranking) != len(FACILITY_CATALOG)
+            or set(ranking) != set(FACILITY_CATALOG)):
+        raise ValueError("Ranking must list every facility exactly once")
+    row = session.query(FacilityRanking).filter_by(team_id=teamId, user_id=userId).first()
+    now = datetime.datetime.utcnow()
+    if row:
+        row.ranking_json = json.dumps(ranking)
+        row.updated_at = now
+    else:
+        session.add(FacilityRanking(team_id=teamId, user_id=userId,
+                                    ranking_json=json.dumps(ranking), updated_at=now))
+        session.flush()
+    return ranking
+
+
+def teamOrder(session, teamId: int, levels: dict) -> list:
+    return combinedOrder(levels, teamBallots(session, teamId))
+
+
+def parseTreasuryInjection(spec: str) -> dict:
+    """Parse FLOOS_TREASURY_INJECT: comma-separated `even=N`, `odd=N`, `all=N` or
+    `<teamId>=N`, applied in that order of specificity (a team id beats even/odd beats
+    all). Returns {'all': n, 'even': n, 'odd': n, 'ids': {teamId: n}}."""
+    out = {'all': 0, 'even': None, 'odd': None, 'ids': {}}
+    for tok in (spec or '').split(','):
+        tok = tok.strip()
+        if not tok or '=' not in tok:
+            continue
+        k, v = tok.split('=', 1)
+        k, v = k.strip().lower(), int(float(v))
+        if k in ('all', 'even', 'odd'):
+            out[k] = v
+        else:
+            out['ids'][int(k)] = v
+    return out
+
+
+def treasuryInjectionFor(teamId: int, parsed: dict) -> int:
+    if teamId in parsed['ids']:
+        return parsed['ids'][teamId]
+    side = 'even' if teamId % 2 == 0 else 'odd'
+    if parsed[side] is not None:
+        return parsed[side]
+    return parsed['all']
+
+
+def applyTreasuryInjection(session, teamObjs: list) -> dict:
+    """Calibration switch for `treasury_harness.py` (FLOOS_TREASURY_INJECT): credit each
+    team's Treasury with a fixed amount right before the payment run, so the harness can
+    give half the league more money and measure what it buys. Off unless set. Returns
+    {teamId: amount added}."""
+    import os
+    spec = os.environ.get('FLOOS_TREASURY_INJECT')
+    if not spec:
+        return {}
+    parsed = parseTreasuryInjection(spec)
+    added = {}
+    for team in teamObjs:
+        amt = treasuryInjectionFor(team.id, parsed)
+        if amt:
+            addTreasury(session, team.id, amt)
+            added[team.id] = amt
+    return added
+
+
+def applyPaymentRun(session, teamObjs: list, season: int, shareUnit: float) -> list:
+    """Run the offseason payment run for every team and PERSIST the result (facility
+    levels, project funding/builds, Treasury leftover, in-memory team.facilities).
+    `season` is the season whose offseason this is. Returns per-team logs."""
     from database.models import TeamFacility, FacilityProject
     logs = []
     for team in teamObjs:
         facRows = session.query(TeamFacility).filter_by(team_id=team.id).all()
-        projRows = session.query(FacilityProject).filter_by(team_id=team.id, status='open').all()
         if not facRows:
+            # No facilities to keep up, but the players still get paid.
+            from managers import payroll
+            owed = payroll.seasonPayroll(team)
+            if owed:
+                bal = getTreasury(session, team.id)
+                setTreasury(session, team.id, bal - min(owed, bal))
+                logs.append((getattr(team, 'name', team.id), [f"payroll {min(owed, bal)}/{owed}"]))
             continue
-        # Facilities whose upgrade was fully funded + built MID-SEASON this year —
-        # already at the new level; they waive upkeep this season (were under
-        # construction the year they completed).
-        builtThisSeason = {p.facility_key for p in session.query(FacilityProject).filter_by(
-            team_id=team.id, status='built', built_season=season).all()}
+        levels = {f.facility_key: f.level for f in facRows}
+        ensureOpenProjects(session, team.id, levels, season)
+        projRows = session.query(FacilityProject).filter_by(team_id=team.id, status='open').all()
+        fanBuilt = fanBuiltThisYear(session, team.id, season)
         treasury = getTreasury(session, team.id)
         facilities = [{'key': f.facility_key, 'level': f.level, 'upkeep_funded': f.upkeep_funded}
                       for f in facRows]
         projects = [{'id': p.id, 'facility_key': p.facility_key, 'target_level': p.target_level,
-                     'cost_shares': p.cost_shares, 'funded': p.funded, 'opened_season': p.opened_season}
-                    for p in projRows]
-        res = resolveSeasonEnd(facilities, projects, treasury, shareUnit, season,
-                               builtThisSeasonKeys=builtThisSeason)
+                     'cost_shares': p.cost_shares, 'funded': p.funded} for p in projRows]
+        from managers import payroll
+        res = resolvePaymentRun(facilities, projects, treasury, shareUnit,
+                                order=teamOrder(session, team.id, levels),
+                                waivedKeys=fanBuilt, blockedKeys=fanBuilt,
+                                payroll=payroll.seasonPayroll(team))
         levelByKey = {f['key']: f['level'] for f in res['facilities']}
         paidByKey = {f['key']: f.get('upkeepPaid', 0) for f in res['facilities']}
         for f in facRows:
             f.level = levelByKey.get(f.facility_key, f.level)
             # Reflect the treasury-paid upkeep on the row so the facility reads as
-            # funded through the offseason (the season-start reset zeroes it again).
+            # funded through the rest of the offseason (the season-start reset zeroes it).
             f.upkeep_funded = paidByKey.get(f.facility_key, f.upkeep_funded)
-        builtIds = {p['id'] for p in res['projects'] if p['built']}
-        fundedById = {p['id']: p['funded'] for p in res['projects']}
+        projById = {p['id']: p for p in res['projects']}
         for p in projRows:
-            p.funded = fundedById.get(p.id, p.funded)
-            if p.id in builtIds:
+            r = projById.get(p.id)
+            if r is None:
+                continue
+            p.funded = r['funded']
+            p.target_level = r['target_level']
+            p.cost_shares = r['cost_shares']
+            if r['built']:
                 p.status = 'built'
                 p.built_season = season
+                p.built_by = 'run'
         setTreasury(session, team.id, res['leftover'])
-        team.facilities = {f.facility_key: f.level for f in facRows}  # refresh in-memory
+        session.flush()
+        levels = {f.facility_key: f.level for f in facRows}
+        ensureOpenProjects(session, team.id, levels, season)   # the next level up opens
+        team.facilities = levels  # refresh in-memory
         if res['log']:
             logs.append((getattr(team, 'name', team.id), res['log']))
     return logs
 
 
-def openProject(session, teamId: int, facilityKey: str, currentLevel: int, season: int):
-    """Open a build/upgrade project for the next level of a facility. No-op if
-    already maxed or an open project for this facility exists. Returns the row or None."""
-    from database.models import FacilityProject
-    target = currentLevel + 1
-    if facilityKey not in FACILITY_CATALOG or target > FACILITY_MAX_LEVEL:
-        return None
-    existing = session.query(FacilityProject).filter_by(
-        team_id=teamId, facility_key=facilityKey, status='open').first()
-    if existing:
-        return existing
-    proj = FacilityProject(
-        team_id=teamId, facility_key=facilityKey,
-        kind=('new' if currentLevel == 0 else 'upgrade'),
-        target_level=target, cost_shares=FACILITY_UPGRADE_COST_SHARES[target],
-        funded=0, opened_season=season, status='open')
-    session.add(proj)
-    return proj
-
-
-def buildProjectNow(session, teamId: int, project, teamObj=None, season: int = None) -> int:
+def buildProjectNow(session, teamId: int, project, teamObj=None, season: int = None,
+                    builtBy: str = 'fans') -> int:
     """Apply a just-completed project IMMEDIATELY (mid-season): bump the facility
     to the target level, mark the project built, and refresh the in-memory
-    team.facilities so the new perks take effect from the team's next game —
-    rather than waiting for the season-end resolution. Mirrors the build branch
-    of applySeasonEnd for a single project. Upkeep for a facility built this way
-    is waived at season end (applySeasonEnd passes built_season == season keys to
-    resolveSeasonEnd's builtThisSeasonKeys). Returns the new level."""
+    team.facilities so the new perks take effect from the team's next game.
+    The caller checks `midSeasonBlocked` first. A facility built this way counts as
+    its one upgrade for the year: the next payment run skips it and waives its
+    upkeep. Returns the new level."""
     from database.models import TeamFacility
     newLevel = project.target_level
     fac = session.query(TeamFacility).filter_by(
@@ -384,75 +645,46 @@ def buildProjectNow(session, teamId: int, project, teamObj=None, season: int = N
     if fac:
         fac.level = newLevel
     project.status = 'built'
+    project.built_by = builtBy
     if season is not None:
         project.built_season = season
     if teamObj is not None:
         facilities = dict(teamObj.facilities or {})
         facilities[project.facility_key] = newLevel
         teamObj.facilities = facilities  # reassign so the effects engine reads the new level
+    if fac is not None:
+        session.flush()
+        ensureOpenProjects(session, teamId,
+                           {f.facility_key: f.level for f in
+                            session.query(TeamFacility).filter_by(team_id=teamId).all()},
+                           season if season is not None else project.opened_season)
     return newLevel
 
 
-# ─── Voting (Phase 3) ────────────────────────────────────────────────────────
-
-def voteCandidates(levels: dict, openProjectKeys: set) -> list:
-    """Facilities eligible to be the next project: not maxed, and not already
-    in progress. `levels` = {facility_key: level}, openProjectKeys = facilities
-    with an open project. Returns [{key, name, currentLevel, targetLevel}]."""
-    out = []
-    for key, cfg in FACILITY_CATALOG.items():
-        lvl = levels.get(key, 0)
-        if lvl < FACILITY_MAX_LEVEL and key not in openProjectKeys:
-            out.append({'key': key, 'name': cfg.get('name', key),
-                        'currentLevel': lvl, 'targetLevel': lvl + 1,
-                        'kind': 'new' if lvl == 0 else 'upgrade'})
-    return out
-
-
-def castFacilityVote(session, teamId: int, userId: int, facilityKey: str, season: int) -> None:
-    """Upsert a fan's facility vote (one per fan/team/season, changeable)."""
-    from database.models import FacilityVote
-    if facilityKey not in FACILITY_CATALOG:
-        raise ValueError("Unknown facility")
-    row = session.query(FacilityVote).filter_by(team_id=teamId, user_id=userId, season=season).first()
-    if row:
-        row.facility_key = facilityKey
-    else:
-        session.add(FacilityVote(team_id=teamId, user_id=userId, facility_key=facilityKey, season=season))
-        session.flush()  # make the insert visible to a re-cast in the same session
-
-
-def getFacilityVote(session, teamId: int, userId: int, season: int):
-    from database.models import FacilityVote
-    row = session.query(FacilityVote).filter_by(team_id=teamId, user_id=userId, season=season).first()
-    return row.facility_key if row else None
-
-
-def tallyFacilityVotes(session, teamId: int, season: int) -> dict:
-    """{facility_key: vote_count} for a team's season."""
-    from database.models import FacilityVote
-    from sqlalchemy import func
-    rows = (session.query(FacilityVote.facility_key, func.count())
-            .filter_by(team_id=teamId, season=season)
-            .group_by(FacilityVote.facility_key).all())
-    return {k: int(c) for k, c in rows}
-
-
-def resolveFacilityVote(session, teamId: int, season: int, levels: dict):
-    """Open the plurality-winning project for a team. Skips facilities that are
-    maxed or already in progress. Ties break by catalog order (deterministic).
-    Returns the opened FacilityProject, or None if no valid winner."""
+def buildPendingProjects(session, teamObjs: list, season: int, shareUnit: float) -> list:
+    """At season start, build any project fans funded in full while its facility was
+    blocked (it had already had its upgrade that year). Returns [(team, key, level)]."""
     from database.models import FacilityProject
-    tally = tallyFacilityVotes(session, teamId, season)
-    if not tally:
-        return None
-    openKeys = {p.facility_key for p in
-                session.query(FacilityProject).filter_by(team_id=teamId, status='open').all()}
-    catalogOrder = list(FACILITY_CATALOG)
-    valid = [(k, c) for k, c in tally.items()
-             if k in FACILITY_CATALOG and levels.get(k, 0) < FACILITY_MAX_LEVEL and k not in openKeys]
-    if not valid:
-        return None
-    # most votes wins; tie → earlier in the catalog
-    winner = max(valid, key=lambda kc: (kc[1], -catalogOrder.index(kc[0])))[0]
-    return openProject(session, teamId, winner, levels.get(winner, 0), season)
+    built = []
+    for team in teamObjs:
+        for p in session.query(FacilityProject).filter_by(team_id=team.id, status='open').all():
+            if (p.funded or 0) < projectCostFloobits(p.cost_shares, shareUnit):
+                continue
+            if midSeasonBlocked(session, team.id, p.facility_key, season):
+                continue
+            lvl = buildProjectNow(session, team.id, p, team, season)
+            built.append((getattr(team, 'name', team.id), p.facility_key, lvl))
+    return built
+
+
+def projectBuildTiming(session, teamId: int, facilityKey: str, season: int) -> str:
+    """When a fully funded project for this facility would build, for the UI:
+    'now' (builds the moment it is fully funded), 'payment_run' (built by the run
+    last offseason, so it waits for the next run), or 'next_season' (fans already
+    built it this season, or this season's run has happened)."""
+    if (facilityKey in _builtKeys(session, teamId, season, ('fans',))
+            or paymentRunDone(session, season)):
+        return 'next_season'
+    if facilityKey in _builtKeys(session, teamId, season - 1, ('run',)):
+        return 'payment_run'
+    return 'now'

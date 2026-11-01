@@ -1,10 +1,14 @@
-"""Mid-season immediate facility build + upkeep waiver.
+"""Fan-funded facility builds and ONE UPGRADE PER FACILITY PER YEAR.
 
-When a facility project is fully funded MID-SEASON it builds immediately — the
-facility level jumps and its perks go live from the team's next game, instead of
-waiting for the season-end resolution. A facility built this way also waives
-upkeep for the rest of that season (it was under construction the year it
-completed), exactly like a facility with an open project.
+When fans fully fund a facility's next level during the season it builds at once,
+and its perks go live from the team's next game. A year runs from one offseason
+payment run to the next (owner, 2026-10-22):
+  - a facility fans built mid-season is skipped by the next payment run, and its
+    upkeep is waived there (it was under construction the year it completed);
+  - a facility the payment run upgraded cannot be built again by fans until after
+    the next run; their money waits on the bar;
+  - after this season's run has happened, every fan build waits for season start,
+    where `buildPendingProjects` builds it.
 
 Run: python test_facility_immediate_build.py  (throwaway temp DB)
 """
@@ -16,8 +20,8 @@ os.environ["DATABASE_DIR"] = _tmp
 from database.connection import init_db, get_session
 init_db()
 import managers.facilitiesManager as FM
-from database.models import TeamFacility, FacilityProject, TeamTreasury
-from constants import FACILITY_UPGRADE_COST_SHARES
+from database.models import TeamFacility, FacilityProject, TeamTreasury, AppSetting
+from constants import FACILITY_CATALOG
 
 failures = []
 def expect(label, cond):
@@ -25,46 +29,110 @@ def expect(label, cond):
     if not cond:
         failures.append(label)
 
-# 1. PURE resolver: upkeep + decay waived for a facility built mid-season this year
-print("1. resolveSeasonEnd waives upkeep & decay for a facility built mid-season this year")
-fac = [{'key': 'training', 'level': 2, 'upkeep_funded': 0}]
-decay = FM.resolveSeasonEnd(fac, [], 0, 1000, 5)                                   # empty treasury
-waived = FM.resolveSeasonEnd(fac, [], 0, 1000, 5, builtThisSeasonKeys={'training'})
-dT = {f['key']: f for f in decay['facilities']}['training']
-wT = {f['key']: f for f in waived['facilities']}['training']
-expect("without the waiver, an unpaid Lv2 facility decays", dT['level'] < 2)
-expect("with the waiver, the built facility keeps its level (no decay)", wT['level'] == 2)
-expect("with the waiver, upkeep cost reads 0 this season", wT['upkeepCost'] == 0)
+SU = 1000
+TEAM = 99
+KEYS = list(FACILITY_CATALOG)
 
-# 2. buildProjectNow applies the upgrade immediately (DB)
-print("2. buildProjectNow jumps the facility level the moment the bar fills")
+def setup(s, levels, treasury=0):
+    for k in KEYS:
+        s.add(TeamFacility(team_id=TEAM, facility_key=k, level=levels.get(k, 0), upkeep_funded=0))
+    s.add(TeamTreasury(team_id=TEAM, balance=treasury))
+    s.flush()
+    FM.ensureOpenProjects(s, TEAM, levels, 5)
+    s.commit()
+
+def proj(s, key):
+    return s.query(FacilityProject).filter_by(team_id=TEAM, facility_key=key, status='open').first()
+
+def level(s, key):
+    return s.query(TeamFacility).filter_by(team_id=TEAM, facility_key=key).first().level
+
+def fundFully(s, key):
+    p = proj(s, key)
+    p.funded = FM.projectCostFloobits(p.cost_shares, SU)
+    return p
+
+def markRun(s, value):
+    row = s.query(AppSetting).filter_by(key=FM.PAYMENT_RUN_KEY).first()
+    if row:
+        row.value = value
+    else:
+        s.add(AppSetting(key=FM.PAYMENT_RUN_KEY, value=value))
+    s.commit()
+
+team = type('T', (), {'id': TEAM, 'name': 'Test', 'facilities': {}})()
+
+print("1. every facility below the top level has exactly one open project")
 s = get_session()
-s.add(TeamFacility(team_id=99, facility_key='training', level=1, upkeep_funded=0))
-proj = FacilityProject(team_id=99, facility_key='training', kind='upgrade', target_level=2,
-                       cost_shares=FACILITY_UPGRADE_COST_SHARES[2], funded=100,
-                       opened_season=5, status='open')
-s.add(proj); s.commit()
-teamObj = type('T', (), {'facilities': {'training': 1}})()
-newLevel = FM.buildProjectNow(s, 99, proj, teamObj, season=5)
+setup(s, {'training': 1, 'stadium': 5})
+openKeys = sorted(p.facility_key for p in s.query(FacilityProject).filter_by(team_id=TEAM, status='open'))
+expect("all but the maxed facility have an open project",
+       openKeys == sorted(k for k in KEYS if k != 'stadium'))
+expect("the project targets the next level", proj(s, 'training').target_level == 2)
+
+print("2. a fan-funded project builds immediately, and the next level opens")
+p = fundFully(s, 'training')
+expect("not blocked mid-season 5", not FM.midSeasonBlocked(s, TEAM, 'training', 5))
+newLevel = FM.buildProjectNow(s, TEAM, p, team, season=5)
 s.commit()
-fac99 = s.query(TeamFacility).filter_by(team_id=99, facility_key='training').first()
-expect("facility level jumps to the target immediately", fac99.level == 2)
-expect("buildProjectNow returns the new level", newLevel == 2)
-expect("project marked built with built_season set", proj.status == 'built' and proj.built_season == 5)
-expect("in-memory team.facilities reflects the new level (perks live next game)",
-       teamObj.facilities.get('training') == 2)
+expect("facility jumps to the target level", level(s, 'training') == 2 and newLevel == 2)
+expect("project marked built by fans in season 5",
+       p.status == 'built' and p.built_season == 5 and p.built_by == 'fans')
+expect("in-memory team.facilities reflects the new level", team.facilities.get('training') == 2)
+expect("the next level (3) is open", proj(s, 'training').target_level == 3)
+expect("fans cannot build it again this season", FM.midSeasonBlocked(s, TEAM, 'training', 5))
 
-# 3. Season-end: no upkeep the build season, upkeep resumes the next (DB)
-print("3. season-end waives upkeep the build season, charges it the following season")
-s.add(TeamTreasury(team_id=99, balance=0)); s.commit()   # empty treasury -> any upkeep charge forces decay
-team99 = type('T', (), {'id': 99, 'name': 'Test', 'facilities': {}})()
-FM.applySeasonEnd(s, [team99], season=5, shareUnit=1000); s.commit()
-after5 = s.query(TeamFacility).filter_by(team_id=99, facility_key='training').first()
-expect("build season (5): facility does NOT decay (upkeep waived)", after5.level == 2)
-FM.applySeasonEnd(s, [team99], season=6, shareUnit=1000); s.commit()
-after6 = s.query(TeamFacility).filter_by(team_id=99, facility_key='training').first()
-expect("following season (6): upkeep applies — empty treasury now decays it", after6.level < 2)
+print("3. the payment run skips a facility fans built this year and waives its upkeep")
+fundFully(s, 'training')                       # fans fund level 3 too; it must wait
+markRun(s, '5')
+FM.applyPaymentRun(s, [team], 5, SU)
+s.commit()
+expect("training stays at 2 (no second upgrade this year), upkeep waived so no decay",
+       level(s, 'training') == 2)
+expect("its funded level-3 bar is kept", proj(s, 'training').funded > 0)
 
+print("4. after this season's run, every fan build waits for season start")
+markRun(s, 'done:5')
+expect("blocked for the rest of offseason 5", FM.midSeasonBlocked(s, TEAM, 'recovery', 5))
+expect("UI reads it as building next season",
+       FM.projectBuildTiming(s, TEAM, 'recovery', 5) == 'next_season')
+
+print("5. season start builds what fans funded while it was blocked")
+built = FM.buildPendingProjects(s, [team], 6, SU)
+s.commit()
+expect("training builds to 3 at season 6 start", level(s, 'training') == 3
+       and ('Test', 'training', 3) in built)
+
+print("6. a facility the payment run upgraded cannot be fan-built until the next run")
+s.query(TeamTreasury).filter_by(team_id=TEAM).first().balance = 10_000_000
+markRun(s, '6')
+FM.applyPaymentRun(s, [team], 6, SU)
+s.commit()
+runBuilt = {p.facility_key for p in s.query(FacilityProject).filter_by(
+    team_id=TEAM, status='built', built_by='run', built_season=6)}
+# The stadium (level 5) decayed in season 5's run, whose treasury was empty, so it is
+# rebuilt here too.
+expect("the run built every facility not blocked this year (training was fan-built in 6)",
+       runBuilt == {k for k in KEYS if k != 'training'})
+expect("the run did not touch training (fans built it this year)", level(s, 'training') == 3)
+markRun(s, 'done:6')
+expect("a run-built facility is blocked mid-season 7",
+       FM.midSeasonBlocked(s, TEAM, 'recovery', 7)
+       and FM.projectBuildTiming(s, TEAM, 'recovery', 7) == 'payment_run')
+expect("training (not run-built) is open to fans in season 7",
+       not FM.midSeasonBlocked(s, TEAM, 'training', 7)
+       and FM.projectBuildTiming(s, TEAM, 'training', 7) == 'now')
+
+print("7. upkeep resumes the year after a fan build")
+s.query(TeamTreasury).filter_by(team_id=TEAM).first().balance = 0
+markRun(s, '7')
+before = level(s, 'training')
+FM.applyPaymentRun(s, [team], 7, SU)
+s.commit()
+expect("with an empty treasury, training's upkeep is now charged and it decays",
+       level(s, 'training') == before - 1)
+
+s.close()
 shutil.rmtree(_tmp, ignore_errors=True)
 print()
 if failures:
