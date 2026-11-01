@@ -118,6 +118,9 @@ This replaces a separate payroll reserve: because signings happen before any pro
 
 Built as offseason step `facility_payment` (`seasonManager._runFacilityPayment`), gated by the step marker and by its own `facility_payment_due` app_setting, written at season end and flipped to `done:N` in the run's own commit, so a restart cannot pay twice. A season that ended under the old season-end waterfall has no marker and its run is skipped.
 
+### First season: no salaries (owner, 2026-11-01)
+Salaries start only after the new funding has run through one full season, so the first payment run that owes payroll is not paid from Treasuries built under the old flat 200F baseline (prod-snapshot run, 2026-11-01: 6 of 32 teams fell short at that run and the Raccoons let an 87 and an 84 walk with -388F of room). The first funded season gets the new baseline, gate revenue and the match; its season end starts salaries (`payroll.salariesActive`), and that offseason's signings are the first to carry one. The re-sign limit stays on until then.
+
 ### Budget
 - Payroll is a flow: a team can afford what its balance plus expected income (gate + recent donations) covers. Saved-up treasury is a war chest a team can spend down to win now.
 - **Affordability is checked at signing.** A team signs or re-signs a player only if its balance plus a cautious income estimate covers all its committed salaries for the rest of every contract **and the upkeep of its current facility levels**. Counting upkeep stops a signing from knocking facilities down by accident. A shortfall can then only come from income really dropping (fans leaving, gate revenue falling), not from overspending.

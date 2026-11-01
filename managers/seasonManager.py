@@ -563,6 +563,13 @@ class SeasonManager:
         # Payroll: a team whose balance cannot cover next season's committed salaries
         # cuts players NOW, so the FA draft can fill the slots it opens.
         self._enforcePayrollAtSeasonEnd(self.currentSeason.seasonNumber)
+        # Salaries start once the first funded season has been played through: this
+        # offseason's signings are the first to carry one (docs/TREASURY_PAYROLL_PLAN.md §5).
+        try:
+            from managers import payroll
+            payroll.markSalariesStartIfDue(self.currentSeason.seasonNumber)
+        except Exception as e:
+            logger.error(f"Could not mark the salary start: {e}")
 
         # Facilities: NOTHING is spent at season end any more. The money waits for the
         # offseason payment run after the FA draft (`_runFacilityPayment`), so players get
@@ -8351,8 +8358,7 @@ class SeasonManager:
         free-agent pool as it stands then and fan ratings up to that point. Cached for
         `FO_DESK_PROJECTION_TTL_SECS`. Empty on failure, so a caller can fall back."""
         import time
-        from constants import (FO_DESK_PROJECTION_TTL_SECS, RESIGN_LIMIT_ENABLED,
-                               RESIGN_LIMIT_PER_OFFSEASON)
+        from constants import FO_DESK_PROJECTION_TTL_SECS, RESIGN_LIMIT_PER_OFFSEASON
         # ⚠️ KEYED TO THE CALENDAR, NOT ONLY THE CLOCK. A time-only cache carried one
         # season's projection into the next (a fast sim plays a season inside the TTL),
         # so no walk-year player was found in it and the desk quietly fell back to the
@@ -8382,7 +8388,7 @@ class SeasonManager:
                 slotOwners = [owner for _o, owner in self._rookieDraftSlots(list(faOrder))]
             except Exception:
                 slotOwners = []
-            limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+            limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
             for team in teams:
                 expiring, forcedWalk, kept, _d, _a = self._resignDecision(
                     team, brain, faOrder, slotOwners, limit)
@@ -9132,8 +9138,8 @@ class SeasonManager:
         the budget walks to free agency, the next one is then tried, and every slot
         still open keeps a minimum salary in reserve so the FA draft can fill it.
         Read-only, like the decision it filters."""
-        from constants import SALARY_ENABLED
-        if not SALARY_ENABLED or not kept:
+        from managers import payroll
+        if not payroll.salariesActive() or not kept:
             return kept
         from managers import payroll
         season = getattr(self.currentSeason, 'seasonNumber', 0)
@@ -9193,7 +9199,7 @@ class SeasonManager:
         expiring, 0 kept). A switch that silently empties every roster is worse
         than no switch. See PARITY_PROSPECT_PLAN.md P5.
         """
-        from constants import RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON
+        from constants import RESIGN_LIMIT_PER_OFFSEASON
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
@@ -9213,7 +9219,7 @@ class SeasonManager:
         # so a userless sim wasn't an all-walk extreme; the brain decides for
         # every league now, so there is nothing left for it to stand in for.
         # retention_harness.py still sets it and is unaffected.
-        limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+        limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
 
         # ASSESSMENT SWEEP ORDER (plan Part A). With the brain driving, teams
         # are evaluated BEST-FIRST — Floos Bowl champion, then win% descending —
@@ -12423,10 +12429,9 @@ class SeasonManager:
         value, and a player on a prospect contract the GM projects as a star.
 
         Returns [(team name, player name, salary)]."""
-        from constants import SALARY_ENABLED
-        if not SALARY_ENABLED:
-            return []
         from managers import payroll
+        if not payroll.salariesActive():
+            return []
         from managers.playerManager import fanVerdict
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
@@ -12486,6 +12491,14 @@ class SeasonManager:
                 logger.error(f"Payroll check: could not save players after cuts: {e}")
         return done
 
+    @staticmethod
+    def _resignLimitOn() -> bool:
+        """The per-offseason re-sign limit applies until salaries start; then the
+        Treasury limits retention instead (docs/TREASURY_PAYROLL_PLAN.md §5)."""
+        from constants import RESIGN_LIMIT_ENABLED
+        from managers import payroll
+        return RESIGN_LIMIT_ENABLED and not payroll.salariesActive()
+
     def _projectsAsStarProspect(self, brain, team, player) -> bool:
         """A player on a prospect contract whom the GM reads as reaching 4 stars or better
         (`TRADE_RISING_STAR_RATING`), with the trade market's rising-star projection."""
@@ -12512,8 +12525,9 @@ class SeasonManager:
         donations (`TeamFunding.fan_contributions`), scaled by PAYROLL_INCOME_CAUTION.
         Upkeep is the current facility levels at the coming payment run's prices."""
         try:
-            from constants import SALARY_ENABLED, PAYROLL_INCOME_CAUTION
-            if not SALARY_ENABLED or not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            from constants import PAYROLL_INCOME_CAUTION
+            from managers import payroll as _payroll
+            if not _payroll.salariesActive() or not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
                 return
             from sqlalchemy import func
             from database.connection import get_session
@@ -13107,6 +13121,10 @@ class SeasonManager:
                     session.add(funding)
 
                 session.flush()
+                try:
+                    payroll.markFundedSeasonStarted(currentSeason)
+                except Exception as e:
+                    logger.warning(f"Could not stamp the first funded season: {e}")
 
                 # Facilities (Markets→Facilities): reset each facility's upkeep
                 # tally for the new season + top up the Treasury (first activation

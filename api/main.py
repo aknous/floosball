@@ -8061,8 +8061,10 @@ def _teamPayroll(teamId: int) -> int:
 
 
 def _salaryEnabled() -> bool:
-    from constants import SALARY_ENABLED
-    return bool(SALARY_ENABLED)
+    # Whether salaries are charging yet, not merely whether the feature exists: the
+    # first funded season shows no payroll (docs/TREASURY_PAYROLL_PLAN.md §5).
+    from managers import payroll
+    return payroll.salariesActive()
 
 
 def _payrollMinimum() -> int:

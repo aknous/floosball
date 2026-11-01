@@ -3342,11 +3342,15 @@ def clear_db():
         # never once executed.
         from sqlalchemy import text as _text
         from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING
+        # The salary start markers name seasons of the league being dropped: kept, a fresh
+        # league would charge salaries from season 1 instead of after its first season.
+        from managers.payroll import FIRST_FUNDED_KEY, SALARIES_FROM_KEY
+        seasonScoped = (COMPLETE_SNAPSHOT_SETTING, FIRST_FUNDED_KEY, SALARIES_FROM_KEY)
         with engine.connect() as conn:
-            conn.execute(_text("DELETE FROM app_settings WHERE key = :k"),
-                         {"k": COMPLETE_SNAPSHOT_SETTING})
+            for key in seasonScoped:
+                conn.execute(_text("DELETE FROM app_settings WHERE key = :k"), {"k": key})
             conn.commit()
-        logger.info(f"  Cleared season-scoped app setting: {COMPLETE_SNAPSHOT_SETTING}")
+        logger.info(f"  Cleared season-scoped app settings: {', '.join(seasonScoped)}")
     except Exception as e:
         logger.warning(f"Failed to clear season-scoped app settings on fresh start: {e}")
 

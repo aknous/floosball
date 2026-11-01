@@ -2540,7 +2540,10 @@ RESIGN_ONCE_LIMIT = 2             # re-signs allowed with the SAME team before a
 # poor team keeps who it can afford. Removed in the same release as salaries, not before.
 # ⚠️ The trade market's `_cannotKeep` still reads RESIGN_LIMIT_PER_OFFSEASON directly;
 # trading is off, and it needs to read payroll before trading returns.
-RESIGN_LIMIT_ENABLED = not _RETENTION_OFF and not SALARY_ENABLED
+# Whether the re-sign limit exists at all; once salaries start charging
+# (`payroll.salariesActive`) the Treasury limits retention instead and it is lifted
+# (`SeasonManager._resignLimitOn`).
+RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
 # ---- Fan sentiment (AFO plan Part D) ----

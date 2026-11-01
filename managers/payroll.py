@@ -95,9 +95,85 @@ def askingSalary(player, unit: float = None, prospect: bool = False) -> int:
     return max(minimumSalary(unit), floobits)
 
 
+# ─── When salaries start (owner, 2026-11-01) ───────────────────────────────────────────
+#
+# Salaries are charged only after the new funding (the share-denominated league baseline,
+# gate revenue and the donation match) has run through one full season, so Treasuries are
+# not still the old flat-baseline balances the first time payroll is due. The first season
+# that creates its funding records under this code is stamped FIRST_FUNDED_KEY; its season
+# end stamps SALARIES_FROM_KEY, and from that offseason on contracts carry a salary, the
+# budget applies, the season-end check can cut and the re-sign limit comes off.
+# `SALARY_ENABLED` stays the feature flag: the league baseline is share-denominated from
+# the first funded season, since building Treasuries is that season's whole point.
+
+FIRST_FUNDED_KEY = 'treasury_first_funded_season'
+SALARIES_FROM_KEY = 'salaries_start_season'
+_activeCache = (0.0, None)
+
+
+def _readSetting(key):
+    from database.connection import get_session
+    from database.models import AppSetting
+    session = get_session()
+    try:
+        row = session.query(AppSetting).filter_by(key=key).first()
+        return row.value if row else None
+    finally:
+        session.close()
+
+
+def salariesActive() -> bool:
+    """Whether contracts carry salaries yet. Cached for a few seconds: an FA draft asks
+    this for every signing. ⚠️ FAILS CLOSED to "not yet" when the setting cannot be read,
+    which is the pre-payroll behavior every path already handles."""
+    global _activeCache
+    if not SALARY_ENABLED:
+        return False
+    import time
+    at, value = _activeCache
+    if value is not None and time.time() - at < 5.0:
+        return value
+    try:
+        value = _readSetting(SALARIES_FROM_KEY) is not None
+    except Exception:
+        value = False
+    _activeCache = (time.time(), value)
+    return value
+
+
+def resetSalariesActiveCache() -> None:
+    global _activeCache
+    _activeCache = (0.0, None)
+
+
+def markFundedSeasonStarted(season: int) -> None:
+    """A season created its funding records under this code. Only the first is kept."""
+    if not SALARY_ENABLED:
+        return
+    from game_rules import _writeAppSetting
+    if _readSetting(FIRST_FUNDED_KEY) is None:
+        _writeAppSetting(FIRST_FUNDED_KEY, str(int(season)))
+        logger.info(f"Payroll: season {season} is the first funded season; salaries start at its end")
+
+
+def markSalariesStartIfDue(completedSeason: int) -> bool:
+    """Season end: once the first funded season has been played through, salaries start.
+    Returns True the moment they do."""
+    if not SALARY_ENABLED or _readSetting(SALARIES_FROM_KEY) is not None:
+        return False
+    first = _readSetting(FIRST_FUNDED_KEY)
+    if first is None or int(completedSeason) < int(first):
+        return False
+    from game_rules import _writeAppSetting
+    _writeAppSetting(SALARIES_FROM_KEY, str(int(completedSeason)))
+    resetSalariesActiveCache()
+    logger.info(f"Payroll: salaries start this offseason (after season {completedSeason})")
+    return True
+
+
 def stampSalary(player, unit: float = None, prospect: bool = False) -> int:
-    """Lock a salary onto a contract being signed now. With payroll off it stamps 0."""
-    player.salary = askingSalary(player, unit, prospect) if SALARY_ENABLED else 0
+    """Lock a salary onto a contract being signed now. Stamps 0 until salaries start."""
+    player.salary = askingSalary(player, unit, prospect) if salariesActive() else 0
     return player.salary
 
 
@@ -350,7 +426,7 @@ def payrollOutlook(session, team, season: int, regularSeasonWeeks: int,
                    shareUnit: float) -> dict:
     """Whether this team is on course to fall short of next season's payroll at the
     season-end check. None with payroll off or nothing owed."""
-    if not SALARY_ENABLED or team is None:
+    if not salariesActive() or team is None:
         return None
     owed = nextSeasonPayroll(team)
     if owed <= 0:

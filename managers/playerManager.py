@@ -43,9 +43,8 @@ def _payrollBudget(team):
     """The team's payroll budget for an FA-draft signing, or None with payroll off.
     Contracts are post-decrement here (the draft runs after step 3), each carried
     with its player so an upgrade cut can free his salary."""
-    from constants import SALARY_ENABLED
     tid = getattr(team, 'id', None)
-    if not SALARY_ENABLED or not payroll.hasFinances(tid):
+    if not payroll.salariesActive() or not payroll.hasFinances(tid):
         return None
     income, upkeep = payroll.financesOf(tid)
     contracts = []
@@ -63,8 +62,7 @@ def _stampSigningSalary(player) -> None:
     """Lock a salary onto a free agent's new contract: his asking salary, or the minimum
     for a last-resort generated stopgap."""
     if getattr(player, '_minimumSalary', False):
-        from constants import SALARY_ENABLED
-        player.salary = payroll.minimumSalary() if SALARY_ENABLED else 0
+        player.salary = payroll.minimumSalary() if payroll.salariesActive() else 0
         player._minimumSalary = False
     else:
         payroll.stampSalary(player)
