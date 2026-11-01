@@ -139,6 +139,7 @@ class Want:
     candidates: list = field(default_factory=list)   # [(playerId, maxBid)], best first
     release: object = None                           # incumbent id released if signed
     releaseSalary: int = 0
+    releaseFee: int = 0                              # the cut fee that release costs
     term: int = None                                 # forced term (a prospect's window)
 
 
@@ -166,7 +167,11 @@ def resolve(asks: dict, motives: dict, wants: list, rank: dict, pull, room: dict
     events = []
 
     def cost(w, salary):
-        return salary - (w.releaseSalary if w.release is not None else 0)
+        # A release frees his salary and costs the cut fee (counted here against the same
+        # budget, a conservative read of a one-off charge).
+        if w.release is None:
+            return salary
+        return salary - w.releaseSalary + w.releaseFee
 
     def winsTie(tid, holderTid, pid):
         a, b = pull(pid, tid), pull(pid, holderTid)
@@ -293,6 +298,8 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
     place; holes left at the end are the caller's to fill."""
     from managers import payroll
     from managers.playerManager import isCutProtected, signedThisOffseason, fanVerdict
+    from managers.frontOfficeBrain import cutFeeFor
+    from managers.facilitiesManager import chargeCutFee
 
     events = []
     rank = {}
@@ -386,7 +393,7 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                             best = max(pros, key=lambda p: brain.seasonRating(p, coach, team))
                             term = max(1, int(PROSPECT_DEVELOPMENT_WINDOW)
                                        - int(getattr(best, 'prospect_seasons', 0) or 0))
-                        baseline, release, relSal = None, None, 0
+                        baseline, release, relSal, relFee = None, None, 0, 0
                     else:
                         # An upgrade: never anyone signed or re-signed this offseason,
                         # filled in this market, or cut-protected.
@@ -397,6 +404,7 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                         bar = (getattr(pm, '_faCutBars', None) or {}).get(team.id, 6.0)
                         cands = [f for f in fas if value(f) - baseline >= bar][:FA_LIST_LENGTH]
                         term, release, relSal = None, inc.id, payroll.salaryOf(inc)
+                        relFee = int(cutFeeFor(inc))
                     if not cands:
                         continue
                     ranked = []
@@ -406,7 +414,7 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                         ranked.append((f.id, walkAwayPrice(asks[f.id], value(f), nxt)))
                     wants.append(Want(wid=wid, teamId=team.id, slot=slot, posVal=posVal,
                                       candidates=ranked, release=release,
-                                      releaseSalary=relSal, term=term))
+                                      releaseSalary=relSal, releaseFee=relFee, term=term))
                     wid += 1
 
         signings, offers = resolve(asks, motives, wants, rank, pull, room)
@@ -431,6 +439,11 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             if w.release is not None:
                 inc = team.rosterDict.get(w.slot)
                 if inc is not None and inc.id == w.release:
+                    fee = int(cutFeeFor(inc))
+                    if not chargeCutFee(team.id, fee):
+                        logger.info(f"FA market: {team.name} cannot pay the {fee}F cut fee to "
+                                    f"release {inc.name}; {f.name} stays on the market")
+                        continue
                     pm.releasePlayerToFreeAgency(inc, team, faLists)
                     inc.termRemaining = 0
                     released[team.id].add(inc.id)
@@ -439,7 +452,7 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                                    'position': inc.position.name,
                                    'rating': round(getattr(inc, 'playerRating', 0), 1),
                                    'tier': getattr(getattr(inc, 'playerTier', None), 'name', ''),
-                                   'slot': w.slot, 'forPlayer': f.name})
+                                   'slot': w.slot, 'forPlayer': f.name, 'fee': fee})
             if team.rosterDict.get(w.slot) is not None:
                 logger.warning(f"FA market: {team.name} {w.slot} not free for {f.name}; skipped")
                 continue

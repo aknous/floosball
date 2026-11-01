@@ -8677,37 +8677,13 @@ class SeasonManager:
         return self._executeProspectCut(team, prospect, slot, incumbent, finalWindow=True)
 
     def _chargeCutFee(self, team, fee: int) -> bool:
-        """Debit a team's Treasury for a cut. False (and nothing charged) if it
-        cannot cover it — ⚠️ the fee is never allowed to go negative into a debt,
-        because a broke club with a debt line has UNLIMITED roster churn, which is
-        the opposite of what the fee is for."""
-        if fee <= 0:
-            return True
+        """Debit a team's Treasury for a cut (`facilitiesManager.chargeCutFee`). False, with
+        nothing charged, when it cannot cover it."""
         try:
-            from database.connection import get_session
-            from managers.facilitiesManager import getTreasury, setTreasury
+            from managers.facilitiesManager import chargeCutFee
         except Exception:
-            return True             # facilities economy unavailable — do not block the sim
-        teamId = getattr(team, 'id', None)
-        if teamId is None:
-            return True
-        session = get_session()
-        try:
-            balance = getTreasury(session, teamId)
-            if balance < fee:
-                return False
-            setTreasury(session, teamId, balance - fee)
-            session.commit()
-            return True
-        except Exception as e:
-            logger.warning(f"Could not charge cut fee to {team.name}: {e}")
-            try:
-                session.rollback()
-            except Exception:
-                pass
-            return False
-        finally:
-            session.close()
+            return True             # facilities economy unavailable: do not block the sim
+        return chargeCutFee(getattr(team, 'id', None), fee)
 
     def _promoteProspectsAutonomously(self, team, washoutOnly: bool = False) -> list:
         """Promote this team's prospects when the GM rates them over the market.

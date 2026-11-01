@@ -2355,7 +2355,7 @@ FACILITY_SHARE_CAP_MIN_USERS = 8
 # Stadium curve against G2/G3. At a 5,453F share unit, 0.02 is ~109F a week, ~3,050F a
 # season, for one fan at weight 1.0 and a level-0 Stadium.
 GATE_REVENUE_ENABLED = True
-GATE_SHARES_PER_WEEK = 0.02
+GATE_SHARES_PER_WEEK = float(_os.environ.get('FLOOS_GATE_SHARES', '0.02'))
 # 0.85 (owner, 2026-10-23): a second fan adds ~80% of the first. At 0.6 it added only 51%,
 # so one fantasy donor out-funded a second fan joining, against G3. Still concave, so the
 # first fan is worth the most and 17 fans do not earn 17x one.
@@ -2387,8 +2387,8 @@ DONATION_MATCH_CAP_SHARES = 0.18
 SALARY_ENABLED = True
 SALARY_MIN_SHARES = 0.01
 SALARY_FLOOR_RATING = 68
-SALARY_TOP_SHARES = 0.95
-SALARY_EXPONENT = 2.75
+SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '0.95'))
+SALARY_EXPONENT = float(_os.environ.get('FLOOS_SALARY_EXP', '2.75'))
 # A prospect promoted onto the roster signs for this share of his asking salary (never
 # under the minimum), so the draft stays the poor team's route to talent.
 SALARY_PROSPECT_FRACTION = 0.25

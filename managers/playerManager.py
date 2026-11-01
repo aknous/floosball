@@ -5910,6 +5910,15 @@ class PlayerManager:
             # different position would otherwise have released a starter for nothing.
             incumbent = team.rosterDict.get(slot)
             if incumbent is not None:
+                # It costs the cut fee like every other cut (owner, 2026-11-01); a team that
+                # cannot pay it keeps its starter.
+                from managers.frontOfficeBrain import cutFeeFor
+                from managers.facilitiesManager import chargeCutFee
+                fee = int(cutFeeFor(incumbent))
+                if not chargeCutFee(getattr(team, 'id', None), fee):
+                    logger.info(f"FA draft upgrade: {team.name} cannot pay the {fee}F cut fee "
+                                f"for {incumbent.name}; keeps him")
+                    return not firstOpenSlotByPos
                 # ⚠️ ONE RELEASE IMPLEMENTATION. This inlined its own copy first, which is how
                 # the two drifted apart on the sort key alone; `releasePlayerToFreeAgency`
                 # already clears the slot, frees the shirt number, stamps `previousTeam` and

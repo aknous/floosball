@@ -181,3 +181,12 @@ def test_theOfferIsTheAskLessThePull():
     p = _walkYear(9, 'hometown', home=3)
     sal, pull = faMarket.resignOffer(p, SimpleNamespace(id=3), ({}, {}), minimum=50)
     assert sal == math.ceil(askingSalary(p) - pull) and pull == pytest.approx(0.2 * askingSalary(p))
+
+
+def test_theCutFeeCountsAgainstTheUpgrade():
+    # Same upgrade as `test_aReleaseFreesItsSalaryForTheUpgrade` (net 600 fits 700), but
+    # the release now costs a 200F cut fee, so it no longer fits.
+    wants = [Want(0, 10, 'qb', 1, candidates=[(1, 5000)], release=99, releaseSalary=900,
+                  releaseFee=200)]
+    got, _ = _run({1: 1500}, wants, room={10: 700})
+    assert got == {}
