@@ -6,6 +6,7 @@ never costs a team its backup.
 
 Run: .venv/bin/python -m pytest -q test_fa_market.py
 """
+import math
 import random
 from types import SimpleNamespace
 
@@ -135,3 +136,48 @@ def test_motivePulls():
     assert faMarket.motivePull('winner', 1000, isHome=False, success=0.5, comfort=0) == pytest.approx(100)
     assert faMarket.motivePull('comfort', 1000, isHome=False, success=0, comfort=1) == pytest.approx(200)
     assert faMarket.motivePull('opportunity', 1000, isHome=True, success=1, comfort=1) == 0
+
+
+# ── the re-sign head start (owner, 2026-11-01) ─────────────────────────────────────────
+
+def _walkYear(pid, motive, rating=86, home=None):
+    return SimpleNamespace(id=pid, faMotive=motive, homeTeamId=home, playerRating=rating,
+                           position=SimpleNamespace(name='WR'),
+                           attributes=SimpleNamespace(personality=None))
+
+
+def test_aPlayersSenseOfHisWorthIsStableAndInHisMotivesRange():
+    from managers.payroll import setShareUnit
+    setShareUnit(5000)
+    p = _walkYear(7, 'winner')
+    r = faMarket.reservation(p, 13)
+    assert r == faMarket.reservation(p, 13)
+    assert 0.95 <= r <= 1.15
+    assert faMarket.reservation(_walkYear(8, 'opportunity'), 13) == pytest.approx(0.85)
+
+
+def test_aHometownPlayerTakesHisDiscountAndAWinnerTestsAWeakTeam():
+    from managers.payroll import setShareUnit
+    setShareUnit(5000)
+    team = SimpleNamespace(id=3)
+    weak = ({3: 0.0}, {3: 0.0})          # no success, no facilities to speak of
+    homeAccepts = winnerAccepts = 0
+    for pid in range(200):
+        home = _walkYear(1000 + pid, 'hometown', home=3)
+        sal, pull = faMarket.resignOffer(home, team, weak, minimum=50)
+        homeAccepts += faMarket.acceptsResign(home, sal, pull, 13)
+        win = _walkYear(2000 + pid, 'winner')
+        sal, pull = faMarket.resignOffer(win, team, weak, minimum=50)
+        winnerAccepts += faMarket.acceptsResign(win, sal, pull, 13)
+    assert homeAccepts == 200            # offered his ask less his discount; he settles at 85-100%
+    # Wants 95-115% of his ask and this team has no pull: a fair offer lands about a quarter
+    # of the time, when he happens to value himself at or under his ask.
+    assert 25 <= winnerAccepts <= 80
+
+
+def test_theOfferIsTheAskLessThePull():
+    from managers.payroll import setShareUnit, askingSalary
+    setShareUnit(5000)
+    p = _walkYear(9, 'hometown', home=3)
+    sal, pull = faMarket.resignOffer(p, SimpleNamespace(id=3), ({}, {}), minimum=50)
+    assert sal == math.ceil(askingSalary(p) - pull) and pull == pytest.approx(0.2 * askingSalary(p))

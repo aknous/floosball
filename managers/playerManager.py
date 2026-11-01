@@ -3392,7 +3392,8 @@ class PlayerManager:
         return freeAgencyHistory
 
     def freeAgencyPickGenerator(self, freeAgencyOrder: List, currentSeason: int,
-                                leagueHighlights: List = None, skipRetirements: bool = False):
+                                leagueHighlights: List = None, skipRetirements: bool = False,
+                                allowUpgrades: bool = True):
         """Generator that yields one FA event at a time for live broadcasting.
 
         Yields dicts with 'type' key: 'on_clock', 'pick', 'team_complete'.
@@ -3479,7 +3480,9 @@ class PlayerManager:
             # upgrade were ones still filling a hole, and a rich team with a full roster
             # sat on its Treasury while a 90-rated free agent went unsigned. A team is done
             # once its roster is full and a turn makes no move (`_draftTeamIsDone`).
-            team.freeAgencyComplete = False
+            # After the free agency market (`allowUpgrades=False`) the draft only fills the
+            # holes the market left, so a full roster is done before it starts.
+            team.freeAgencyComplete = (not allowUpgrades) and self._rosterIsFull(team)
             # ⚠️ CLEARED PER DRAFT. It lives on the Team, which outlives the offseason, so
             # leaving it would make every slot filled in season N permanently un-upgradable.
             team._draftFilledSlots = set()
@@ -3555,7 +3558,7 @@ class PlayerManager:
                     rosterComplete = self._attemptRosterFill(
                         team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                         freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                        eventLog=pickEvents,
+                        eventLog=pickEvents, allowUpgrades=allowUpgrades,
                     )
                     if startsFull and self._turnMadeAMove(pickEvents):
                         yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
@@ -3596,13 +3599,14 @@ class PlayerManager:
                             rosterComplete = self._attemptRosterFill(
                                 team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                                 freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                                eventLog=retryEvents,
+                                eventLog=retryEvents, allowUpgrades=allowUpgrades,
                             )
                             for ev in retryEvents:
                                 logFa(f"  LAST-RESORT SIGN: {team.name} signs {ev['player']} at {ev.get('slot', '?')}")
                                 yield ev
 
-                    if self._draftTeamIsDone(rosterComplete, pickEvents):
+                    if self._draftTeamIsDone(rosterComplete, pickEvents) or (
+                            not allowUpgrades and rosterComplete):
                         teamsComplete += 1
                         team.freeAgencyComplete = True
                         yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
@@ -5545,7 +5549,7 @@ class PlayerManager:
 
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                          eventLog=None) -> bool:
+                          eventLog=None, allowUpgrades: bool = True) -> bool:
         """Sign or promote the best player available — comparing FAs *and*
         the team's prospects across all open roster slots.
 
@@ -5833,7 +5837,7 @@ class PlayerManager:
         # above it found NOTHING, and an upgrade is not a fallback for an unfillable hole --
         # it is an extra option that competes on value. Folding it into the `or` chain would
         # make it fire only when the club could fill nothing at all, which is backwards.
-        candidates = list(candidates) + _upgradeCandidates()
+        candidates = list(candidates) + (_upgradeCandidates() if allowUpgrades else [])
         if not candidates:
             # Nothing left to do: either the roster is full and no upgrade clears the bar
             # (complete), or slots are open and nothing can fill them (not complete).

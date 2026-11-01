@@ -2421,6 +2421,16 @@ FA_WINNER_PULL = 0.20           # x the team's recent success, 0-1 relative to t
 FA_COMFORT_PULL = 0.20          # x the team's Appeal, 0-1 relative to the league
 FA_OPPORTUNITY_ASK = 0.85       # an 'opportunity' player signs the first offer at this share
 FA_HISTORY_SEASONS = 5          # seasons of titles and playoff runs a 'winner' looks at
+# The re-sign head start (owner, 2026-11-01): a team offers its walk-year players first, at
+# their asking salary less their pull toward it. A player accepts if offer + pull reaches
+# what he thinks he is worth this offseason, a share of his ask drawn in this range (seeded
+# per player and season); otherwise he tests free agency, where his old team can still bid.
+FA_RESIGN_RESERVATION = {
+    'hometown': (0.85, 1.00),
+    'opportunity': (0.85, 0.85),
+    'winner': (0.95, 1.15),
+    'comfort': (0.95, 1.15),
+}
 # Every motive starts at weight 1; a personality adds to the motives it leans toward.
 FA_MOTIVE_PERSONALITY = {
     'hometown':    {'wholesome': 3, 'knight': 3, 'stoic': 2, 'melancholy': 2, 'poetic': 1},

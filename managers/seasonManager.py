@@ -8893,12 +8893,18 @@ class SeasonManager:
         # at the start of _handleOffseason covers the between-season reset.
         currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
 
-        pickGen = self.playerManager.freeAgencyPickGenerator(
-            freeAgencyOrder=freeAgencyOrder,
-            currentSeason=currentSeasonNum,
-            leagueHighlights=leagueHighlights,
-            skipRetirements=True,
-        )
+        from managers import faMarket
+        if faMarket.marketActive():
+            # The free agency market (docs/FREE_AGENCY_MARKET_PLAN.md): players choose, then
+            # the draft's machinery fills only the holes left, with upgrades off.
+            pickGen = self._marketThenFill(freeAgencyOrder, currentSeasonNum, leagueHighlights)
+        else:
+            pickGen = self.playerManager.freeAgencyPickGenerator(
+                freeAgencyOrder=freeAgencyOrder,
+                currentSeason=currentSeasonNum,
+                leagueHighlights=leagueHighlights,
+                skipRetirements=True,
+            )
 
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
@@ -8920,8 +8926,13 @@ class SeasonManager:
                             )
                         )
                         self._offseasonTransactions.append(entry)
+                        if entry.get('isResign'):
+                            # Won back in the free agency market: he walked at step 3, so his
+                            # 'walked' row would read as a departure beside the re-signing.
+                            self._dropRecapEvent('walked', entry.get('playerId'))
                         self._recordOffseasonEvent(
-                            'promotion' if entry.get('isPromotion') else 'fa_pick',
+                            'promotion' if entry.get('isPromotion')
+                            else 'resign' if entry.get('isResign') else 'fa_pick',
                             teamName=entry['team'], teamAbbr=entry['teamAbbr'],
                             playerId=entry.get('playerId'), playerName=entry['player'],
                             position=entry['position'], rating=entry['rating'], tier=entry['tier'])
@@ -8979,6 +8990,44 @@ class SeasonManager:
 
         logger.info("Free agency complete")
     
+    def _dropRecapEvent(self, eventType, playerId) -> None:
+        """Remove this season's recap row of `eventType` for a player, best-effort."""
+        if playerId is None or not self.currentSeason:
+            return
+        try:
+            from database.connection import get_session
+            from database.models import SeasonRecapEvent
+            s = get_session()
+            try:
+                s.query(SeasonRecapEvent).filter_by(
+                    season=self.currentSeason.seasonNumber, event_type=eventType,
+                    player_id=playerId).delete(synchronize_session=False)
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.debug(f"recap event drop failed ({eventType}, {playerId}): {e}")
+
+    def _marketThenFill(self, freeAgencyOrder, season, leagueHighlights):
+        """The signing period, then the FA draft generator for any hole it left (upgrades
+        off). Yields the FA draft's event shapes, so the live feed and recap handle both.
+        'market' lines (offers and bidding wars) are logged; the feed for them is the
+        frontend's to build."""
+        from managers import faMarket
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        brain = self._foBrainForOffseason()
+        events = faMarket.runSigningPeriod(self.playerManager, teams, brain, season,
+                                           freeAgencyOrder, {}, leagueHighlights)
+        for e in events:
+            if e.get('type') == 'market':
+                logger.info(f"FA market: {e['text']}")
+                continue
+            yield e
+        yield from self.playerManager.freeAgencyPickGenerator(
+            freeAgencyOrder=freeAgencyOrder, currentSeason=season,
+            leagueHighlights=leagueHighlights, skipRetirements=True, allowUpgrades=False)
+
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
@@ -9257,6 +9306,15 @@ class SeasonManager:
             'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
         }
         cutTally = 0
+        from managers import faMarket
+        from managers.playerManager import fanVerdict
+        marketMode = faMarket.marketActive()
+        if marketMode:
+            from managers import payroll
+            season = getattr(self.currentSeason, 'seasonNumber', 0)
+            marketStanding = faMarket.teamStanding(list(teamManager.teams), season, brain)
+            logger.info("Retention: free agency market active; teams offer first, players "
+                        "accept or test the market")
         # Which slots of THIS draft each club owns (slot k = the k-th pick), traded picks
         # included: the same reader the draft itself uses.
         try:
@@ -9269,6 +9327,31 @@ class SeasonManager:
             coach = getattr(team, 'coach', None)
             expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
                 team, brain, faOrder, slotOwners, limit)
+            if marketMode:
+                # THE RE-SIGN HEAD START (owner, 2026-11-01). The team offers the players
+                # its GM wants (plus anyone its fans voted to keep, budget permitting), at
+                # his asking salary less his pull toward it; the rest it declines. Each
+                # player offered accepts or tests the free agency market, where this team
+                # can still bid for him like anyone else.
+                offered = list(kept)
+                for p in self._affordableResigns(
+                        team, expiring, [p for p in expiring if fanVerdict(p) == 'keep']):
+                    if p not in offered:
+                        offered.append(p)
+                accepted = []
+                for p in offered:
+                    salary, pull = faMarket.resignOffer(p, team, marketStanding, payroll.minimumSalary())
+                    if faMarket.acceptsResign(p, salary, pull, season):
+                        p._resignSalary = salary
+                        accepted.append(p)
+                    else:
+                        logger.info(f"Re-sign: {p.name} ({getattr(p, 'playerRating', 0)}, "
+                                    f"{faMarket.motiveOf(p)}) turns down the {team.name}'s "
+                                    f"{salary}F and tests free agency")
+                        if getattr(p, 'playerRating', 0) >= 84:
+                            self._publishTeamNews('signing', f"{p.name} turns down the {team.name} "
+                                                  f"and tests free agency", team)
+                kept = accepted
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds
@@ -9286,8 +9369,10 @@ class SeasonManager:
             # CUT-FOR-UPGRADE. Released LIVE so the teams later in the sweep
             # assess against the fuller market this one just created.
             # (chooseCuts already takes the team positionally and forwards it.)
-            cuts = brain.chooseCuts(team, coach=coach, pickDepth=pickDepth,
-                                    teamsAhead=teamsAhead)
+            # With the free agency market a team releases a starter only when it lands his
+            # replacement there (a conditional release), so nobody is cut on a guess.
+            cuts = [] if marketMode else brain.chooseCuts(team, coach=coach, pickDepth=pickDepth,
+                                                           teamsAhead=teamsAhead)
             for player, slot in cuts:
                 self.playerManager.releasePlayerToFreeAgency(player, team, faLists)
                 cutTally += 1
@@ -9344,9 +9429,15 @@ class SeasonManager:
                     player.term = payroll.contractTerm(
                         self.playerManager, player, getattr(self.currentSeason, 'seasonNumber', 0))
                     player.termRemaining = player.term
-                    # A re-sign is a new contract: it locks his asking salary now.
+                    # A re-sign is a new contract: it locks his asking salary now, or the
+                    # salary he accepted in the free agency market's re-sign head start.
                     from managers import payroll
-                    payroll.stampSalary(player)
+                    offered = getattr(player, '_resignSalary', None)
+                    if offered is not None and payroll.salariesActive():
+                        player.salary = int(offered)
+                    else:
+                        payroll.stampSalary(player)
+                    player._resignSalary = None
                     player.teamResignCount = int(getattr(player, 'teamResignCount', 0) or 0) + 1
                     player._gmResigned = False
                     leagueHighlights.insert(0, {

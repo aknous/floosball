@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from constants import (FA_MARKET_ENABLED, FA_MARKET_ROUNDS, FA_ASK_DECAY, FA_MIN_RAISE,
                        FA_MAX_BID_EDGE, FA_LIST_LENGTH, FA_HOMETOWN_DISCOUNT, FA_WINNER_PULL,
                        FA_COMFORT_PULL, FA_OPPORTUNITY_ASK, FA_HISTORY_SEASONS,
-                       FA_MOTIVE_PERSONALITY)
+                       FA_MOTIVE_PERSONALITY, FA_RESIGN_RESERVATION)
 
 logger = logging.getLogger('floosball.faMarket')
 
@@ -78,6 +78,52 @@ def motivePull(motive: str, ask: int, *, isHome: bool, success: float, comfort: 
     if motive == 'comfort':
         return FA_COMFORT_PULL * ask * max(0.0, min(1.0, comfort))
     return 0.0
+
+
+# ─── The re-sign head start (owner, 2026-11-01) ──────────────────────────────────────────
+#
+# "teams should still get a head start on re-signing their own players though. players can
+# choose to accept or go to free agency. teams can also decline to make an offer". Before
+# the market opens, a team offers the walk-year players its GM wants to keep (or offers
+# nothing); each player accepts or tests free agency, where his old team can still bid.
+
+def reservation(player, season: int) -> float:
+    """What this player thinks he is worth this offseason, as a share of his asking
+    salary: drawn from his motive's range, on a seed fixed by player and season so the
+    same offseason always gives the same answer."""
+    motive = motiveOf(player)
+    lo, hi = FA_RESIGN_RESERVATION.get(motive, (1.0, 1.0))
+    seed = int(hashlib.md5(f"fa_reservation:{getattr(player, 'id', id(player))}:{season}".encode())
+               .hexdigest()[:12], 16)
+    return lo + (hi - lo) * random.Random(seed).random()
+
+
+def teamPull(player, team, ask: int, standing: tuple) -> float:
+    """This player's pull toward `team` (Floobits), with `standing` from `teamStanding`."""
+    success, comfort = standing
+    tid = getattr(team, 'id', None)
+    return motivePull(motiveOf(player), ask,
+                      isHome=getattr(player, 'homeTeamId', None) == tid,
+                      success=success.get(tid, 0.5), comfort=comfort.get(tid, 0.5))
+
+
+def resignOffer(player, team, standing: tuple, minimum: int) -> tuple:
+    """(salary, pull): the team offers his asking salary less his pull toward it, since
+    the GM knows his motive; never under the league minimum."""
+    from managers import payroll
+    ask = payroll.askingSalary(player)
+    pull = teamPull(player, team, ask, standing)
+    return max(int(minimum), int(math.ceil(ask - pull))), pull   # rounded up: a fair floor
+
+
+def acceptsResign(player, salary: int, pull: float, season: int) -> bool:
+    """Does he take his team's offer, or test free agency?"""
+    from managers import payroll
+    return salary + pull >= reservation(player, season) * payroll.askingSalary(player)
+
+
+def teamStanding(teams, season: int, brain) -> tuple:
+    return _teamStanding(teams, season, brain)
 
 
 # ─── The pure market ─────────────────────────────────────────────────────────────────────
