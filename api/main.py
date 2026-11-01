@@ -8060,12 +8060,40 @@ def _teamPayroll(teamId: int) -> int:
         return 0
 
 
+def _salaryEnabled() -> bool:
+    from constants import SALARY_ENABLED
+    return bool(SALARY_ENABLED)
+
+
 def _payrollMinimum() -> int:
     try:
         from managers import payroll
         return payroll.minimumSalary()
     except Exception:
         return 0
+
+def _payrollOutlook(session, teamId: int, season: int):
+    """In-season only: whether the team is on course to fall short of next season's
+    payroll at the season-end check (docs/TREASURY_PAYROLL_PLAN.md §5). None once the
+    check has run for this season (its payment-run marker is written right after) or
+    with payroll off."""
+    try:
+        from database.models import AppSetting
+        from managers import payroll, facilitiesManager
+        from standings_view import regularSeasonWeeks
+        marker = session.query(AppSetting).filter_by(key=facilitiesManager.PAYMENT_RUN_KEY).first()
+        if marker and marker.value in (str(season), f"done:{season}"):
+            return None
+        sm = floosball_app.seasonManager
+        tm = floosball_app.teamManager
+        team = next((t for t in (tm.teams if tm else []) if t.id == teamId), None)
+        weeks = regularSeasonWeeks(sm.currentSeason.schedule) if sm and sm.currentSeason else 0
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        return payroll.payrollOutlook(session, team, season, weeks or 28, shareUnit)
+    except Exception as e:
+        logger.warning(f"Payroll outlook failed for team {teamId}: {e}")
+        return None
+
 
 @app.get("/api/teams/{team_id}/facilities")
 def get_team_facilities(team_id: int):
@@ -8127,6 +8155,8 @@ def get_team_facilities(team_id: int):
             # at the payment run, and what a roster spot costs at least.
             'payroll': _teamPayroll(team_id),
             'minimumSalary': _payrollMinimum(),
+            'payrollOutlook': _payrollOutlook(session, team_id, season),
+            'salaryEnabled': _salaryEnabled(),
         })
     finally:
         session.close()

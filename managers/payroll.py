@@ -302,3 +302,70 @@ def chooseForcedCuts(entries: list, gap: int) -> list:
                 cut.remove(e)
                 total -= e['salary']
     return cut
+
+
+# ─── The in-season warning (plan §5, "Warn fans during the season") ─────────────────────
+#
+# The season-end check (`seasonManager._enforcePayrollAtSeasonEnd`) cuts players when the
+# balance cannot cover `nextSeasonPayroll`. It runs right after the season-end fan
+# deposit, so the balance it reads is today's Treasury plus the gate revenue still to
+# come this regular season plus that deposit (and the league's match on it). The warning
+# projects exactly that, so it fires only where the check would.
+
+def projectSeasonEndBalance(balance: int, gateSoFar: int, gateWeeks: int, weeksLeft: int,
+                            deposit: int) -> int:
+    """Today's Treasury, plus the rest of this season's gate at the rate earned so far,
+    plus the season-end deposit."""
+    rate = (float(gateSoFar) / gateWeeks) if gateWeeks > 0 else 0.0
+    return int(round(int(balance) + rate * max(0, int(weeksLeft)) + int(deposit)))
+
+
+def seasonEndDeposit(session, teamId: int, season: int, shareUnit: float) -> int:
+    """What this team's fans would deposit at season end at their CURRENT Floobit
+    balances (`team_funding_pct` of each), plus the league's match on it. An estimate:
+    fans earn and spend before then."""
+    import math
+    from constants import DEFAULT_FUNDING_PCT, DONATION_MATCH_ENABLED
+    from database.models import User
+    from database.repositories.card_repositories import CurrencyRepository
+    from managers import gateRevenue
+    repo = CurrencyRepository(session)
+    total = 0
+    for user in session.query(User).filter(User.favorite_team_id == teamId).all():
+        pct = getattr(user, 'team_funding_pct', DEFAULT_FUNDING_PCT)
+        pct = max(0, min(100, DEFAULT_FUNDING_PCT if pct is None else pct))
+        currency = repo.getByUser(user.id)
+        amount = math.floor((currency.balance if currency else 0) * pct / 100.0)
+        if amount <= 0:
+            continue
+        total += amount
+        if DONATION_MATCH_ENABLED:
+            _basis, match = gateRevenue.matchFor(
+                amount, gateRevenue.matchedBasisThisSeason(session, user.id, season), shareUnit)
+            total += match
+    return int(total)
+
+
+def payrollOutlook(session, team, season: int, regularSeasonWeeks: int,
+                   shareUnit: float) -> dict:
+    """Whether this team is on course to fall short of next season's payroll at the
+    season-end check. None with payroll off or nothing owed."""
+    if not SALARY_ENABLED or team is None:
+        return None
+    owed = nextSeasonPayroll(team)
+    if owed <= 0:
+        return None
+    from database.models import TreasuryIncome
+    from managers import facilitiesManager, gateRevenue
+    balance = int(facilitiesManager.getTreasury(session, team.id))
+    gateSoFar = gateRevenue.gateThisSeason(session, team.id, season)
+    gateWeeks = session.query(TreasuryIncome).filter_by(
+        team_id=team.id, season=season, kind='gate').count()
+    weeksLeft = max(0, int(regularSeasonWeeks) - gateWeeks)
+    deposit = seasonEndDeposit(session, team.id, season, shareUnit)
+    projected = projectSeasonEndBalance(balance, gateSoFar, gateWeeks, weeksLeft, deposit)
+    return {
+        'owedNextSeason': owed,
+        'projectedBalance': projected,
+        'shortBy': max(0, owed - projected),
+    }

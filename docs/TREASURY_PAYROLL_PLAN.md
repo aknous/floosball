@@ -172,7 +172,9 @@ All sizes provisional; the harness sets them.
 - **League baseline** is share-denominated with payroll on: `FUNDING_BASELINE_SHARES` 0.15 (~820F at a 5,453F share unit), never under the flat 200F. Six minimum salaries plus upkeep on a level-2 set.
 - **API**: `salary` on team roster entries; `payroll` and `minimumSalary` on `/api/teams/{id}/facilities`.
 
-Not built yet: the in-season "payroll short" warning; trading reading payroll (trading is off). **The cut fee stays as it is** (owner, 2026-10-30): no buyout share of the salary owed.
+- **In-season warning** (2026-11-01): `payroll.payrollOutlook` projects the season-end balance (Treasury + the rest of the gate at the rate so far + the season-end deposit at fans' current balances, matched) against `nextSeasonPayroll`; the Facilities tab shows "Short by X. Fund the team or lose a player at season end." Salaries show on the team roster; the Treasury readout shows payroll.
+
+Not built yet: trading reading payroll (trading is off). **The cut fee stays as it is** (owner, 2026-10-30): no buyout share of the salary owed.
 
 ## 6. Phase 4: make it visible
 

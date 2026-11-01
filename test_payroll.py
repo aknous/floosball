@@ -142,5 +142,26 @@ class ContractTermTests(unittest.TestCase):
         self.assertEqual(len(terms), 1)
 
 
+
+class InSeasonWarningTests(unittest.TestCase):
+    """The warning projects the balance the season-end check will read, against what that
+    check counts as owed (`nextSeasonPayroll`)."""
+
+    def testGateIsProjectedAtTheRateEarnedSoFar(self):
+        # 10 weeks at 50F a week, 18 left, 300F deposit on top of a 1,000F Treasury.
+        self.assertEqual(payroll.projectSeasonEndBalance(1000, 500, 10, 18, 300), 1000 + 900 + 300)
+
+    def testNoGateYetProjectsNoGate(self):
+        self.assertEqual(payroll.projectSeasonEndBalance(400, 0, 0, 28, 0), 400)
+
+    def testOwedSkipsWalkYearAndRetiringPlayers(self):
+        # Mid-season termRemaining still counts this season: term 1 is a walk year.
+        staying = _player(88, term=2, salary=900)
+        walking = _player(92, term=1, salary=2000)
+        retiring = _player(85, term=3, salary=700)
+        retiring.willRetire = True
+        team = SimpleNamespace(rosterDict={'qb': staying, 'rb': walking, 'te': retiring})
+        self.assertEqual(payroll.nextSeasonPayroll(team), 900)
+
 if __name__ == '__main__':
     unittest.main()
