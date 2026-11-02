@@ -37,12 +37,12 @@ def test_trade_news_and_recap_rows_are_filtered():
 
 def test_the_transactions_page_stays_without_its_trade_sections():
     """Owner, 2026-10-16: the page comes back with trading off, minus the trade boards.
-    It opens at week 15 as before, and the endpoint empties trades and the block, ignores
-    pick ownership and drops the moves a trade forced."""
+    It is open all season (owner, 2026-11-02), and the endpoint empties trades and the
+    block, ignores pick ownership and drops the moves a trade forced."""
     api = _src('api/main.py')
     i = api.index('def _transactionsAvailable(')
     gate = api[i:api.index('\ndef ', i + 10)]
-    assert '_tradesHidden' not in gate, "the page opens on the week, trading on or off"
+    assert '_tradesHidden' not in gate, "the page is open trading on or off"
     i = api.index('@app.get("/api/transactions")')
     body = api[i:api.index('\n@app.', i + 10)]
     assert 'trades = [] if tradesHidden else' in body

@@ -1097,9 +1097,11 @@ async def get_players(
         elif status == 'hof':
             players = floosball_app.playerManager.hallOfFame
         elif status == 'fa':
-            # Active FA pool excludes prospects — they're in team pipelines.
+            # Active FA pool excludes prospects (they're in team pipelines) and the
+            # upcoming draft class (nobody can sign them).
             players = [p for p in floosball_app.playerManager.freeAgents
-                       if not getattr(p, 'is_prospect', False)]
+                       if not getattr(p, 'is_prospect', False)
+                       and not getattr(p, 'is_upcoming_rookie', False)]
         elif status == 'prospects':
             players = [p for p in floosball_app.playerManager.activePlayers
                        if getattr(p, 'is_prospect', False)]
@@ -1241,6 +1243,48 @@ def _prospectProjection(player):
         return None
 
 
+
+def _draftInfo(player):
+    """Who drafted this player and when, for the profile (owner, 2026-11-02).
+
+    {status: 'drafted', season, pick, teamId, teamName, teamCity, teamAbbr, teamColor}
+    from the `rookie_pick` recap row, the draft's own record: every pick since the draft
+    returned in season 6, written in pick order and kept across later offseasons.
+    ⚠️ NOT `drafting_team_id`, which promotion clears. The pick number is the row's place
+    among that season's picks. {status: 'class', season} for this season's incoming class,
+    {status: 'undrafted'} for a class player nobody picked, None for anyone from before the
+    draft (the league's founding players and the classes it skipped)."""
+    if getattr(player, 'is_upcoming_rookie', False):
+        sm = floosball_app.seasonManager if floosball_app else None
+        cs = getattr(sm, 'currentSeason', None) if sm else None
+        return {'status': 'class', 'season': getattr(cs, 'seasonNumber', None)}
+    try:
+        from database.connection import get_session
+        from database.models import SeasonRecapEvent
+        session = get_session()
+        try:
+            row = (session.query(SeasonRecapEvent)
+                   .filter(SeasonRecapEvent.event_type == 'rookie_pick',
+                           SeasonRecapEvent.player_id == player.id)
+                   .order_by(SeasonRecapEvent.id).first())
+            if row is None:
+                return {'status': 'undrafted'} if getattr(player, 'is_undrafted', False) else None
+            pick = (session.query(SeasonRecapEvent)
+                    .filter(SeasonRecapEvent.event_type == 'rookie_pick',
+                            SeasonRecapEvent.season == row.season,
+                            SeasonRecapEvent.id <= row.id).count())
+        finally:
+            session.close()
+    except Exception:
+        return None
+    team = next((t for t in (getattr(floosball_app.teamManager, 'teams', None) or [])
+                 if getattr(t, 'id', None) == row.team_id), None)
+    return {'status': 'drafted', 'season': row.season, 'pick': pick, 'teamId': row.team_id,
+            'teamName': getattr(team, 'name', None) or row.team_name,
+            'teamCity': getattr(team, 'city', None),
+            'teamAbbr': getattr(team, 'abbr', None) or row.team_abbr,
+            'teamColor': getattr(team, 'color', None)}
+
 @app.get("/api/players/{player_id}", response_model=Dict[str, Any])
 async def get_player(player_id: int, response: Response):
     """
@@ -1286,6 +1330,7 @@ async def get_player(player_id: int, response: Response):
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
         player_dict['isHof'] = bool(getattr(player, 'is_hof', False))
         player_dict['hofSeason'] = getattr(player, 'hof_season', None)
+        player_dict['draft'] = _draftInfo(player)
         # League records this player currently holds (shown on the profile).
         try:
             _rm = floosball_app.playerManager.serviceContainer.getService('records_manager')
@@ -5198,7 +5243,7 @@ async def get_stat_leaders(
 # Offensive slot -> the defensive slot that player also fills.
 _DEF_SLOT_FOR = {'QB': 'S', 'RB': 'LB', 'WR': 'CB', 'TE': 'DE'}
 _DEFENSIVE_POSITIONS = {'S', 'LB', 'CB', 'DE'}
-_PLAYER_STATUSES = ('active', 'fa', 'prospects', 'retired', 'followed')
+_PLAYER_STATUSES = ('active', 'fa', 'prospects', 'class', 'retired', 'followed')
 
 # The blobs a stat row is assembled from, and their empty shape.
 _STAT_GROUPS = ('passing', 'rushing', 'receiving', 'kicking', 'defense', 'returning')
@@ -5358,6 +5403,11 @@ def _statsPlayerRow(player, blobs, games, fantasyPoints, wpa, perf, defPerf,
 
 
 def _playerStatus(player, playerManager) -> str:
+    # The upcoming draft class has no team yet (its `team` is the string 'Upcoming
+    # Rookie'), so it used to fall through to 'fa' and fill the Free agents list with
+    # players nobody can sign (owner, 2026-11-02).
+    if getattr(player, 'is_upcoming_rookie', False):
+        return 'class'
     if getattr(player, 'is_prospect', False):
         return 'prospect'
     from floosball_player import PlayerServiceTime as _PST
@@ -5444,7 +5494,7 @@ async def get_stats_players(
         # are computed after the position and search filters and before status.
         facets = {key: 0 for key in _PLAYER_STATUSES}
         for p in candidates:
-            facets[{'prospect': 'prospects', 'retired': 'retired',
+            facets[{'prospect': 'prospects', 'retired': 'retired', 'class': 'class',
                     'active': 'active', 'fa': 'fa'}[_playerStatus(p, pm)]] += 1
             if p.id in followedIds:
                 facets['followed'] += 1
@@ -5452,7 +5502,8 @@ async def get_stats_players(
         if status == 'followed':
             selected = [p for p in candidates if p.id in followedIds]
         else:
-            wanted = {'active': 'active', 'fa': 'fa', 'prospects': 'prospect', 'retired': 'retired'}[status]
+            wanted = {'active': 'active', 'fa': 'fa', 'prospects': 'prospect', 'class': 'class',
+                      'retired': 'retired'}[status]
             selected = [p for p in candidates if _playerStatus(p, pm) == wanted]
 
         rows = []
@@ -12265,21 +12316,12 @@ def _tradesHidden() -> bool:
 
 
 def _transactionsAvailable(cs) -> bool:
-    """Whether the Transactions page is open: from week 15 (the week the in-season trade
-    window opens), through the deadline, the playoffs and the offseason. Closed before that.
-    Same rule with trading off, when the page serves no trade sections (owner, 2026-10-16)."""
-    import trading
-    from constants import TRADE_MIN_CERTAINTY
-    sm = floosball_app.seasonManager if floosball_app else None
-    if cs is None:
-        return False
-    if cs.isComplete or getattr(sm, '_offseasonFlowPhase', None) is not None:
-        return True
-    week = int(getattr(cs, 'currentWeek', 0) or 0)
-    played = _regularSeasonWeeksPlayed(getattr(cs, 'seasonNumber', 0) or 0)
-    if played:
-        week = max(week, played)
-    return trading.contentionRamp(max(week, 1)) >= TRADE_MIN_CERTAINTY
+    """Whether the Transactions page is open: from the start of the season, through the
+    playoffs and the offseason (owner, 2026-11-02: fans should see the upcoming draft class
+    and the possible free agents all season). It used to open at week 15, with the
+    in-season trade window; the trade sections still follow trading itself (empty while
+    trading is off), not this."""
+    return cs is not None
 
 
 def _isRegularSeason() -> bool:
