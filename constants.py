@@ -1297,9 +1297,13 @@ CONTRIBUTION_TX_TYPES = ('team_contribution', 'facility_contribution')
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
 FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
 # With payroll on the baseline is share-denominated (`payroll.leagueBaseline`), never under
-# the flat 200 above: six minimum salaries (0.06 shares) plus upkeep on a level-2 set
-# (5 x 0.015 = 0.075), rounded up. ~820F at a 5,453F share unit. PROVISIONAL (owner).
-FUNDING_BASELINE_SHARES = float(_os.environ.get('FLOOS_BASELINE_SHARES', '0.15'))
+# the flat 200 above. Was 0.15 (owner, 2026-10-30: six minimum salaries plus upkeep on a
+# level-2 set). Raised to 0.25 (~1,460F at a 5,850F share unit) for retention (2026-11-01:
+# target ~60% of walk-year players rated 76+ staying): at 0.15 most teams lived on the
+# baseline and could not afford to keep anyone good once grandfathered contracts expired,
+# and retention among 76+ slid to 36-57%; at 0.25 it settles at 55-60% with no forced cuts,
+# and the money gap between the most- and least-fanned teams narrows slightly.
+FUNDING_BASELINE_SHARES = float(_os.environ.get('FLOOS_BASELINE_SHARES', '0.25'))
 # Tiers are assigned by a team's share of total league funding. A team's
 # ratio = effective_funding / (total_league_funding / num_teams). That is,
 # "how many fair-shares of the league's floobits does this team hold?"
