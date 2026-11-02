@@ -377,7 +377,7 @@ def test_the_offseason_pass_prices_in_OFFSEASON_terms():
     `nowWeight` RESETS to parity, which removes the buyer/seller asymmetry entirely — so
     the offseason market cannot run on contention and runs on the other three triggers."""
     src = inspect.getsource(SeasonManager._runOffseasonTradePass)
-    assert 'season, None)' in src, "the offseason pass is priced with an in-season week"
+    assert 'season, None,' in src, "the offseason pass is priced with an in-season week"
 
     import trading
     assert trading.seasonsOfControl(1, None) == 1.0
@@ -695,7 +695,7 @@ def test_the_offseason_still_trades_with_NO_backfill():
     an offseason trade for want of a backfill refuses it over a problem that resolves
     itself a few steps later."""
     src = inspect.getsource(tradeManager.settleTrade)
-    assert 'if backfill is None and week is not None:' in src, \
+    assert 'fillHoles = week is not None' in src and 'if backfill is None and fillHoles:' in src, \
         "the offseason still declines a trade it cannot backfill"
     print("PASS an offseason seller may leave the slot for the draft")
 
