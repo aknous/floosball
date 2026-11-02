@@ -239,3 +239,41 @@ def test_aReSignBudgetCanLookOnlyAtTheFirstSeasons():
     # 1,000F now, 200F a season of income: a 600F, 4-season deal fits two seasons, not four.
     assert payroll.maxAffordable([], 4, 1000, 200, 0) < 600
     assert payroll.maxAffordable([], 4, 1000, 200, 0, seasons=2) >= 600
+
+
+# ── roster planning (owner, 2026-11-01) ────────────────────────────────────────────────
+
+def test_aTightBudgetSpreadsOverItsHolesInsteadOfOneStar():
+    # Three holes, 3,000F. A star (gain 30, 2,600F) leaves only scraps for the other two;
+    # three solid players (gain 15 each, 900F) add up to more.
+    slots = [[(1, 30.0, 2600), (2, 15.0, 900)], [(3, 15.0, 900)], [(4, 15.0, 900)]]
+    assert faMarket.planRoster(slots, 3000) == [(2, 900), (3, 900), (4, 900)]
+
+
+def test_aRichTeamTakesTheStar():
+    slots = [[(1, 30.0, 2600), (2, 15.0, 900)], [(3, 15.0, 900)], [(4, 15.0, 900)]]
+    assert faMarket.planRoster(slots, 10000)[0] == (1, 2600)
+
+
+def test_aStarWorthGuttingTheRestForIsTaken():
+    slots = [[(1, 60.0, 2600), (2, 15.0, 900)], [(3, 15.0, 900)]]
+    assert faMarket.planRoster(slots, 3000) == [(1, 2600), (None, 0)]
+
+
+def test_thePlanNeverPicksOnePlayerTwice():
+    # Two WR slots both want player 1 most.
+    slots = [[(1, 20.0, 500), (2, 10.0, 400)], [(1, 20.0, 500), (3, 8.0, 300)]]
+    plan = faMarket.planRoster(slots, 5000)
+    picked = [p for p, _c in plan if p is not None]
+    assert len(picked) == len(set(picked)) and 1 in picked
+
+
+def test_nothingThatFitsMeansNoTarget():
+    assert faMarket.planRoster([[(1, 20.0, 5000)]], 1000) == [(None, 0)]
+
+
+def test_theGreedyFallbackRespectsTheBudget():
+    slots = [[(10 * i + j, float(20 - j), 400 + 100 * j) for j in range(6)] for i in range(6)]
+    plan = faMarket.planRoster(slots, 2500, enumCap=10)
+    assert sum(c for _p, c in plan) <= 2500
+    assert sum(1 for p, _c in plan if p is not None) >= 4

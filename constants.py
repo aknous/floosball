@@ -2427,6 +2427,7 @@ FA_MAX_BID_EDGE = 0.5           # walk-away price = ask x (1 + this x edge over 
 # dont go to 2x"; at an edge weight of 1.0 and no cap, top salaries ran to ~2x the ask).
 FA_MAX_BID_CAP = 1.4
 FA_LIST_LENGTH = 8              # free agents a team will try for one slot
+FA_PLAN_TOP = 5                 # candidates per slot the roster plan weighs (owner, 2026-11-01)
 # Motives: the pull, as a share of the player's asking salary, toward the teams he likes.
 FA_HOMETOWN_DISCOUNT = 0.20     # for his home team (the team that drafted him)
 FA_WINNER_PULL = 0.20           # x the team's recent success, 0-1 relative to the league

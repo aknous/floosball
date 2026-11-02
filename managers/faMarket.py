@@ -28,7 +28,7 @@ from constants import (FA_MARKET_ENABLED, FA_MARKET_ROUNDS, FA_ASK_DECAY, FA_MIN
                        FA_MAX_BID_EDGE, FA_MAX_BID_CAP, FA_LIST_LENGTH, FA_HOMETOWN_DISCOUNT, FA_WINNER_PULL,
                        FA_COMFORT_PULL, FA_OPPORTUNITY_ASK, FA_HISTORY_SEASONS,
                        FA_MOTIVE_PERSONALITY, FA_RESIGN_RESERVATION, FA_LOYALTY_PER_SEASON,
-                       FA_LOYALTY_MAX, FA_RESIGN_OFFER_REACH)
+                       FA_LOYALTY_MAX, FA_RESIGN_OFFER_REACH, FA_PLAN_TOP)
 
 from logger_config import get_logger
 logger = get_logger('floosball.faMarket')
@@ -298,6 +298,59 @@ def resolve(asks: dict, motives: dict, wants: list, rank: dict, pull, room: dict
     return {pid: (wid, salary) for pid, (wid, salary, _s) in held.items()}, events
 
 
+# ─── Roster planning (owner, 2026-11-01) ─────────────────────────────────────────────────
+#
+# "how do they know they shouldnt go after an expensive player because they will only be
+# able to afford league minimum after that?" Before bidding, each team weighs its slots
+# together: one option per slot it is shopping (a candidate, or nobody), the combination
+# worth the most that fits its budget. The plan orders its lists (the planned target first)
+# and caps each bid so it cannot spend what the other slots were planned to use.
+
+def planRoster(options: list, budget: float, top: int = FA_PLAN_TOP, enumCap: int = 4000) -> list:
+    """options: per slot, [(playerId, gain, cost)]: gain is how much better the roster gets
+    (in the GM's board value), cost the budget it uses. Returns, per slot, (playerId or None,
+    cost) for the combination with the most total gain whose cost fits `budget`, never the
+    same player for two slots. Small: an exhaustive search over each slot's best `top`
+    options; a greedy fill by gain per Floobit past `enumCap` combinations."""
+    import itertools
+    opts = [[(None, 0.0, 0.0)] + sorted((o for o in slot if o[1] > 0), key=lambda o: -o[1])[:top]
+            for slot in options]
+    combos = 1
+    for o in opts:
+        combos *= len(o)
+    best, bestKey = [(None, 0.0)] * len(opts), (0.0, 0.0)
+    if combos <= enumCap:
+        for choice in itertools.product(*opts):
+            pids = [c[0] for c in choice if c[0] is not None]
+            if len(pids) != len(set(pids)):
+                continue
+            cost = sum(c[2] for c in choice)
+            if cost > budget:
+                continue
+            key = (sum(c[1] for c in choice), -cost)
+            if key > bestKey:
+                bestKey, best = key, [(c[0], c[2]) for c in choice]
+        return best
+    chosen = [(None, 0.0, 0.0)] * len(opts)
+    while True:
+        spent = sum(c[2] for c in chosen)
+        used = {c[0] for c in chosen if c[0] is not None}
+        pick, pickRatio = None, 0.0
+        for i, slot in enumerate(opts):
+            for o in slot[1:]:
+                if o[0] in used:
+                    continue
+                dGain, dCost = o[1] - chosen[i][1], o[2] - chosen[i][2]
+                if dGain <= 0 or spent + dCost > budget:
+                    continue
+                ratio = dGain / max(1.0, dCost)
+                if ratio > pickRatio:
+                    pick, pickRatio = (i, o), ratio
+        if pick is None:
+            return [(c[0], c[2]) for c in chosen]
+        chosen[pick[0]] = pick[1]
+
+
 def walkAwayPrice(ask: int, value: float, nextValue: float) -> int:
     """The most a team pays: the asking salary, scaled up by how much better this player
     is than its next option (`FA_MAX_BID_EDGE`), never past `FA_MAX_BID_CAP` times it."""
@@ -440,6 +493,8 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                     values[p.id] = float(brain.decisionValue(p, coach, team=team))
                 return values[p.id]
 
+            drafts = []
+
             def eligible(f):
                 if f.id in released[team.id]:
                     return False            # not back the same offseason he was let go
@@ -480,14 +535,61 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                         relFee = int(cutFeeFor(inc))
                     if not cands:
                         continue
+                    if baseline is None:
+                        # Skipping an open slot leaves it to the fill step after the market,
+                        # which signs the cheapest player left: that is what a signing beats.
+                        cheapest = min(fas, key=lambda f: asks[f.id])
+                        floor = value(cheapest)
+                    drafts.append({'slot': slot, 'posVal': posVal, 'cands': cands, 'term': term,
+                                   'release': release, 'relSal': relSal, 'relFee': relFee,
+                                   'base': baseline if baseline is not None else floor,
+                                   'open': baseline is None})
+
+            # THE ROSTER PLAN: one option per slot, the most gain that fits the budget once
+            # every open slot has its minimum held back.
+            if drafts:
+                minimum = payroll.minimumSalary()
+                openSlots = sum(1 for s in SLOTS if team.rosterDict.get(s) is None)
+                budget = room[team.id] - minimum * openSlots
+
+                def costOf(d, f, salary):
+                    if d['open']:
+                        return salary - minimum
+                    return salary - d['relSal'] + d['relFee']
+
+                plan = planRoster([[(f.id, value(f) - d['base'], costOf(d, f, asks[f.id])) for f in d['cands']]
+                                   for d in drafts], budget)
+                slack = budget - sum(c for _p, c in plan)
+                logger.info("FA market plan: " + json.dumps({
+                    'season': season, 'pass': passNo, 'team': getattr(team, 'abbr', team.name),
+                    'budget': None if budget == float('inf') else int(budget),
+                    'slots': [{'slot': d['slot'], 'upgrade': not d['open'],
+                               'target': poolById[t].name if t is not None else None,
+                               'cost': int(c)} for d, (t, c) in zip(drafts, plan)]}))
+                for d, (target, plannedCost) in zip(drafts, plan):
+                    # This slot may spend what the plan gave it plus whatever no slot was
+                    # planned to use; never what the team's other slots were planned to.
+                    avail = plannedCost + slack
+                    byValue = d['cands']
                     ranked = []
-                    for i, f in enumerate(cands):
-                        nxt = (value(cands[i + 1]) if i + 1 < len(cands)
-                               else (baseline if baseline is not None else value(f)))
-                        ranked.append((f.id, walkAwayPrice(asks[f.id], value(f), nxt)))
-                    wants.append(Want(wid=wid, teamId=team.id, slot=slot, posVal=posVal,
-                                      candidates=ranked, release=release,
-                                      releaseSalary=relSal, releaseFee=relFee, term=term))
+                    for i, f in enumerate(byValue):
+                        nxt = value(byValue[i + 1]) if i + 1 < len(byValue) else d['base']
+                        walk = walkAwayPrice(asks[f.id], value(f), nxt)
+                        cap = asks[f.id] + (avail - costOf(d, f, asks[f.id]))
+                        floorAsk = asks[f.id] * (FA_OPPORTUNITY_ASK if motives[f.id] == 'opportunity' else 1.0)
+                        maxBid = int(min(walk, cap)) if cap != float('inf') else walk
+                        gain = value(f) - d['base']
+                        if gain <= 0 or maxBid < floorAsk:
+                            continue
+                        ranked.append((f.id, maxBid, gain / max(1.0, costOf(d, f, asks[f.id]))))
+                    # The planned target first, then the rest by value per Floobit.
+                    ranked.sort(key=lambda r: (r[0] != target, -r[2]))
+                    if not ranked:
+                        continue
+                    wants.append(Want(wid=wid, teamId=team.id, slot=d['slot'], posVal=d['posVal'],
+                                      candidates=[(pid, mb) for pid, mb, _r in ranked],
+                                      release=d['release'], releaseSalary=d['relSal'],
+                                      releaseFee=d['relFee'], term=d['term']))
                     wid += 1
 
         signings, offers = resolve(asks, motives, wants, rank, pull, room)
