@@ -97,3 +97,43 @@ def test_aClassTheNewCodeGeneratedIsNotDrawnAgain():
     r = _P(1)
     sm._drawTalentForLegacyClass([r], 14)
     assert r.applied == [] and r.talentShift == 0
+
+
+class _GrowPM:
+    def __init__(self, size):
+        self.size, self.activePlayers, self.saved, self.calls = size, [], 0, []
+
+    def rookieClassSize(self):
+        return self.size
+
+    def _generateRookieClass(self, season, count=None):
+        self.calls.append(count)
+        return [_P(1000 + i + 100 * len(self.calls)) for i in range(count)]
+
+    def addToPositionList(self, p):
+        pass
+
+    def sortPlayersByPosition(self):
+        pass
+
+    def savePlayerData(self):
+        self.saved += 1
+
+
+def test_aShortLegacyClassGrowsToFullSizeOnce():
+    pm = _GrowPM(48)
+    sm = _sm(pm)
+    existing = [_P(i) for i in range(32)]
+    sm._growLegacyClass(existing, 13)
+    assert pm.calls == [16]
+    added = [p for p in pm.activePlayers]
+    assert len(added) == 16 and all(p.is_upcoming_rookie and p.team == 'Upcoming Rookie' for p in added)
+    sm._growLegacyClass(existing + added, 13)    # a restart: full, and marked
+    sm._growLegacyClass(existing, 13)            # even if the save had been lost
+    assert pm.calls == [16] and pm.saved == 1
+
+
+def test_aFullClassIsLeftAlone():
+    pm = _GrowPM(48)
+    _sm(pm)._growLegacyClass([_P(i) for i in range(48)], 14)
+    assert pm.calls == []

@@ -4321,7 +4321,7 @@ class PlayerManager:
         # is there for a good scout to find. The undrafted wash out (washOutUndrafted).
         return int(round(numTeams * ROOKIE_CLASS_PER_TEAM))
 
-    def _generateRookieClass(self, currentSeason: int) -> List:
+    def _generateRookieClass(self, currentSeason: int, count: int = None) -> List:
         """Generate this season's rookie class — one prospect per club.
 
         Returns the new rookies (not yet added to freeAgents or activePlayers).
@@ -4349,7 +4349,8 @@ class PlayerManager:
                                PROSPECT_ENTRY_DISCOUNT, LATE_BLOOM_ENABLED,
                                LATE_BLOOM_CHANCE, LATE_BLOOM_MIN, LATE_BLOOM_MAX)
 
-        numRookies = self.rookieClassSize()
+        # `count` tops up a class short of `rookieClassSize` (seasonManager._growLegacyClass).
+        numRookies = int(count) if count else self.rookieClassSize()
         physicalSeeds = np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
                                                  numRookies), 60, 100).tolist()
         mentalSeeds = np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,

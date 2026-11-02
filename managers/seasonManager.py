@@ -442,8 +442,10 @@ class SeasonManager:
                 logger.info(f"Rookie class already exists ({len(existingUpcoming)} "
                             f"players) — reusing")
                 self._drawTalentForLegacyClass(existingUpcoming, seasonNumber)
+                self._growLegacyClass(existingUpcoming, seasonNumber)
             else:
                 self._writeTalentClassMarker(seasonNumber)
+                self._writeClassGrownMarker(seasonNumber)
                 rookies = self.playerManager._generateRookieClass(seasonNumber)
                 for r in rookies:
                     r.is_upcoming_rookie = True
@@ -13288,6 +13290,23 @@ class SeasonManager:
         finally:
             session.close()
 
+    def _writeClassGrownMarker(self, season: int) -> None:
+        """Record that `season`'s class was generated at full size (nothing to grow)."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        from database.connection import get_session
+        from database.models import AppSetting
+        session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key=self.CLASS_GROWN_KEY).first()
+            if row is None:
+                session.add(AppSetting(key=self.CLASS_GROWN_KEY, value=str(int(season))))
+            else:
+                row.value = str(int(season))
+            session.commit()
+        finally:
+            session.close()
+
     def _drawTalentForLegacyClass(self, rookies: list, season: int) -> None:
         """A draft class the old code generated has no hidden talent: draw it now, once.
 
@@ -13325,6 +13344,52 @@ class SeasonManager:
                         f"{drawn} of {len(rookies)} prospects")
         except Exception as e:
             logger.error(f"Could not draw hidden talent for the season {season} class: {e}")
+
+    CLASS_GROWN_KEY = 'prospect_class_grown_season'
+
+    def _growLegacyClass(self, rookies: list, season: int) -> None:
+        """A draft class the old code generated at one prospect per team: add the rest, once.
+
+        Owner, 2026-11-02: season 13 rolled over a few hours before classes grew to
+        ROOKIE_CLASS_PER_TEAM (1.5) per team, and the owner wanted this season's pool grown
+        too. The additions come from the normal generator, so they carry hidden talent like
+        any new class; the existing prospects get theirs from `_drawTalentForLegacyClass`,
+        which runs first and marks its draw, so nobody is drawn twice.
+        ⚠️ THE MARKER IS WRITTEN FIRST, as there: a failed save after it leaves the class at
+        its old size rather than a restart adding another batch on top."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            missing = int(self.playerManager.rookieClassSize()) - len(rookies)
+            if missing <= 0:
+                return
+            from database.connection import get_session
+            from database.models import AppSetting
+            session = get_session()
+            try:
+                row = session.query(AppSetting).filter_by(key=self.CLASS_GROWN_KEY).first()
+                if row is not None and row.value == str(int(season)):
+                    return
+                if row is None:
+                    session.add(AppSetting(key=self.CLASS_GROWN_KEY, value=str(int(season))))
+                else:
+                    row.value = str(int(season))
+                session.commit()
+            finally:
+                session.close()
+            added = self.playerManager._generateRookieClass(season, count=missing)
+            for r in added:
+                r.is_upcoming_rookie = True
+                r.team = 'Upcoming Rookie'
+                if r not in self.playerManager.activePlayers:
+                    self.playerManager.activePlayers.append(r)
+                self.playerManager.addToPositionList(r)
+            self.playerManager.sortPlayersByPosition()
+            self.playerManager.savePlayerData()
+            logger.info(f"Season {season} draft class had {len(rookies)} prospects; added "
+                        f"{len(added)} to reach {len(rookies) + len(added)}")
+        except Exception as e:
+            logger.error(f"Could not grow the season {season} draft class: {e}")
 
     def _topUpFlatBaseline(self, session, season: int, leagueBaseline: int) -> None:
         """A season whose funding was created by the old code paid every team the flat
