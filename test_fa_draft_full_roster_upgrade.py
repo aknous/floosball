@@ -16,7 +16,18 @@ Run: .venv/bin/python -m pytest -q test_fa_draft_full_roster_upgrade.py
 import logging
 logging.disable(logging.WARNING)
 
+import pytest
+
 from managers.playerManager import PlayerManager
+
+
+@pytest.fixture(autouse=True)
+def _treasuryCoversTheFee(monkeypatch):
+    # The upgrade charges a cut fee from the team's Treasury. These tests are about who gets
+    # a turn, not the fee, so the fee is always covered rather than read from whatever
+    # database the run happens to point at (an empty one refused it and failed the test).
+    from managers import facilitiesManager
+    monkeypatch.setattr(facilitiesManager, 'chargeCutFee', lambda teamId, fee: True)
 
 
 class Pos:
