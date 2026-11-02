@@ -2398,6 +2398,13 @@ DONATION_MATCH_CAP_SHARES = 0.18
 # kicker about a third. The asking price is then scaled by comparable contracts (`marketRate`).
 # The minimum, ~55F, is what every roster spot costs at least.
 SALARY_ENABLED = True
+# Whether contracts ever CHARGE salaries (owner, 2026-11-02: the treasury, facilities and
+# prospects ship now; salaries and the free agency market are not ready). Off, salaries never
+# start: `payroll.salariesActive()` is False, nothing is stamped toward a start, and the market
+# stays dormant, while SALARY_ENABLED keeps the share-denominated league baseline the facilities
+# are priced against. Turned on later, the next season to start is the first funded one and
+# salaries charge from its end, so teams get a full season's warning.
+SALARIES_CHARGE_ENABLED = False
 SALARY_MIN_SHARES = 0.01
 SALARY_FLOOR_RATING = 68
 SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '0.6'))

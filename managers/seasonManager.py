@@ -437,7 +437,9 @@ class SeasonManager:
             if existingUpcoming:
                 logger.info(f"Rookie class already exists ({len(existingUpcoming)} "
                             f"players) — reusing")
+                self._drawTalentForLegacyClass(existingUpcoming, seasonNumber)
             else:
+                self._writeTalentClassMarker(seasonNumber)
                 rookies = self.playerManager._generateRookieClass(seasonNumber)
                 for r in rookies:
                     r.is_upcoming_rookie = True
@@ -13141,6 +13143,95 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to restore reigning champion: {e}")
 
+    TALENT_CLASS_KEY = 'prospect_talent_class_season'
+
+    def _writeTalentClassMarker(self, season: int) -> None:
+        """Record that `season`'s draft class has its hidden talent drawn."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        from database.connection import get_session
+        from database.models import AppSetting
+        session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key=self.TALENT_CLASS_KEY).first()
+            if row is None:
+                session.add(AppSetting(key=self.TALENT_CLASS_KEY, value=str(int(season))))
+            else:
+                row.value = str(int(season))
+            session.commit()
+        finally:
+            session.close()
+
+    def _drawTalentForLegacyClass(self, rookies: list, season: int) -> None:
+        """A draft class the old code generated has no hidden talent: draw it now, once.
+
+        Owner, 2026-11-02: season 13 rolled over a few hours before prospects' hidden
+        talent shipped, so its class was generated without it. Nobody has played a snap,
+        and the draw moves only trueSkill and potential (never the debut rating), which the
+        public consensus excludes, so nothing fans see changes.
+        ⚠️ THE MARKER IS WRITTEN FIRST. If the save after it fails, a restart finds the
+        marker and draws nothing, leaving the class as the old code made it; written
+        after, a crash between the two would draw a second shift on top of the first."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import AppSetting
+            session = get_session()
+            try:
+                row = session.query(AppSetting).filter_by(key=self.TALENT_CLASS_KEY).first()
+                if row is not None and row.value == str(int(season)):
+                    return
+            finally:
+                session.close()
+            self._writeTalentClassMarker(season)
+            drawn = 0
+            for p in rookies:
+                if int(getattr(p, 'talentShift', 0) or 0) != 0:
+                    continue
+                shift = self.playerManager.drawTalentShift()
+                if shift:
+                    p.shiftTalent(shift)
+                    p.talentShift = shift
+                    drawn += 1
+            self.playerManager.savePlayerData()
+            logger.info(f"Season {season} draft class predates hidden talent: drew it for "
+                        f"{drawn} of {len(rookies)} prospects")
+        except Exception as e:
+            logger.error(f"Could not draw hidden talent for the season {season} class: {e}")
+
+    def _topUpFlatBaseline(self, session, season: int, leagueBaseline: int) -> None:
+        """A season whose funding was created by the old code paid every team the flat
+        FUNDING_BASELINE_PER_TEAM; top each team up to the share-denominated baseline.
+
+        Owner, 2026-11-02: season 13 rolled over under the old code a few hours before
+        the treasury shipped, so its teams got 200F where the new baseline is ~0.25 of a
+        share. Only rows still carrying exactly the flat amount are touched, and the row is
+        rewritten to the new figure in the same commit as the Treasury credit, so this
+        runs once and is a no-op for any season the new code created (or if the new
+        baseline is not above the flat one)."""
+        from constants import FUNDING_BASELINE_PER_TEAM
+        from database.models import TeamFunding, TeamTreasury
+        flat = int(FUNDING_BASELINE_PER_TEAM)
+        add = int(leagueBaseline) - flat
+        if add <= 0:
+            return
+        rows = session.query(TeamFunding).filter_by(season=season, baseline_funding=flat).all()
+        if not rows:
+            return
+        for r in rows:
+            r.baseline_funding = int(leagueBaseline)
+            r.current_funding = int(r.current_funding or 0) + add
+            r.effective_funding = int(r.effective_funding or 0) + add
+            t = session.query(TeamTreasury).filter_by(team_id=r.team_id).first()
+            if t is None:
+                session.add(TeamTreasury(team_id=r.team_id, balance=int(leagueBaseline)))
+            else:
+                t.balance = int(t.balance or 0) + add
+        session.commit()
+        logger.info(f"Season {season} funding was created under the flat {flat}F baseline: "
+                    f"topped {len(rows)} team(s) up by {add}F to {leagueBaseline}F")
+
     def _initializeTeamFunding(self, currentSeason: int) -> None:
         """Create TeamFunding records at season start with league baseline + carry-forward.
         Assigns initial tiers so teams have funding effects from week 1."""
@@ -13190,6 +13281,7 @@ class SeasonManager:
                 # Check if records already exist for this season (resume after restart)
                 existing = session.query(TeamFunding).filter_by(season=currentSeason).first()
                 if existing:
+                    self._topUpFlatBaseline(session, currentSeason, leagueBaseline)
                     # Records already created — just load tiers onto runtime teams
                     records = session.query(TeamFunding).filter_by(season=currentSeason).all()
                     tierMap = {

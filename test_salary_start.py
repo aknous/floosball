@@ -30,7 +30,10 @@ from managers.seasonManager import SeasonManager  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(monkeypatch):
+    # These test how salaries START; charging itself is switched off for now (owner,
+    # 2026-11-02), which `test_salariesNeverStartWhileChargingIsOff` covers.
+    monkeypatch.setattr(payroll, 'SALARIES_CHARGE_ENABLED', True)
     s = get_session()
     s.query(AppSetting).filter(AppSetting.key.in_(
         [payroll.FIRST_FUNDED_KEY, payroll.SALARIES_FROM_KEY])).delete(synchronize_session=False)
@@ -94,3 +97,18 @@ def test_theStampWritesOnTheCallersOpenWrite():
 def test_noFundedSeasonMeansNoStart():
     assert payroll.markSalariesStartIfDue(13) is False
     assert not payroll.salariesActive()
+
+
+def test_salariesNeverStartWhileChargingIsOff(monkeypatch):
+    """Owner, 2026-11-02: the treasury ships, salaries do not. Nothing is stamped toward a
+    start and contracts stay unpaid, while the league baseline stays share-denominated."""
+    monkeypatch.setattr(payroll, 'SALARIES_CHARGE_ENABLED', False)
+    s = get_session()
+    payroll.markFundedSeasonStarted(13, s)
+    s.commit()
+    s.close()
+    assert payroll._readSetting(payroll.FIRST_FUNDED_KEY) is None
+    assert payroll.markSalariesStartIfDue(13) is False
+    payroll.resetSalariesActiveCache()
+    assert payroll.salariesActive() is False
+    assert payroll.leagueBaseline(5000) == 1250

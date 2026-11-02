@@ -15,7 +15,7 @@ reads payroll sums ROSTERED players, and the API shows a salary only for them.
 """
 import logging
 
-from constants import (POSITION_VALUE, SALARY_ENABLED, SALARY_MIN_SHARES, SALARY_FLOOR_RATING,
+from constants import (POSITION_VALUE, SALARY_ENABLED, SALARIES_CHARGE_ENABLED, SALARY_MIN_SHARES, SALARY_FLOOR_RATING,
                        SALARY_TOP_SHARES, SALARY_EXPONENT, SALARY_PROSPECT_FRACTION)
 
 from logger_config import get_logger
@@ -249,7 +249,7 @@ def salariesActive() -> bool:
     this for every signing. ⚠️ FAILS CLOSED to "not yet" when the setting cannot be read,
     which is the pre-payroll behavior every path already handles."""
     global _activeCache
-    if not SALARY_ENABLED:
+    if not (SALARY_ENABLED and SALARIES_CHARGE_ENABLED):
         return False
     import time
     at, value = _activeCache
@@ -275,7 +275,7 @@ def markFundedSeasonStarted(season: int, session) -> None:
     (`_initializeTeamFunding`) holds an open write, and SQLite has one writer: a second
     session here waits out the 30s busy_timeout and fails "database is locked" (measured on
     the first run), which also freezes the event loop the API shares."""
-    if not SALARY_ENABLED:
+    if not (SALARY_ENABLED and SALARIES_CHARGE_ENABLED):
         return
     from database.models import AppSetting
     if session.query(AppSetting).filter_by(key=FIRST_FUNDED_KEY).first() is None:
@@ -287,7 +287,7 @@ def markFundedSeasonStarted(season: int, session) -> None:
 def markSalariesStartIfDue(completedSeason: int) -> bool:
     """Season end: once the first funded season has been played through, salaries start.
     Returns True the moment they do."""
-    if not SALARY_ENABLED or _readSetting(SALARIES_FROM_KEY) is not None:
+    if not (SALARY_ENABLED and SALARIES_CHARGE_ENABLED) or _readSetting(SALARIES_FROM_KEY) is not None:
         return False
     first = _readSetting(FIRST_FUNDED_KEY)
     if first is None or int(completedSeason) < int(first):
