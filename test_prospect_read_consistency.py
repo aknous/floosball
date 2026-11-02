@@ -35,20 +35,24 @@ def _prospect(drafted=True):
         computeCeilingRating=lambda unseen=0.0: 74.0, computeExpectedRating=lambda unseen=0.0: 72.0,
         # The consensus (vision 0) differs from the truth (vision 1) for a prospect
         # carrying hidden talent.
-        projectionFor=lambda vision=0.0: (72.0, 74.0) if vision == 0 else (80.0, 84.0))
+        projectionFor=lambda vision=0.0: (72.0, 74.0) if vision == 0 else (80.0, 84.0),
+        projectionRange=lambda vision=0.0: (64.0, 72.0, 80.0) if vision == 0 else (80.0, 80.0, 80.0))
 
 
 class ProspectProjectionTest(unittest.TestCase):
     def test_projection_is_the_public_consensus_drafted_or_not(self):
         for drafted in (True, False):
             self.assertEqual(M._prospectProjection(_prospect(drafted)),
-                             {'expected': 72.0, 'ceiling': 74.0})
+                             {'expected': 72.0, 'low': 64.0, 'high': 80.0})
 
     def test_no_fan_facing_endpoint_serves_a_scouted_read(self):
         # The API layer must never reach the per-team scouting model or ship a band.
         src = open(os.path.join(HERE, 'api', 'main.py')).read()
         self.assertIsNone(re.search(r'prospect_scouting|scoutedView|believedPotential', src))
         self.assertNotIn('ceilingRange', src)
+        # Owner, 2026-11-02: a range, not a ceiling (the consensus ceiling was not one).
+        self.assertNotIn('"ceiling"', src)
+        self.assertNotIn("player_dict['ceiling']", src)
 
     def test_every_prospect_surface_uses_the_one_projection(self):
         src = open(os.path.join(HERE, 'api', 'main.py')).read()

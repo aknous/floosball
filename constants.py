@@ -126,6 +126,13 @@ PROSPECT_TALENT_SHIFT_MAX = 30          # clamp, attribute points
 # How much of the shift the public has seen, by career seasons (pro + pipeline). Revealed
 # gradually as he develops (owner: gradual, no reveal moment). Index past the end = 1.0.
 PROSPECT_TALENT_REVEALED = [0.0, 0.35, 0.65, 0.85, 1.0]
+# What fans are shown is a RANGE, not a forecast (owner, 2026-11-02: "the prospect's future is
+# unknown"). It is the consensus projection widened by the hidden talent the public cannot see
+# yet: +/- PROSPECT_RANGE_SPREAD attribute points (the interval holding 80% of the hidden-talent
+# mixture above) times the share still unrevealed, so it is widest on draft day and closes to one
+# number as a player develops (`Player.projectionRange`). Development luck is left out: at
+# DEV_LUCK_SD 0.8 a season it is about a rating point over a career.
+PROSPECT_RANGE_SPREAD = 13.0
 #
 # DEVELOPMENT LUCK (what nobody can see). Each offseason a RISING player's trueSkill and
 # potential take one shared step: N(drift, DEV_LUCK_SD), drift = (devBias - the league's

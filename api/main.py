@@ -1224,21 +1224,23 @@ def _viewingClubFor(user):
 
 
 def _prospectProjection(player):
-    """A player's PUBLIC projection for fans: `{expected, ceiling}`, or None.
+    """A player's PUBLIC projection for fans: `{expected, low, high}`, or None.
 
-    expected = overall at trueSkill (natural development)
-    ceiling  = overall at potential (perfect development)
+    A RANGE, not a forecast (owner, 2026-11-02: a prospect's future is unknown).
+    `expected` is the consensus point and `low`/`high` the range the hidden talent the public
+    cannot see yet leaves around it (`Player.projectionRange(0)`): widest on draft day, one
+    number once a player's talent is known. It replaced `{expected, ceiling}`: with hidden
+    talent and development luck, the consensus ceiling was below the true ceiling for about
+    half of all prospects, so it promised a limit that did not exist.
 
-    ⚠️ FANS SEE THE PUBLIC CONSENSUS (owner, 2026-10-30, docs/PROSPECT_UNCERTAINTY_PLAN.md).
-    It used to be the truth (2026-09-27), and the truth is now partly hidden talent that only
-    good scouts can see: showing it would tell fans who the busts and diamonds are before any
-    GM knew. The consensus is the projection with the unrevealed part of the shift taken back
-    out (`Player.projectionFor(0)`); it closes on the truth as the player develops. ⚠️ The
-    2026-09-27 rule's real point stands: ONE number on every page, never a per-club band.
+    ⚠️ FANS SEE THE PUBLIC CONSENSUS (owner, 2026-10-30, docs/PROSPECT_UNCERTAINTY_PLAN.md):
+    the truth carries hidden talent only good scouts can see. ⚠️ The 2026-09-27 rule's real
+    point stands: ONE projection on every page, never a per-club band.
     """
     try:
-        expected, ceiling = player.projectionFor(0.0)
-        return {"expected": round(float(expected), 1), "ceiling": round(float(ceiling), 1)}
+        low, mid, high = player.projectionRange(0.0)
+        return {"expected": round(float(mid), 1), "low": round(float(low), 1),
+                "high": round(float(high), 1)}
     except Exception:
         return None
 
@@ -1324,7 +1326,8 @@ async def get_player(player_id: int, response: Response):
         # player, prospects included: see `_prospectProjection`.
         projection = _prospectProjection(player) or {}
         player_dict['expected'] = projection.get('expected')
-        player_dict['ceiling'] = projection.get('ceiling')
+        player_dict['projectionLow'] = projection.get('low')
+        player_dict['projectionHigh'] = projection.get('high')
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
@@ -9454,36 +9457,15 @@ def get_player_rating_history(player_id: int):
                 "defensiveRating": getattr(player, 'defensiveRating', None),
             })
 
-    # Projected markers — dotted reference lines on the progression chart:
-    #   expected = top rating at trueSkill (natural development)
-    #   ceiling  = top rating at potential (perfect development)
-    # Only for active players (live attrs); hidden for undrafted prospects so the
-    # profile can't leak what the rookie-ballot scouting range deliberately blurs.
-    # The public consensus for every active player, prospects included (see
-    # `_prospectProjection`): hidden talent stays hidden here too.
-    expected = None
-    ceiling = None
-    if player is not None and hasattr(player, 'projectionFor'):
-        try:
-            expected, ceiling = player.projectionFor(0.0)
-        except Exception:
-            expected = None
-            ceiling = None
-    # The ceiling projection is from CURRENT attribute potentials, so a past-peak vet
-    # can have earlier seasons above it (their attributes — and the playmaking/xFactor
-    # terms — were higher then). The ceiling must be at least what they've already
-    # achieved, so floor it at their max plotted rating; the line never sits below a
-    # point. Expected is NOT floored — a declining vet legitimately sits below past peak.
-    if ceiling is not None and history:
-        maxHist = max((h.get("rating") or 0) for h in history)
-        if maxHist > ceiling:
-            ceiling = maxHist
-
+    # The projected range drawn on the progression chart: the same public projection as
+    # every other surface (`_prospectProjection`), so hidden talent stays hidden here too.
+    projection = _prospectProjection(player) if player is not None else None
     return build_success_response({
         "playerId": player_id,
         "history": history,
-        "expected": expected,
-        "ceiling": ceiling,
+        "expected": projection.get("expected") if projection else None,
+        "low": projection.get("low") if projection else None,
+        "high": projection.get("high") if projection else None,
     })
 
 
