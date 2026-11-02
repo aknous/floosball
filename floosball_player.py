@@ -574,6 +574,24 @@ class Player:
         unseen = self.unrevealedShift() * (1.0 - max(0.0, min(1.0, float(vision or 0.0))))
         return self.computeExpectedRating(unseen), self.computeCeilingRating(unseen)
 
+    def projectionRange(self, vision: float = 0.0):
+        """(low, mid, high): where this player is projected to settle, as a viewer with this
+        scouting vision sees it (owner, 2026-11-02). `mid` is the expected rating from
+        `projectionFor`; the range around it is the hidden talent the viewer cannot see yet,
+        PROSPECT_RANGE_SPREAD attribute points times the unrevealed share, so it is widest
+        on draft day and one number once his talent is known (every veteran). Fans get
+        vision 0, the public consensus."""
+        from constants import PROSPECT_RANGE_SPREAD
+        v = max(0.0, min(1.0, float(vision or 0.0)))
+        unseen = self.unrevealedShift() * (1.0 - v)
+        mid = self.computeExpectedRating(unseen)
+        spread = float(PROSPECT_RANGE_SPREAD) * (1.0 - self.talentRevealed()) * (1.0 - v)
+        if spread <= 0:
+            return mid, mid, mid
+        low = self.computeExpectedRating(unseen + spread)
+        high = self.computeExpectedRating(unseen - spread)
+        return min(low, mid), mid, max(high, mid)
+
     def computeCeilingRating(self, unseen: float = 0.0):
         """Projected ceiling rating: what this player's rating would be with every
         physical skill attribute developed to its potential. Only the physical
