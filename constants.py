@@ -3627,6 +3627,35 @@ def tradingEnabled(session=None) -> bool:
     except Exception:
         return bool(TRADING_ENABLED)
 
+# ---- Fan approval votes on trades (owner, 2026-10-30) ----
+# A trade the market agrees is a PROPOSAL until fans approve it (`managers/tradeVotes.py`).
+# Everyone signed in can vote on every trade; the trade goes through only if, when the vote
+# closes:
+#   - the league-wide vote has more yes than no, and
+#   - each team involved with fans gets at least `TRADE_VOTE_FAN_FRACTION` of its fans
+#     (minimum 1) voting yes, and its own fans do not vote it down (more no than yes).
+# "Fans" means ACTIVE fans (owner, 2026-10-30): signed in within
+# SUPPORTER_ACTIVITY_WINDOW_DAYS, or voted on this trade (`tradeVotes.activeFanCounts`).
+# A team with no active fans needs no fan approvals of its own: the league-wide yes it already
+# needs is the "anyone can approve it" the owner asked for. No vote, or too few fan
+# approvals, and the trade fails.
+# Votes close at the next roster event: in season at the deadline day's first kickoff
+# (week GM_ACTIVE_WEEK); the offseason pass after the front office at the rookie draft;
+# the pass after the FA draft when the next season starts. Nothing trades on draft day.
+TRADE_VOTES_ENABLED = True
+TRADE_VOTE_FAN_FRACTION = 0.34      # the per-team fan-rating quorum, SENTIMENT_QUORUM_FAN_FRACTION
+
+
+def tradeVotesEnabled() -> bool:
+    """Whether market trades wait for a fan vote. `NO_TRADE_VOTES=1` turns the vote off so
+    a trade settles the moment the market agrees it, which the market harnesses need: a
+    sim has no fans, so every proposal would fail for want of votes."""
+    import os
+    if os.environ.get('NO_TRADE_VOTES', '').lower() in ('1', 'true', 'yes'):
+        return False
+    return bool(TRADE_VOTES_ENABLED)
+
+
 # ---- Why trades happen ----
 # ⚠️ THE ENGINE IS CONTRACT CONGESTION, NOT GM DISAGREEMENT. The obvious model — two GMs
 # value a player differently, so they swap — is noise wearing a strategy's clothes: with

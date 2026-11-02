@@ -9026,6 +9026,138 @@ def _ratingsByPlayerId() -> dict:
     return out
 
 
+class _TradeVoteRequest(BaseModel):
+    approve: Optional[bool] = None      # True yes, False no, None withdraws the vote
+
+
+def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes) -> dict:
+    """One trade proposal for the Transactions page: what each side gives, why, when the
+    vote closes, the tally against the rule and the caller's own vote."""
+    from managers import tradeVotes
+    assets = p.assets_json or {}
+    lj, bj = p.listing_json or {}, p.bid_json or {}
+    if p.status == tradeVotes.OPEN:
+        v = tradeVotes.tally(session, p)
+    else:
+        v = dict(p.result_json or {})
+    teams = v.get('teams') or {}
+    def teamTally(tid):
+        t = teams.get(tid) or teams.get(str(tid)) or {}
+        return {"fans": t.get('fans', 0), "need": t.get('need', 0),
+                "yes": t.get('yes', 0), "no": t.get('no', 0)}
+    return {
+        "id": p.id, "season": p.season, "week": p.week, "phase": p.phase,
+        "status": p.status, "closeKind": p.close_kind, "closesAt": _utcIso(p.closes_at),
+        "resolvedAt": _utcIso(p.resolved_at), "tradeId": p.trade_id,
+        "teamA": teamBlob(p.team_a_id), "teamB": teamBlob(p.team_b_id),
+        "aGave": _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins),
+        "bGave": _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins),
+        "trigger": lj.get('trigger'), "sellerWhy": lj.get('why'), "buyerWhy": bj.get('why'),
+        "tally": {"yes": v.get('yes', 0), "no": v.get('no', 0),
+                  "passing": bool(v.get('passed')), "reason": v.get('reason'),
+                  "teamA": teamTally(p.team_a_id), "teamB": teamTally(p.team_b_id)},
+        "note": (p.result_json or {}).get('note') if p.status != tradeVotes.OPEN else None,
+        "myVote": myVotes.get(p.id),
+    }
+
+
+@app.get("/api/trade-votes")
+def get_trade_votes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
+    """Trades waiting on the fans' approval vote, and this season's closed ones
+    (`managers/tradeVotes.py`). Everyone signed in can vote on every trade; see
+    `constants.py` "Fan approval votes on trades" for the rule. Tallies are shown while a
+    vote is open, so a team's fans can see how far they are from their bar. Hidden with
+    the rest of trading while it is off."""
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=15")
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    if _tradesHidden():
+        return build_success_response({"open": [], "closed": [], "enabled": False})
+    from constants import tradeVotesEnabled
+    from database.connection import get_session
+    from database.models import TradeProposal, TradeVote
+    from managers import tradeVotes
+
+    sm, tm = floosball_app.seasonManager, floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    teamsById = {getattr(t, 'id', None): t for t in (getattr(tm, 'teams', None) or [])}
+
+    def teamBlob(teamId):
+        team = teamsById.get(teamId)
+        if team is None:
+            return None
+        return {"id": teamId, "name": team.name,
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', None)}
+
+    session = get_session()
+    try:
+        rows = (session.query(TradeProposal)
+                .filter((TradeProposal.status == tradeVotes.OPEN)
+                        | (TradeProposal.season >= season - 1))
+                .order_by(TradeProposal.id.desc()).limit(80).all())
+        myVotes = {}
+        if user is not None and rows:
+            myVotes = {pid: bool(a) for pid, a in session.query(
+                TradeVote.proposal_id, TradeVote.approve).filter(
+                TradeVote.user_id == user.id,
+                TradeVote.proposal_id.in_([r.id for r in rows])).all()}
+        ratingById = _ratingsByPlayerId()
+        pickOrigins = _pickOriginsFor(session, rows, teamBlob)
+        out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes)
+               for r in rows if r.status != tradeVotes.EXPIRED]
+        return build_success_response({
+            "open": [r for r in out if r["status"] == tradeVotes.OPEN],
+            "closed": [r for r in out if r["status"] != tradeVotes.OPEN][:30],
+            "enabled": tradeVotesEnabled(),
+            "myTeamId": getattr(user, 'favorite_team_id', None) if user else None,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/trade-votes/{proposal_id}/vote")
+def cast_trade_vote(proposal_id: int, req: _TradeVoteRequest,
+                    user: _User = Depends(_getCurrentUser)):
+    """Vote yes or no on an open trade, change the vote, or withdraw it (`approve: null`)."""
+    if _tradesHidden():
+        raise HTTPException(404, "Trading is off")
+    from datetime import datetime as _dt
+    from database.connection import get_session
+    from database.models import TradeProposal, TradeVote
+    from managers import tradeVotes
+    session = get_session()
+    try:
+        p = session.get(TradeProposal, proposal_id)
+        if p is None:
+            raise HTTPException(404, "No such trade")
+        if p.status != tradeVotes.OPEN:
+            raise HTTPException(409, "This vote has closed")
+        row = session.query(TradeVote).filter_by(proposal_id=p.id, user_id=user.id).first()
+        if req.approve is None:
+            if row is not None:
+                session.delete(row)
+        elif row is None:
+            session.add(TradeVote(proposal_id=p.id, user_id=user.id, approve=bool(req.approve)))
+        else:
+            row.approve = bool(req.approve)
+            row.updated_at = _dt.utcnow()
+        session.commit()
+        v = tradeVotes.tally(session, p)
+        return build_success_response({
+            "id": p.id, "myVote": req.approve,
+            "tally": {"yes": v['yes'], "no": v['no'], "passing": v['passed'],
+                      "reason": v['reason']}})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Trade vote failed: {e}")
+        raise HTTPException(500, "Could not record the vote")
+    finally:
+        session.close()
+
+
 def _tradeAssetsWithRatings(assets, ratingById, pickOrigins=None) -> list:
     """A trade manifest side with each player/prospect's current rating attached, and each
     pick's ORIGINAL team (`pickOrigins`, from `_pickOriginsFor`).
@@ -15733,7 +15865,8 @@ def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
     """Open votes and, for users with DM reminders on, which of them each hasn't cast.
 
     Covers the rule vote (one window per game day, closing at that day's kickoff), the
-    MVP ballot and the Hall of Fame ballot. HoF is approval voting, so approving any one
+    MVP ballot, the Hall of Fame ballot and each open trade approval vote (kind 'trade',
+    with its `closeKind`). HoF is approval voting, so approving any one
     player counts as voted. Returns {votes: [{key, kind, label, closesAt}],
     missing: {discordId: [key, ...]}}; a vote's key changes with each window, so the
     bot can tell a new vote from one it already announced."""
@@ -15777,6 +15910,21 @@ def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
             voters[key] = {uid for (uid,) in session.query(AwardVote.user_id).filter(
                 AwardVote.season == season, AwardVote.award_type == awardType,
                 AwardVote.user_id.in_(userIds)).distinct()}
+
+        # Trade approval votes, one per open trade (managers/tradeVotes.py).
+        if not _tradesHidden():
+            from database.models import TradeProposal, TradeVote
+            tm = floosball_app.teamManager
+            names = {getattr(t, 'id', None): t.name for t in (getattr(tm, 'teams', None) or [])}
+            for p in session.query(TradeProposal).filter(TradeProposal.status == 'open').all():
+                key = f"trade:{p.id}"
+                votes.append({"key": key, "kind": "trade",
+                              "label": f"the {names.get(p.team_a_id, '?')} and "
+                                       f"{names.get(p.team_b_id, '?')} trade",
+                              "closesAt": _utcIso(p.closes_at),
+                              "closeKind": p.close_kind})
+                voters[key] = {uid for (uid,) in session.query(TradeVote.user_id).filter(
+                    TradeVote.proposal_id == p.id, TradeVote.user_id.in_(userIds))}
 
         missing = {}
         for uid in userIds:

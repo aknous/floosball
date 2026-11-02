@@ -3062,3 +3062,59 @@ class Trade(Base):
 
     def __repr__(self):
         return f"<Trade(s{self.season} w{self.week} {self.team_a_id}<->{self.team_b_id})>"
+
+
+class TradeProposal(Base):
+    """A trade the market agreed, waiting on the fans' approval vote
+    (`managers/tradeVotes.py`, owner 2026-10-30).
+
+    It carries everything settlement needs to run later, possibly after a restart:
+    `listing_json` is the seller's side ({playerId} or {pick}, trigger, ask, floor, why) and
+    `bid_json` the buyer's ({pieces, value, why}), both plain ids and numbers so the
+    `Listing`/`Bid` objects can be rebuilt against the live rosters at close.
+    `assets_json` is the display manifest ({aGave, bGave}) fans vote on.
+
+    status: open | approved (settled, `trade_id` set) | rejected (the vote failed)
+    | failed (approved, but no longer possible at close) | expired (never resolved).
+    close_kind: deadline | rookie_draft | season_start, the event that closes the vote;
+    `closes_at` is when that is expected, for display.
+    """
+    __tablename__ = "trade_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    week: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase: Mapped[str] = mapped_column(String(24), nullable=False, default='in_season')
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default='player')
+    team_a_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    team_b_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    listing_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    bid_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    assets_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default='open', index=True)
+    close_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    closes_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    trade_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<TradeProposal({self.id} s{self.season} {self.status} {self.team_a_id}<->{self.team_b_id})>"
+
+
+class TradeVote(Base):
+    """One user's vote on one trade proposal. Changeable (or withdrawn) while it is open."""
+    __tablename__ = "trade_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    proposal_id: Mapped[int] = mapped_column(Integer, ForeignKey("trade_proposals.id"),
+                                             nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    approve: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("proposal_id", "user_id", name="uq_trade_vote_user"),
+    )
