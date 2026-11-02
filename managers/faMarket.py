@@ -560,8 +560,16 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             values = {}
 
             def value(p):
+                # A free agent is priced over the contract he would sign (owner,
+                # 2026-11-01): his average projected value across its seasons. A
+                # starter is valued on next season, and the keep-or-replace standing
+                # (`starterStanding`) carries his decline over the horizon.
                 if p.id not in values:
-                    values[p.id] = float(brain.decisionValue(p, coach, team=team))
+                    if p.id in poolById:
+                        values[p.id] = float(brain.contractValue(
+                            p, payroll.contractTerm(pm, p, season), coach, team=team))
+                    else:
+                        values[p.id] = float(brain.decisionValue(p, coach, team=team))
                 return values[p.id]
 
             drafts = []

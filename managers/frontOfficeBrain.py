@@ -55,6 +55,7 @@ _SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.90'
 
 import math
 from constants import (
+    FO_CONTRACT_VALUE_ENABLED,
     POSITION_VALUE,
     VENUE_PHASE_POSITIONS,
     VENUE_POSITION_WEIGHT,
@@ -938,6 +939,60 @@ class FrontOfficeBrain:
         if extra <= 0:
             return 0.0
         return extra * self.scoutingVision(coach, team) * positionValue(player, venueBiasFor(team))
+
+    def contractTermAdjustment(self, player, seasons: int, coach=None, team=None) -> float:
+        """Value points to add to `decisionValue` so it prices a contract of `seasons`
+        seasons rather than next season alone (owner, 2026-11-01: a free agent on a
+        three-year deal was priced at what he would be next year, ignoring the declining
+        or rising years after it).
+
+        The value of the deal is his AVERAGE projected value over its seasons, since its
+        cost is a salary every season. Season k's level relative to next season:
+          - past his peak: - (k-1) x d, where d is next season's projected decline (the
+            sim's own aging at its average; extended at that rate, which understates a
+            steepening decline rather than inventing a curve). Seen as `_agingDrag` sees
+            it: age is public, so half the decline at least, the rest by scouting vision,
+            weighed by the GM's playerDevelopment lean.
+          - developing: gap x ((1-f) - (1-f)^k), the same compounding share of the gap to
+            his ceiling `_growthBeyondNextSeason` uses, seen through scouting vision.
+        A one-season deal (or a prime player) adjusts by nothing. Position-weighted like
+        the value it adds to."""
+        if not FO_CONTRACT_VALUE_ENABLED or player is None:
+            return 0.0
+        seasons = int(seasons or 1)
+        if seasons <= 1:
+            return 0.0
+        try:
+            nextSeason = self._nextSeasonRatingPastPeak(player, coach, team)
+        except Exception:
+            nextSeason = None
+        current = float(getattr(player, 'playerRating', 0) or 0)
+        if nextSeason is not None:
+            d = max(0.0, current - float(nextSeason))
+            if d <= 0:
+                return 0.0
+            seen = 0.5 + 0.5 * self.scoutingVision(coach, team)
+            weight = 2.0 * self._attrLean(coach, 'playerDevelopment')
+            points = -d * (seasons - 1) / 2.0 * seen * weight
+        else:
+            try:
+                if self.classifyArc(player) != ARC_DEVELOPING:
+                    return 0.0
+                gap = max(0.0, float(self._ceilingRating(player, team)) - current)
+            except Exception:
+                return 0.0
+            if gap <= 0:
+                return 0.0
+            f = _clamp(FO_CEILING_CREDIT * self.developmentLean(coach, team), 0.0, 1.0)
+            levels = [gap * ((1.0 - f) - (1.0 - f) ** k) for k in range(1, seasons + 1)]
+            points = sum(levels) / seasons * self.scoutingVision(coach, team)
+        return points * positionValue(player, venueBiasFor(team))
+
+    def contractValue(self, player, seasons: int, coach=None, team=None) -> float:
+        """`decisionValue` over a contract of `seasons` seasons (see
+        `contractTermAdjustment`): the number a team prices a free agent with."""
+        return (self.decisionValue(player, coach, team=team)
+                + self.contractTermAdjustment(player, seasons, coach, team))
 
     def seasonRating(self, player, coach=None, team=None) -> float:
         """The rating this GM expects from the player in the coming season: today's

@@ -3457,6 +3457,10 @@ FO_STANDING_ENABLED = True
 # decline is extended over the rest of this horizon. A developing starter needs no such
 # term, because his value already credits growth toward his ceiling.
 FO_STANDING_HORIZON_SEASONS = 3
+# Free agents are priced over the contract they would sign, not next season alone
+# (`FrontOfficeBrain.contractValue`, owner 2026-11-01): the average projected value across
+# its seasons, so a veteran's declining years cost and a rising player's later years count.
+FO_CONTRACT_VALUE_ENABLED = True
 # Rating points a starter's standing moves for playing a full FO_RESULTS_PERF_SCALE
 # over (or under) his rating last season, at a neutral GM. Sized to about one cut
 # margin: a season of clearly better football than the sheet says is worth roughly
