@@ -430,8 +430,9 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             events.append({'type': 'market', 'team': t.name, 'teamAbbr': getattr(t, 'abbr', ''),
                            'player': f.name, 'playerId': f.id, 'salary': e['salary'],
                            'over': byId[e['over']].name if e['over'] else None, 'text': line})
-        if not signings:
-            break
+        # ⚠️ NO EARLY EXIT ON A QUIET PASS. It used to stop at the first pass with no
+        # signings, before the decay below ran, so a star too dear in pass 1 never got the
+        # cheaper passes and sat unsigned (a 96 kicker and a 94 QB, synthetic-fan run).
 
         byWid = {w.wid: w for w in wants}
         faLists = {k: [p for p in pm.freeAgents if p.position.value == v]
