@@ -3131,7 +3131,7 @@ def _recordTrade(seasonManager, manifest, tradeId: int) -> None:
             'trade',
             teamId=manifest[f'{side}Id'], teamName=manifest[f'{side}Name'],
             detail=f"sent {names} to {manifest[f'{other}Name']}",
-            tradeId=tradeId)
+            tradeId=tradeId, season=manifest.get('season'))
     # ⚠️ THE MOVES A TRADE FORCED ARE TRANSACTIONS TOO, and they reach the moves feed only
     # through these rows. Keyed by the trade id, so a player cut here and again in the
     # offseason is two rows rather than one swallowed by the (season, type, player) dedupe.
@@ -3146,7 +3146,7 @@ def _recordTrade(seasonManager, manifest, tradeId: int) -> None:
             teamId=move.get('teamId'), teamName=move.get('teamName'),
             playerId=move.get('id'), playerName=move.get('name'),
             position=move.get('detail'), rating=move.get('rating'),
-            detail=detail, tradeId=tradeId)
+            detail=detail, tradeId=tradeId, season=manifest.get('season'))
 
 
 def _publishTrade(seasonManager, manifest) -> None:

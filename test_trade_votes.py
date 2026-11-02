@@ -254,3 +254,27 @@ class SwitchTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SeasonStartRecapTests(unittest.TestCase):
+    """The trades fans approve after the FA draft settle as the next season starts, while
+    the season manager has no Season open (`advanceToNextSeason` cleared it). Their recap
+    rows used to read that missing season and were silently dropped (found 2026-11-02 in a
+    sim with synthetic voters: every season-start trade had a trade row and no recap)."""
+
+    def testATradeSettledBetweenSeasonsStillReachesTheRecap(self):
+        from managers.seasonManager import SeasonManager
+        from database.models import SeasonRecapEvent
+        sm = SeasonManager.__new__(SeasonManager)
+        sm.currentSeason = None
+        manifest = {'season': 12, 'teamAId': A, 'teamAName': 'Waffles', 'teamBId': B,
+                    'teamBName': 'Raccoons', 'aGave': [{'name': 'Barth Eatfield'}],
+                    'bGave': [{'name': 'a pick'}], 'moves': []}
+        tradeManager._recordTrade(sm, manifest, 9001)
+        s = get_session()
+        try:
+            rows = s.query(SeasonRecapEvent).filter_by(trade_id=9001).all()
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(r.season == 12 for r in rows))
+        finally:
+            s.close()

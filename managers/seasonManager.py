@@ -9145,7 +9145,7 @@ class SeasonManager:
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
                               rating=None, tier=None, session=None,
-                              tradeId=None) -> None:
+                              tradeId=None, season=None) -> None:
         """Persist one offseason transaction/announcement for the Season Recap.
         Best-effort + idempotent per (season, eventType, playerId|teamId) so an
         offseason resume/restart never duplicates or breaks the offseason.
@@ -9155,7 +9155,11 @@ class SeasonManager:
         write (e.g. HoF induction) self-deadlocks on the single-writer lock and
         stalls the whole sim task for the 30s busy_timeout."""
         try:
-            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            # ⚠️ `season` WINS WHEN GIVEN. Between `advanceToNextSeason` and the new Season,
+            # `currentSeason` is None, and the trades fans approved after the FA draft settle
+            # exactly then (`_resolveSeasonStartTradeVotes`); read from here, every one of
+            # them was silently left out of the recap.
+            season = season or (self.currentSeason.seasonNumber if self.currentSeason else 0)
             if not season:
                 return
             if team is not None:
