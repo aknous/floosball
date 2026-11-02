@@ -30,6 +30,8 @@ from collections import Counter
 tmp = tempfile.mkdtemp(prefix='floos_shape_')
 os.environ['DATABASE_DIR'] = tmp
 os.environ.setdefault('TIMING_MODE', 'fast')
+# A sim has no fans to vote, so every trade would wait on a vote and fail: settle on agreement.
+os.environ.setdefault('NO_TRADE_VOTES', '1')
 logging.disable(logging.INFO)
 _TM_LOG = logging.getLogger('managers.tradeManager')
 

@@ -66,7 +66,12 @@ def _seasonManager(team, brain):
     return sm
 
 
-def test_theStrangersKeepTheReceiverNotTheKicker():
+def test_theStrangersKeepTheReceiverNotTheKicker(monkeypatch):
+    # Measured under the 2-per-offseason re-sign limit (season 11). Payroll turns that
+    # limit off (the treasury limits retention instead), so pin it here: the test is
+    # about WHICH two the GM keeps.
+    import constants
+    monkeypatch.setattr(constants, 'RESIGN_LIMIT_ENABLED', True)
     team = _strangers()
     projected = _seasonManager(team, Brain()).projectedResigns()
     assert projected[312] is True                 # Wispy July, QB 96

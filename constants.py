@@ -61,7 +61,7 @@ POTENTIAL_HEADROOM = 15
 # applied up front would show up in every team's scouted range and the player would go
 # first overall, which is the opposite of the story. It is held as a hidden number and
 # applied during a development season, after the draft, after teams have committed.
-LATE_BLOOM_ENABLED = True
+LATE_BLOOM_ENABLED = False   # retired 2026-10-30: folded into PROSPECT_TALENT_* (the upper tail), see below. Pending blooms already rolled still fire.
 # Per prospect, at class generation. At a 32-player class this is ~0.6 a season.
 LATE_BLOOM_CHANCE = 0.02
 # Points added to trueSkill AND potential on every trained attribute when it fires.
@@ -96,6 +96,83 @@ LATE_BLOOM_FIRE_PER_BIAS = 0.10
 # future 5-star looks like a solid 3-4-star as a rookie. Founding/FA-generated
 # (non-rookie) players skip the discount — they enter already at their level.
 PROSPECT_ENTRY_DISCOUNT = 11
+
+# ── Prospect uncertainty (docs/PROSPECT_UNCERTAINTY_PLAN.md, owner 2026-10-30) ──────────
+# A prospect's projection was his destiny: every trained attribute climbed to a fixed
+# trueSkill cap that fans and (within a few points) every GM could read, so redrafting a
+# class five seasons later kept the #1 pick 85% of the time and nobody from the last five
+# picks ever rose into the 5-15 range (NFL 2000-15, same test: 26% and 67%). Two sources
+# of uncertainty now, split three quarters / one quarter (owner):
+#
+# HIDDEN TALENT (what good scouts can see). At class generation every prospect draws a
+# shift `talentShift`, in attribute points, added to every trained attribute's trueSkill
+# AND potential (one shared draw, like the old late bloom: per-attribute draws average
+# away). The public consensus is computed as if it were 0; a team sees `vision` of it.
+# A two-part mixture: most prospects near 0 (CORE), a few far out (TAIL), either sign,
+# so most picks are roughly right and a few are badly wrong. Mean zero, so the league's
+# talent does not drift.
+PROSPECT_TALENT_SHIFT_ENABLED = True
+PROSPECT_TALENT_CORE_SD = float(_os.environ.get('FLOOS_TALENT_CORE_SD', '7.0'))
+PROSPECT_TALENT_TAIL_SHARE = float(_os.environ.get('FLOOS_TALENT_TAIL_SHARE', '0.3'))
+PROSPECT_TALENT_TAIL_SD = float(_os.environ.get('FLOOS_TALENT_TAIL_SD', '20.0'))
+PROSPECT_TALENT_SHIFT_MAX = 30          # clamp, attribute points
+# ⚠️ SIZED BY THE REDRAFT TEST (prospect_redraft_check.py, 2 seeds x 40 classes, average
+# environment), against the NFL reference: the consensus board keeps its #1 30-33% of the
+# time (NFL 26%), has a last-5 pick rise into 5-15 in 45-47% of classes (67%), drops 12-14%
+# of top-5 picks below 16th (8%), and ranks the redraft at 0.56-0.57 (0.56). An elite scout
+# ranks it at 0.86-0.88. About two thirds of the reshuffle is visible to an elite scout, not
+# the three quarters asked for: the development noise the engine already had (old model
+# 0.94) caps what any read can see, and shrinking DEV_LUCK_SD further barely moved it.
+# How much of the shift the public has seen, by career seasons (pro + pipeline). Revealed
+# gradually as he develops (owner: gradual, no reveal moment). Index past the end = 1.0.
+PROSPECT_TALENT_REVEALED = [0.0, 0.35, 0.65, 0.85, 1.0]
+#
+# DEVELOPMENT LUCK (what nobody can see). Each offseason a RISING player's trueSkill and
+# potential take one shared step: N(drift, DEV_LUCK_SD), drift = (devBias - the league's
+# average devBias) x DEV_LUCK_DRIFT_PER_BIAS. A good coach + Training Facility pushes a
+# player toward his upside, a poor one wastes it (owner: the environment changes the
+# outcome). Zero on average at an average environment.
+DEV_LUCK_ENABLED = True
+# ⚠️ TALENT HAS TO SHOW UP INSIDE THE REVEAL WINDOW. A diamond with +20 hidden sits ~31
+# points under his true level at debut against everyone else's PROSPECT_ENTRY_DISCOUNT
+# (11), and the ordinary rising range (DEV_RISE_RANGE + devBias, ~+5 a season) cannot close
+# that in five seasons, so he was still climbing when the redraft judged him and an elite
+# scout read the class no better than an average one (0.83 rank correlation each). A
+# rising attribute further below its trueSkill than the debut gap grows faster by
+# DEV_CATCHUP_RATE of the excess a season (PlayerDevelopment._settle). An ordinary
+# prospect sits inside the gap and is untouched.
+DEV_CATCHUP_GAP = 11
+DEV_CATCHUP_RATE = float(_os.environ.get('FLOOS_DEV_CATCHUP', '0.35'))
+DEV_LUCK_SD = float(_os.environ.get('FLOOS_DEV_LUCK_SD', '0.8'))
+DEV_LUCK_DRIFT_PER_BIAS = float(_os.environ.get('FLOOS_DEV_LUCK_DRIFT', '0.6'))
+DEV_LUCK_NEUTRAL_BIAS = 3.4             # fallback only: the offseason sets PlayerDevelopment.leagueNeutralBias to the league's live mean (prod ~3.4, 2026-10-30)
+#
+# THE DEVELOPMENT ENVIRONMENT: coach 40%, Training Facility 60% (owner, 2026-10-30: fans
+# control the facilities and not the coach, so the facilities must carry more). devBias =
+# coach part (DEV_BIAS_COACH_MAX x (playerDevelopment - 60) / 40) + the Training level's
+# FACILITY_CATALOG value (0..3.6). Same maximum (6) and, at 2026-10-30 levels, the same
+# league average (~3.4) as the old coach 0-4 + facility 0-2, so players do not grow faster
+# or slower on average. See player_development.developmentBias.
+DEV_BIAS_COACH_MAX = 2.4
+# THE SCOUTING READ: coach 40%, Scouting Department 60%, the same reasoning. vision =
+# SCOUT_VISION_COACH_SHARE x coach lean + (1 - share) x the department's FACILITY_CATALOG
+# value (0..1). Best coach + level 5 sees everything; worst coach + level 5 sees 60%.
+SCOUT_VISION_COACH_SHARE = 0.4
+# ⚠️ AND A FLOOR (owner, 2026-10-31: soften the drop). Vision feeds EVERY GM read, free
+# agents and re-signs included, and with no floor the league average fell from ~0.78 to
+# ~0.49 at season-11 levels (eight teams with no department read at the coach's 40%
+# alone). Every GM now reads at least SCOUT_VISION_FLOOR; the 40/60 coach/department split
+# applies to the rest: worst coach + no department 0.25, best coach + none 0.55, worst
+# coach + level 5 0.70, best + level 5 1.0. League average ~0.62.
+SCOUT_VISION_FLOOR = 0.25
+#
+# THE CLASS IS BIGGER THAN THE DRAFT (owner, 2026-10-30): ROOKIE_CLASS_PER_TEAM prospects
+# per team, so the last picks are real choices and a diamond has somewhere to hide. The
+# undrafted wash out (removed, name back to the pool), except as many at each position as
+# that position needs to stay at the supply floor, who become free agents
+# (playerManager.washOutUndrafted). Without that a low-value position (kickers) would be
+# washed out every year and the floor would generate replacements with fresh names.
+ROOKIE_CLASS_PER_TEAM = 1.5
 
 # ---- Career-arc development (player_development.py) ----
 # Players rise toward a per-player PEAK season (a jittered fraction of their
@@ -1219,6 +1296,14 @@ CONTRIBUTION_TX_TYPES = ('team_contribution', 'facility_contribution')
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
 FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
+# With payroll on the baseline is share-denominated (`payroll.leagueBaseline`), never under
+# the flat 200 above. Was 0.15 (owner, 2026-10-30: six minimum salaries plus upkeep on a
+# level-2 set). Raised to 0.25 (~1,460F at a 5,850F share unit) for retention (2026-11-01:
+# target ~60% of walk-year players rated 76+ staying): at 0.15 most teams lived on the
+# baseline and could not afford to keep anyone good once grandfathered contracts expired,
+# and retention among 76+ slid to 36-57%; at 0.25 it settles at 55-60% with no forced cuts,
+# and the money gap between the most- and least-fanned teams narrows slightly.
+FUNDING_BASELINE_SHARES = float(_os.environ.get('FLOOS_BASELINE_SHARES', '0.25'))
 # Tiers are assigned by a team's share of total league funding. A team's
 # ratio = effective_funding / (total_league_funding / num_teams). That is,
 # "how many fair-shares of the league's floobits does this team hold?"
@@ -2193,16 +2278,27 @@ FACILITY_MAX_LEVEL = 5
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
 FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
-                    'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
+                    'levels': [0, 0.72, 1.44, 2.16, 2.88, 3.6]},          # player-dev bias (player_development.developmentBias); facilities carry 60% of it (owner, 2026-10-30)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
-                    'levels': [0.0, 0.004, 0.008, 0.012, 0.016, 0.020]},     # rating edge in every game (Game._applyFacilityEdge)
+                    'levels': [0.0, 0.007, 0.014, 0.021, 0.028, 0.035]},     # rating edge in every game (Game._applyFacilityEdge); its second job is LOCKER_ROOM_SETBACK_CUSHION
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
                     'levels': [0.0, 0.15, 0.35, 0.55, 0.75, 0.90]},        # share of weekly fatigue gain removed (seasonManager._accumulateFatigue); L5 = nearly fresh all season
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
-                    'levels': [0, 4, 8, 12, 16, 20]},                    # points added to the GM's scouting judgment (60-100)
+                    'levels': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]},           # department share of the GM's vision (frontOfficeBrain.scoutingVision); facilities carry 60% (owner, 2026-10-30)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
                     'levels': [0.0, 0.008, 0.016, 0.024, 0.032, 0.040]}, # rating edge in home games (Game._applyFacilityEdge)
 }
+
+# ⚠️ THE LOCKER ROOM'S SECOND JOB: IT ABSORBS SETBACKS (owner, 2026-10-30: the flat edge
+# alone "doesn't move the needle", and fans could not see it working). The share of every
+# confidence / determination LOSS a team's players take that the Locker Room absorbs, by
+# level: a losing streak's post-game hit (Player.postgameChanges), a hot team's complacency
+# drift (SeasonManager._applyMidseasonFormShift), a toxic room's pull
+# (_propagateAttitudeContagion), a cold stretch of the form layer (_updateTeamFormOffsets)
+# and an in-game mistake (Player.updateInGameConfidence). Gains are never touched, and
+# momentum is exempt so its offset can be removed exactly. Read through
+# Team.setbackCushion(), which honors FLOOS_FACILITY_FORCE like facilityEffect.
+LOCKER_ROOM_SETBACK_CUSHION = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
 # Migration: starting level for the four legacy-perk facilities by current tier.
 MIGRATION_TIER_START_LEVEL = {'MEGA_MARKET': 4, 'LARGE_MARKET': 3, 'MID_MARKET': 2, 'SMALL_MARKET': 1}
@@ -2251,6 +2347,155 @@ FACILITY_SHARE_CAP_PERCENTILE = 95.0
 # Below this many earning users a percentile is computed from too few points to mean
 # anything, and clipping would just lower the unit rather than de-skew it.
 FACILITY_SHARE_CAP_MIN_USERS = 8
+
+# ── Gate revenue and the league donation match (docs/TREASURY_PAYROLL_PLAN.md §4) ──────
+# The league pays each team's Treasury every regular-season week for its ACTIVE fans
+# (the Supporter rule: logged in within SUPPORTER_ACTIVITY_WINDOW_DAYS). No user Floobits
+# are spent. Gate revenue is meant to be a team's MAIN income and donations the top-up,
+# so a few active fans who never play fantasy can fund a competitive team (G3).
+#   gate = GATE_SHARES_PER_WEEK x shareUnit x (sum of fan weights) ** GATE_FAN_EXPONENT
+#          x GATE_STADIUM_MULT[stadium level]
+# ⚠️ PROVISIONAL SIZES (2026-10-22): the harness sets the base, the exponent and the
+# Stadium curve against G2/G3. At a 5,453F share unit, 0.02 is ~109F a week, ~3,050F a
+# season, for one fan at weight 1.0 and a level-0 Stadium.
+GATE_REVENUE_ENABLED = True
+# Halved from 0.02 (owner, 2026-11-01): at 0.02 the best-fanned teams out-earned everything money
+# could buy and the most-fanned quarter won ~8.5 more games a season than the least; at 0.01 the top
+# team's gate is ~13,000F a season and the gap ~6 wins, the owner's target for now.
+GATE_SHARES_PER_WEEK = float(_os.environ.get('FLOOS_GATE_SHARES', '0.01'))
+# 0.85 (owner, 2026-10-23): a second fan adds ~80% of the first. At 0.6 it added only 51%,
+# so one fantasy donor out-funded a second fan joining, against G3. Still concave, so the
+# first fan is worth the most and 17 fans do not earn 17x one.
+GATE_FAN_EXPONENT = 0.85
+# A fan's weight: 1.0 for being active, plus a boost for taking part in the site's games
+# that week, indexed by how many of the activities they did (owner, 2026-10-22): manual
+# pick-em picks (auto-picks don't count), a fielded fantasy lineup, cards in the Showcase,
+# watching games (a completed cheer-bar segment that week; owner, 2026-10-23).
+# Tops out at two, so no single game is required and nobody has to do everything.
+GATE_PARTICIPATION_BOOST = [0.0, 0.35, 0.5]
+GATE_STADIUM_MULT = [1.0, 1.08, 1.16, 1.26, 1.38, 1.5]   # by Stadium level 0-5
+# The league matches each fan's donations to their team (direct facility contributions
+# and the season-end deposit) at DONATION_MATCH_RATE, on the first
+# DONATION_MATCH_CAP_SHARES of a share unit each season (owner, 2026-10-22). Small donors
+# get the biggest boost; nobody's money is turned away. Proposal 2:1 on ~1,000F.
+DONATION_MATCH_ENABLED = True
+DONATION_MATCH_RATE = 2.0
+DONATION_MATCH_CAP_SHARES = 0.18
+# ── Payroll (docs/TREASURY_PAYROLL_PLAN.md §5) ──────────────────────────────────────────
+# A contract carries a salary, locked at signing and paid from the Treasury at every
+# offseason payment run (before facility upkeep). Share-denominated at signing:
+#   salary = shareUnit x (SALARY_MIN_SHARES
+#                         + SALARY_TOP_SHARES x POSITION_VALUE[pos] x x ** SALARY_EXPONENT)
+#   x = (rating - SALARY_FLOOR_RATING) / (100 - SALARY_FLOOR_RATING), clamped to 0..1
+# SIZED TO WHAT TEAMS HAVE (owner, 2026-11-01: "we really need to fix the problem of high skill
+# players not getting signed"): top 0.6 / exponent 3.5. The steeper 2.26 / 4.0 (and even the
+# original 0.95 / 2.75) priced a star at 3-4x a typical team's whole salary budget (the
+# 0.25-share baseline less facility upkeep, ~1,000-1,500F a season at a 5,850F share unit), so
+# only the few fan-rich teams could sign one and 15-16 players rated 84+ went unsigned. Now a
+# QB asks ~120F at 78, ~370F at 84, ~1,000F at 90, ~1,340F at 92 and ~2,000F at 95: an average
+# team can carry one star and a solid cast (a 92 WR + five 80s ~1,670F), six 92s still cost
+# ~5,700F. Convex: a 92 costs ~11x a 78. A WR or RB about three quarters of the QB price, a
+# kicker about a third. The asking price is then scaled by comparable contracts (`marketRate`).
+# The minimum, ~55F, is what every roster spot costs at least.
+SALARY_ENABLED = True
+# Whether contracts ever CHARGE salaries (owner, 2026-11-02: the treasury, facilities and
+# prospects ship now; salaries and the free agency market are not ready). Off, salaries never
+# start: `payroll.salariesActive()` is False, nothing is stamped toward a start, and the market
+# stays dormant, while SALARY_ENABLED keeps the share-denominated league baseline the facilities
+# are priced against. Turned on later, the next season to start is the first funded one and
+# salaries charge from its end, so teams get a full season's warning.
+SALARIES_CHARGE_ENABLED = False
+SALARY_MIN_SHARES = 0.01
+SALARY_FLOOR_RATING = 68
+SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '0.6'))
+SALARY_EXPONENT = float(_os.environ.get('FLOOS_SALARY_EXP', '3.5'))
+# A prospect promoted onto the roster signs for this share of his asking salary (never
+# under the minimum), so the draft stays the poor team's route to talent.
+SALARY_PROSPECT_FRACTION = 0.25
+# A team budgets future seasons on this share of what it brought in last season (league
+# baseline, gate revenue, the donation match and fan donations), so a signing is made
+# against income it can count on rather than its best season.
+PAYROLL_INCOME_CAUTION = 0.75
+# Value per Floobit in the FA draft: a free agent's board value is cut by this share of
+# the fraction of the team's room his salary takes, so a tight budget prefers a cheap 84
+# to an expensive 88 and a rich team simply takes the best. Provisional.
+FO_SALARY_PRICE_WEIGHT = 0.5
+
+# ---- Free agency market (docs/FREE_AGENCY_MARKET_PLAN.md) ----
+# A signing period where players choose replaces the FA draft once salaries charge
+# (`faMarket.marketActive`: this switch AND `payroll.salariesActive()`). Teams offer
+# contracts, each player holds his best offer (salary + his motive's pull), an outbid team
+# can match or beat, and nothing is final until no team has a move left. Leftover players
+# lower their asking salary and the market reopens; holes still open after that are filled
+# by the FA draft's machinery with upgrades off. PROVISIONAL SIZES: the synthetic-fan
+# harness sets them.
+FA_MARKET_ENABLED = True
+FA_MARKET_ROUNDS = 4            # market passes; each later one only for leftovers
+FA_ASK_DECAY = 0.15             # an unsigned player's asking salary falls this share a pass
+FA_MIN_RAISE = 0.05             # a raise beats the leading offer by this share of his ask
+FA_MAX_BID_EDGE = 0.5           # walk-away price = ask x (1 + this x edge over the next option)
+# ...never above this multiple of the ask (owner, 2026-11-01: "ideally prices in bidding wars
+# dont go to 2x"; at an edge weight of 1.0 and no cap, top salaries ran to ~2x the ask).
+FA_MAX_BID_CAP = 1.4
+FA_LIST_LENGTH = 8              # free agents a team will try for one slot
+FA_PLAN_TOP = 5                 # candidates per slot the roster plan weighs (owner, 2026-11-01)
+# Motives: the pull, as a share of the player's asking salary, toward the teams he likes.
+FA_HOMETOWN_DISCOUNT = 0.20     # for his home team (the team that drafted him)
+FA_WINNER_PULL = 0.20           # x the team's recent success, 0-1 relative to the league
+FA_COMFORT_PULL = 0.20          # x the team's Appeal, 0-1 relative to the league
+FA_OPPORTUNITY_ASK = 0.85       # an 'opportunity' player signs the first offer at this share
+FA_HISTORY_SEASONS = 5          # seasons of titles and playoff runs a 'winner' looks at
+# Comparable contracts (owner, 2026-11-01: "contracts are based on what a comparable player
+# recently received ... an incentive to not overspend"). A player's asking salary is the curve
+# price times a market rate: 1 plus the premium recent market contracts at his position and a
+# similar rating paid over the ask they were offered against, shrunk toward 1.0 and capped. An
+# overpay raises comparable players' prices (in later market passes, next offseason's re-sign
+# offers and asks); prices return to the curve as those contracts age out.
+FA_COMP_SEASONS = 2             # offseasons of contracts that count
+FA_COMP_RECENCY = 0.5           # weight of last offseason's contracts against this one's
+FA_COMP_RATING_WINDOW = 5       # a contract counts fully at the same rating, not at all 5 away
+FA_COMP_PRIOR = 3.0             # as if this many contracts at exactly the curve price
+FA_COMP_MIN = 0.6
+FA_COMP_MAX = 1.6
+# The last call (owner, 2026-11-01): after the market's passes, every unsigned player rated
+# FA_LAST_CALL_MIN_RATING or more gets one-season offers from each team with a hole at his
+# position or that he would upgrade, at what its budget can spend, down to FA_LAST_CALL_FLOOR of
+# his curve price; he takes the best. A good player never sits out a season.
+FA_LAST_CALL_ENABLED = True
+FA_LAST_CALL_MIN_RATING = 76
+FA_LAST_CALL_FLOOR = 0.4
+# The re-sign head start (owner, 2026-11-01): a team offers its walk-year players first, at
+# their asking salary less their pull toward it. A player accepts if offer + pull reaches
+# what he thinks he is worth this offseason, a share of his ask drawn in this range (seeded
+# per player and season); otherwise he tests free agency, where his old team can still bid.
+# Retention (owner, 2026-11-01: players jumping teams makes it hard to have favorite players;
+# target ~60% of walk-year players staying). Three levers:
+#   - LOYALTY: every player is pulled toward the team he has played for, FA_LOYALTY_PER_SEASON
+#     of his ask per consecutive season there, up to FA_LOYALTY_MAX, on top of his motive (in the
+#     re-sign offer and in the market);
+#   - a team re-signing a player it wants offers enough to cover FA_RESIGN_OFFER_REACH of the
+#     way up his range of self-worth, never past FA_MAX_BID_CAP times his ask, rather than the
+#     bare minimum he might accept;
+#   - a re-sign must fit the budget over its first FA_RESIGN_BUDGET_SEASONS seasons, not its
+#     whole term (later seasons are the season-end payroll check's to catch).
+FA_LOYALTY_PER_SEASON = 0.05
+FA_LOYALTY_MAX = 0.20
+FA_RESIGN_OFFER_REACH = 0.5
+FA_RESIGN_BUDGET_SEASONS = 2
+FA_RESIGN_RESERVATION = {
+    'hometown': (0.85, 1.00),
+    'opportunity': (0.85, 0.85),
+    'winner': (0.95, 1.15),
+    'comfort': (0.95, 1.15),
+}
+# Every motive starts at weight 1; a personality adds to the motives it leans toward.
+FA_MOTIVE_PERSONALITY = {
+    'hometown':    {'wholesome': 3, 'knight': 3, 'stoic': 2, 'melancholy': 2, 'poetic': 1},
+    'winner':      {'fiery': 3, 'perfectionist': 3, 'trash_talker': 3, 'dramatic': 2, 'lively': 1},
+    'comfort':     {'vain': 3, 'cool': 3, 'prankster': 2, 'fossil': 2, 'android': 1},
+    'opportunity': {'chill': 3, 'goofy': 3, 'oblivious': 3, 'cursed': 2, 'unhinged': 1},
+}
+
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
@@ -2385,6 +2630,14 @@ _RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
 RESIGN_ONCE_ENABLED = False
 RESIGN_ONCE_LIMIT = 2             # re-signs allowed with the SAME team before a forced walk
                                   # (only consulted while RESIGN_ONCE_ENABLED)
+# ⚠️ OFF WHILE PAYROLL IS ON (owner, 2026-10-22, docs/TREASURY_PAYROLL_PLAN.md §5): the
+# treasury limits retention instead, so a rich team keeps its stars and pays for them and a
+# poor team keeps who it can afford. Removed in the same release as salaries, not before.
+# ⚠️ The trade market's `_cannotKeep` still reads RESIGN_LIMIT_PER_OFFSEASON directly;
+# trading is off, and it needs to read payroll before trading returns.
+# Whether the re-sign limit exists at all; once salaries start charging
+# (`payroll.salariesActive`) the Treasury limits retention instead and it is lifted
+# (`SeasonManager._resignLimitOn`).
 RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
@@ -2771,7 +3024,7 @@ FA_SELF_DEV_YEARS_CAP = 2     # ... up to this much, so nobody trains into a sup
 # coached formula's own ceiling, (100 - 60) / 10, so the two cannot drift apart: an
 # unsigned player can at best match the best coach in the league and never beat one who
 # also has a funded training facility.
-FA_SELF_DEV_TOTAL_CAP = 4
+FA_SELF_DEV_TOTAL_CAP = 2   # the coach's share alone tops out at DEV_BIAS_COACH_MAX (2.4); see below
 
 # ---- Coach generation: specialists, not uniformly good/bad (AFO plan Part B) ----
 # Coaches used to draw every attribute from normal(center, 10) around ONE
@@ -3211,6 +3464,10 @@ FO_STANDING_ENABLED = True
 # decline is extended over the rest of this horizon. A developing starter needs no such
 # term, because his value already credits growth toward his ceiling.
 FO_STANDING_HORIZON_SEASONS = 3
+# Free agents are priced over the contract they would sign, not next season alone
+# (`FrontOfficeBrain.contractValue`, owner 2026-11-01): the average projected value across
+# its seasons, so a veteran's declining years cost and a rising player's later years count.
+FO_CONTRACT_VALUE_ENABLED = True
 # Rating points a starter's standing moves for playing a full FO_RESULTS_PERF_SCALE
 # over (or under) his rating last season, at a neutral GM. Sized to about one cut
 # margin: a season of clearly better football than the sheet says is worth roughly
@@ -3282,8 +3539,8 @@ LAST_WINDOW_PROMOTE_ENABLED = True
 # trade ASSET precisely because that spread let the richest club fund the entire market;
 # as a COST the same spread constrains the poor instead of empowering the rich. A club
 # cannot buy a player with Treasury, only ROSTER SPACE, and a club that churns talent
-# pays for it — Treasury's other claim is facility upkeep (`resolveSeasonEnd` spends it
-# at season end), so cutting freely costs a facility level later. No extra rule needed.
+# pays for it — Treasury's other claim is facility upkeep (`resolvePaymentRun` spends it
+# in the offseason payment run), so cutting freely costs a facility level later. No extra rule needed.
 #
 # ⚠️ FLOORED AT ZERO, NEVER A DEBT: a club that cannot pay simply cannot cut. Letting the
 # fee go negative hands a broke club unlimited roster churn, the opposite of the intent.
@@ -3369,6 +3626,35 @@ def tradingEnabled(session=None) -> bool:
                 session.close()
     except Exception:
         return bool(TRADING_ENABLED)
+
+# ---- Fan approval votes on trades (owner, 2026-10-30) ----
+# A trade the market agrees is a PROPOSAL until fans approve it (`managers/tradeVotes.py`).
+# Everyone signed in can vote on every trade; the trade goes through only if, when the vote
+# closes:
+#   - the league-wide vote has more yes than no, and
+#   - each team involved with fans gets at least `TRADE_VOTE_FAN_FRACTION` of its fans
+#     (minimum 1) voting yes, and its own fans do not vote it down (more no than yes).
+# "Fans" means ACTIVE fans (owner, 2026-10-30): signed in within
+# SUPPORTER_ACTIVITY_WINDOW_DAYS, or voted on this trade (`tradeVotes.activeFanCounts`).
+# A team with no active fans needs no fan approvals of its own: the league-wide yes it already
+# needs is the "anyone can approve it" the owner asked for. No vote, or too few fan
+# approvals, and the trade fails.
+# Votes close at the next roster event: in season at the deadline day's first kickoff
+# (week GM_ACTIVE_WEEK); the offseason pass after the front office at the rookie draft;
+# the pass after the FA draft when the next season starts. Nothing trades on draft day.
+TRADE_VOTES_ENABLED = True
+TRADE_VOTE_FAN_FRACTION = 0.34      # the per-team fan-rating quorum, SENTIMENT_QUORUM_FAN_FRACTION
+
+
+def tradeVotesEnabled() -> bool:
+    """Whether market trades wait for a fan vote. `NO_TRADE_VOTES=1` turns the vote off so
+    a trade settles the moment the market agrees it, which the market harnesses need: a
+    sim has no fans, so every proposal would fail for want of votes."""
+    import os
+    if os.environ.get('NO_TRADE_VOTES', '').lower() in ('1', 'true', 'yes'):
+        return False
+    return bool(TRADE_VOTES_ENABLED)
+
 
 # ---- Why trades happen ----
 # ⚠️ THE ENGINE IS CONTRACT CONGESTION, NOT GM DISAGREEMENT. The obvious model — two GMs
@@ -4678,7 +4964,11 @@ GAME_FORMAT_DESCRIPTIONS = {
 BASE_FATIGUE_PER_WEEK = 0.0063      # weekly fatigue gain with no Recovery Center
 FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
-FATIGUE_PHYSICAL_IMPACT = 0.5       # Was 0.6 (owner, 2026-10-05): eased once the Recovery Center made fatigue heavy; the gauge fans see is unchanged
+# 0.5 -> 0.3 (owner, 2026-10-30: rebalance so no single facility carries the set). At 0.5 a
+# level-5 Recovery Center was worth ~4.9 of the full set's ~6.4 wins. The fatigue GAUGE fans
+# see is unchanged (level 0 still ends the season ~0.21 fatigued, level 5 ~0.02); only what
+# that fatigue costs on the field is smaller. Env override for the facility harness.
+FATIGUE_PHYSICAL_IMPACT = float(_os.environ.get('FLOOS_FATIGUE_IMPACT', '0.3'))
 FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
 
 # Playoff bye reprieve: the top-2 seeds rest through round 1, so their players

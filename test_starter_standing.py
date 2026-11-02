@@ -41,10 +41,21 @@ def _coach(**attrs):
     return types.SimpleNamespace(**base)
 
 
+# The department level that gives an 80-scouting coach the neutral 0.5 read under the
+# floor + 40/60 blend (frontOfficeBrain.scoutingVision).
+from constants import SCOUT_VISION_FLOOR as _F, SCOUT_VISION_COACH_SHARE as _C
+_NEUTRAL_DEPT = ((0.5 - _F) / (1 - _F) - _C * 0.5) / (1 - _C)
+
+
 def _team(wins=14, losses=14):
     return types.SimpleNamespace(seasonTeamStats={'wins': wins, 'losses': losses,
                                                   'ties': 0},
-                                 facilityEffect=lambda key: 0.0)
+                                 # Mid-level facilities: with an 80-rated coach these give
+                                 # the neutral 0.5 scouting vision and development lean the
+                                 # arithmetic below assumes (facilities carry 60% since
+                                 # 2026-10-30; a team with none would read 0.2).
+                                 facilityEffect=lambda key: {'scouting_bonus': _NEUTRAL_DEPT,
+                                                             'dev_bonus': 1.8}.get(key, 0.0))
 
 
 def _player(pid, rating, nextSeason=None, position=Position.RB):
@@ -80,10 +91,18 @@ def test_a_development_gm_weighs_aging_more():
 def test_a_poor_scout_still_sees_a_veteran_getting_old():
     vet = _player(1, 83, nextSeason=81.5)
     brain = Brain()
-    blind = brain.starterStanding(vet, _team(), _coach(scouting=60))
-    sharp = brain.starterStanding(vet, _team(), _coach(scouting=100))
+    # The lowest and highest reads: since 2026-10-30 the Scouting Department is 60% of the
+    # read above a floor, so the extremes are the worst GM with no department (the floor)
+    # and the best GM with a full one (1.0).
+    def teamWith(dept):
+        t = _team()
+        t.facilityEffect = lambda key: {'scouting_bonus': dept, 'dev_bonus': 1.8}.get(key, 0.0)
+        return t
+    blind = brain.starterStanding(vet, teamWith(0.0), _coach(scouting=60))
+    sharp = brain.starterStanding(vet, teamWith(1.0), _coach(scouting=100))
     assert sharp < blind < 0
-    assert abs(blind / sharp - 0.5) < 1e-6
+    # Age is public: half the drag at no vision, the rest scales with vision (from the floor).
+    assert abs(blind / sharp - (0.5 + 0.5 * _F)) < 1e-6
 
 
 # ── results ──────────────────────────────────────────────────────────────────

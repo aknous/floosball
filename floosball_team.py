@@ -435,25 +435,38 @@ class Team:
         """Current level of a facility (0 if unbuilt / not loaded)."""
         return (self.facilities or {}).get(facilityKey, 0)
 
+    def facilityLevel(self, key):
+        """This team's level (0-5) at one facility.
+
+        Calibration switch (FLOOS_FACILITY_FORCE): the named facilities (comma-separated,
+        or 'all') read level 5 on even-id teams and level 0 on odd-id ones, so the win gap
+        between the halves is what those facilities are worth. Off unless set."""
+        from constants import FACILITY_MAX_LEVEL
+        import os
+        forced = os.environ.get('FLOOS_FACILITY_FORCE')
+        if forced and (forced == 'all' or key in forced.split(',')):
+            return FACILITY_MAX_LEVEL if (getattr(self, 'id', 0) or 0) % 2 == 0 else 0
+        return max(0, min(FACILITY_MAX_LEVEL, (self.facilities or {}).get(key, 0) or 0))
+
     def facilityEffect(self, effectType):
         """Effect value this team gets for a given effect ('dev_bonus',
         'morale', 'fatigue_reduction', 'scouting_bonus', 'home_morale') from
         the facility that drives it, at the team's current level. Replaces the
         old FUNDING_* market-tier lookups. Returns 0 when unbuilt/unknown."""
-        from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
-        # Calibration switch (FLOOS_FACILITY_FORCE): the named facilities (comma-separated,
-        # or 'all') read level 5 on even-id teams and level 0 on odd-id ones, so the win gap
-        # between the halves is what those facilities are worth. Off unless set.
-        import os
-        forced = os.environ.get('FLOOS_FACILITY_FORCE')
+        from constants import FACILITY_CATALOG
         for key, cfg in FACILITY_CATALOG.items():
             if cfg.get('effect') == effectType:
-                level = max(0, min(FACILITY_MAX_LEVEL, (self.facilities or {}).get(key, 0)))
-                if forced and (forced == 'all' or key in forced.split(',')):
-                    level = FACILITY_MAX_LEVEL if (getattr(self, 'id', 0) or 0) % 2 == 0 else 0
+                level = self.facilityLevel(key)
                 levels = cfg.get('levels') or []
                 return levels[level] if level < len(levels) else (levels[-1] if levels else 0)
         return 0
+
+    def setbackCushion(self):
+        """Share of every confidence / determination loss the Locker Room absorbs
+        (LOCKER_ROOM_SETBACK_CUSHION). 0.0 with no Locker Room."""
+        from constants import LOCKER_ROOM_SETBACK_CUSHION as _C
+        level = self.facilityLevel('locker_room')
+        return _C[level] if level < len(_C) else _C[-1]
 
     def teamUnderPerform(self):
         for player in self.rosterDict.values():

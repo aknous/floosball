@@ -283,6 +283,10 @@ class SeasonManager:
         if self.playerManager:
             self.playerManager.releaseDueNames(seasonNumber)
 
+        # The trades fans voted on after the FA draft settle now, before anything this
+        # season reads a roster (card templates, the class, the schedule).
+        self._resolveSeasonStartTradeVotes(seasonNumber)
+
         # Last season's champion stops holding the top of the news feed. The pin exists
         # to carry the result through the OFFSEASON, which is the window the publisher's
         # own docstring describes: a rule change or a Cores line would otherwise push the
@@ -344,8 +348,14 @@ class SeasonManager:
         # Restore reigning champion flag from DB
         self._restoreReigningChampion(seasonNumber)
 
+        # In-season signings are priced like everything else in-season: last season. Set
+        # before funding, which sizes the league baseline off the same share unit.
+        self._setPayrollShareUnit(seasonNumber - 1)
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
+        # Every facility's next level open for funding, and anything fans funded in full
+        # while it was blocked builds now (one upgrade per facility per year).
+        self._syncFacilityProjects(seasonNumber)
 
         # Dev-only: spread teams across all 4 funding tiers so single-user
         # testing produces a realistic tier distribution. Set DEV_SPREAD_TIERS=1
@@ -431,7 +441,11 @@ class SeasonManager:
             if existingUpcoming:
                 logger.info(f"Rookie class already exists ({len(existingUpcoming)} "
                             f"players) — reusing")
+                self._drawTalentForLegacyClass(existingUpcoming, seasonNumber)
+                self._growLegacyClass(existingUpcoming, seasonNumber)
             else:
+                self._writeTalentClassMarker(seasonNumber)
+                self._writeClassGrownMarker(seasonNumber)
                 rookies = self.playerManager._generateRookieClass(seasonNumber)
                 for r in rookies:
                     r.is_upcoming_rookie = True
@@ -554,16 +568,23 @@ class SeasonManager:
         # season-start values so in-season mechanics couldn't drift.
         self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
-        # Facilities (Markets→Facilities): first resolve the fan vote — the
-        # Run the season-end waterfall FIRST (Treasury pays upkeep, then the
-        # projects that were OPEN and fundable all season; offseason construction
-        # builds funded projects and decays unmaintained facilities). THEN resolve
-        # the vote, opening the winner as a fresh project — so it goes through an
-        # Active Projects season of funding before next season's waterfall can
-        # complete it, instead of being built instantly by this season's Treasury.
-        # Costs are share-denominated off the PRIOR season's faucet.
-        self._runFacilitySeasonEnd(self.currentSeason.seasonNumber)
-        self._resolveFacilityVotes(self.currentSeason.seasonNumber)
+        # Payroll: a team whose balance cannot cover next season's committed salaries
+        # cuts players NOW, so the FA draft can fill the slots it opens.
+        self._enforcePayrollAtSeasonEnd(self.currentSeason.seasonNumber)
+        # Salaries start once the first funded season has been played through: this
+        # offseason's signings are the first to carry one (docs/TREASURY_PAYROLL_PLAN.md §5).
+        try:
+            from managers import payroll
+            payroll.markSalariesStartIfDue(self.currentSeason.seasonNumber)
+        except Exception as e:
+            logger.error(f"Could not mark the salary start: {e}")
+
+        # Facilities: NOTHING is spent at season end any more. The money waits for the
+        # offseason payment run after the FA draft (`_runFacilityPayment`), so players get
+        # first claim on it (docs/TREASURY_PAYROLL_PLAN.md §5). Mark this season's run as
+        # due; the run only fires for a season that ended under this code, so a deploy
+        # landing mid-offseason after the OLD season-end waterfall cannot charge twice.
+        self._markFacilityPaymentDue(self.currentSeason.seasonNumber)
 
         # Close game stats file
         self._closeGameStatsFile()
@@ -932,6 +953,11 @@ class SeasonManager:
             # stays open through the whole pre-game run-up, the winning rule applies to
             # the shared gameRules before any game plays. No-op unless a vote is open.
             self._resolveRuleVote()
+
+            # In-season trade votes close at the deadline day's first kickoff, the same
+            # moment: games read rosters when they start and cards lock just below, so a
+            # trade settled here plays and scores for its new team all week.
+            self._resolveDeadlineTradeVotes()
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
@@ -1607,6 +1633,12 @@ class SeasonManager:
         # fans; credits a dividend to those whose team played this week.
         self._accrueSupporterDividends(self.currentSeason.seasonNumber, week)
 
+        # Gate revenue (docs/TREASURY_PAYROLL_PLAN.md §4): the league pays each team's
+        # Treasury for its active fans. Regular season only. After the card effects bank
+        # the week, since a fielded lineup is one of the participation signals.
+        if not in_playoffs:
+            self._accrueGateRevenue(self.currentSeason.seasonNumber, week)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
@@ -1637,6 +1669,13 @@ class SeasonManager:
             logger.info(f"Unlocked equipped cards for week {week}")
         except Exception as e:
             logger.error(f"Failed to unlock equipped cards for week {week}: {e}")
+
+        # Sims only (FLOOS_SYNTH_FANS): replay a real season's fan economy so a run from a
+        # snapshot does not measure the faucet collapsing once the real fans are gone.
+        if not in_playoffs:
+            from managers import syntheticFans
+            if syntheticFans.enabled():
+                syntheticFans.runWeek(self, self.currentSeason.seasonNumber, week)
 
         # The Cores narrate the slate that just finished. Before the week_end broadcast so
         # a client refreshing off that event already has the lines.
@@ -6654,6 +6693,10 @@ class SeasonManager:
             # Fresh offseason — reset the per-phase completion tracker.
             self._resetOffseasonCompletedSteps()
 
+        # Contracts signed this offseason are priced off the season just played, the
+        # same share unit next season's facility costs use.
+        self._setPayrollShareUnit(self.currentSeason.seasonNumber)
+
         # OFFSEASON_TEST runs the season silently and only broadcasts during
         # the offseason. Enable the broadcaster as the very first step so
         # phase-change events for post_bowl + frontoffice (set before / inside
@@ -6784,11 +6827,14 @@ class SeasonManager:
             # _gmResigned flags that STEP 3 consumes. Fan resign votes honored first.
             # See docs/PARITY_PROSPECT_PLAN.md Phase 5.
             logger.info("Step 2.7: Retention (re-sign) decisions")
+            self._refreshPayrollFinances(self.currentSeason.seasonNumber)
             self._applyRetentionLimits()
 
             # STEP 3: Process contract decrements and retirements for rostered players
             logger.info("Step 3: Contract decrements and team retirements")
             await self._processRosteredPlayerContracts()
+            from managers import payroll
+            payroll.flushContracts()        # the re-signs, as comparable contracts
 
             # STEP 3.5: (was: resolve cut votes). Cuts are now the GM brain's
             # cut-for-upgrade call, made during the STEP 2.7 assessment sweep.
@@ -7010,6 +7056,10 @@ class SeasonManager:
         # the target, lands a full day later.
         await self.timingManager.waitUntilNoonEt(self._offseasonFlowTarget)
 
+        # Trade votes from pass A close as the rookie draft begins, so a pick traded
+        # here is used by its new team.
+        self._resolveOffseasonTradeVotes()
+
         # ── PHASE: rookie_draft ──────────────────────────────
         # ⚠️ STEP-GATED AND SNAPSHOTTED ON ENTRY like every other offseason phase. The
         # picks are NOT idempotent — each one moves a rookie into a pipeline — so a
@@ -7017,10 +7067,9 @@ class SeasonManager:
         # The offseason is exactly where this project's restarts land.
         await self._runRookieDraftPhase()
 
-        # ── Offseason trade window, pass B ──────────────────
-        # Smaller: a club that just drafted a quarterback may now have a surplus one, and
-        # the pool it is about to fish is known. ⚠️ This year's picks are gone.
-        self._runOffseasonTradePass('pre_fa')
+        # ⚠️ NO TRADE PASS ON DRAFT DAY (owner, 2026-10-30). Pass B sat here, between the
+        # rookie draft and the FA draft, and a fan vote cannot fit in that gap. Its job (a
+        # team that just drafted a surplus player) moved to the pass after the FA draft.
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (promotions just moved some prospects up,
@@ -7103,6 +7152,7 @@ class SeasonManager:
             # free agents would sign for this club, and what this GM thinks
             # each of them is worth. See _buildFaDraftBoards.
             logger.info("Step 5.95: Build per-team FA draft boards")
+            self._refreshPayrollFinances(self.currentSeason.seasonNumber)
             self._buildFaDraftBoards()
 
             # STEP 6: FA Draft
@@ -7114,6 +7164,16 @@ class SeasonManager:
             self._validateRosterIntegrity()
 
             self._markOffseasonStepComplete('fa_draft')
+
+        # STEP 6.75: The facility payment run (owner, 2026-10-22). After the FA draft so
+        # players get first claim on the treasury, before training so a Training level
+        # built here develops this offseason's players. Idempotent on its own marker
+        # (committed with the run), so a restart between the run and this step marker
+        # cannot pay twice.
+        if not self._isOffseasonStepComplete('facility_payment'):
+            logger.info("Step 6.75: Facility payment run")
+            self._runFacilityPayment(self.currentSeason.seasonNumber)
+            self._markOffseasonStepComplete('facility_payment')
 
         # ── PHASE: training ──────────────────────────────────
         # Players just signed by FA are now under their new team's coach +
@@ -7147,6 +7207,16 @@ class SeasonManager:
                     if hasattr(prospect, 'id'):
                         teamDevRating[prospect.id] = coachDevRating
                         teamFundingBonus[prospect.id] = fundingBonus
+            # Development luck drifts relative to the league's own mean environment, so the
+            # league neither gains nor loses talent from it whatever its facility levels.
+            try:
+                from player_development import PlayerDevelopment as _PD
+                envs = [_PD.developmentBias(getattr(getattr(t, 'coach', None), 'playerDevelopment', 80) or 80,
+                                            t.facilityEffect('dev_bonus'))
+                        for t in teamManager.teams]
+                _PD.leagueNeutralBias = sum(envs) / len(envs) if envs else None
+            except Exception as e:
+                logger.warning(f"Step 7: league development baseline unavailable ({e})")
             for player in self.playerManager.activePlayers:
                 if hasattr(player, 'offseasonTraining'):
                     pid = getattr(player, 'id', None)
@@ -7212,6 +7282,12 @@ class SeasonManager:
             self._markOffseasonStepComplete('training_and_finalize')
         else:
             logger.info("Training + finalize already completed (resumed) — skipping STEP 7-12")
+
+        # ── Offseason trade window, after the FA draft ─────
+        # Rosters are full and final, and the fans have until the next season starts to
+        # vote. This year's picks are spent, so nobody trades up, and a seller fills its
+        # hole on the spot (there is no draft left to fill it).
+        self._runOffseasonTradePass('post_fa')
 
         # ── Offseason flow complete ──────────────────────────
         # Clear phase + target so the UI falls back to the plain "Offseason"
@@ -8031,8 +8107,10 @@ class SeasonManager:
         the guard is here rather than in a comment. `weekIsFullyRecorded` is the predicate
         the fantasy side already trusts.
         """
-        from constants import TRADING_ENABLED, GM_ACTIVE_WEEK
-        if not TRADING_ENABLED or not self.currentSeason:
+        from constants import tradingEnabled, tradeVotesEnabled, GM_ACTIVE_WEEK
+        # ⚠️ THE FUNCTION, NOT THE CONSTANT: `TRADING_ENABLED` read here meant the admin
+        # switch could never turn the market on while the constant was False.
+        if not tradingEnabled() or not self.currentSeason:
             return []
         if int(week or 0) >= int(GM_ACTIVE_WEEK):
             return []           # rosters freeze at the deadline
@@ -8046,9 +8124,18 @@ class SeasonManager:
             self._ensureDraftPicks(season)
             brain = self._foBrainForOffseason()
             brain.season, brain.week = season, int(week or 1)
+            from managers import tradeVotes
+            votes = tradeVotesEnabled()
             accepted = tradeManager.runWeeklyPass(
                 self.playerManager, teamManager, brain, season, week,
-                draftOrder=self._draftOrderIds())
+                draftOrder=self._draftOrderIds(),
+                excludeTeamIds=tradeVotes.openTeamIds() if votes else None)
+            if votes:
+                # Fans vote until the deadline day's first kickoff, then
+                # `_resolveDeadlineTradeVotes` settles what they approved.
+                tradeVotes.propose(self, accepted, season, week, tradeVotes.PHASE_IN_SEASON,
+                                   tradeVotes.CLOSE_DEADLINE, self._deadlineKickoff())
+                return []
             settled = []
             for entry in accepted:
                 # ⚠️ SEQUENTIAL, RE-VALIDATING AGAINST THE STATE THE LAST ONE LEFT. Within
@@ -8067,6 +8154,35 @@ class SeasonManager:
             logger.error(f"Trade pass failed in week {week}: {e}", exc_info=True)
             return []
 
+    def _noteOffseasonTrade(self, result) -> None:
+        """A settled offseason trade on the offseason board."""
+        teamManager = self.serviceContainer.getService('team_manager')
+        # ⚠️ BOTH CLUBS AND BOTH SIDES. This carried only the seller's name
+        # (no abbr) and what it gave up, so the offseason page could not say
+        # who the other party was or what came back — and with no abbr the
+        # row filed under no team at all.
+        teamsById = {getattr(t, 'id', None): t
+                     for t in (getattr(teamManager, 'teams', None) or [])}
+
+        def _abbr(teamId, fallbackName):
+            t = teamsById.get(teamId)
+            if t is not None:
+                return getattr(t, 'abbr', t.name[:3].upper())
+            return (fallbackName or '')[:3].upper()
+
+        aGave = ', '.join(p['name'] for p in result.get('aGave') or []) or 'nothing'
+        bGave = ', '.join(p['name'] for p in result.get('bGave') or []) or 'nothing'
+        self._offseasonTransactions.append({
+            'type': 'trade',
+            'team': result['teamAName'],
+            'teamAbbr': _abbr(result.get('teamAId'), result['teamAName']),
+            'counterpartTeam': result.get('teamBName'),
+            'counterpartAbbr': _abbr(result.get('teamBId'), result.get('teamBName')),
+            'gave': aGave, 'got': bGave,
+            'player': aGave,
+            'position': '—', 'rating': 0,
+        })
+
     def _runOffseasonTradePass(self, passName: str) -> list:
         """One of the two offseason trade windows.
 
@@ -8078,8 +8194,16 @@ class SeasonManager:
                      visible. ⚠️ THIS IS WHERE PICK TRADING LIVES, because this year's
                      picks are spent the moment the draft runs. That asymmetry is worth
                      honouring rather than smoothing.
-            pass B — pre-FA-draft: smaller. A club that just drafted a quarterback may now
-                     have a surplus one, and the pool it is about to fish is known.
+            post_fa — after the FA draft (owner, 2026-10-30): rosters full and final, and
+                     fans vote until the next season starts. This year's picks are spent,
+                     so nobody trades up, and a seller fills its hole on the spot
+                     (`fillHoles`), since no draft is left to fill it. It replaced pass B,
+                     which ran between the two drafts: a fan vote cannot fit there.
+
+        With trade votes on (`constants.tradeVotesEnabled`), both store their trades as
+        proposals (`managers/tradeVotes.py`) instead of settling them: pass A's close as
+        the rookie draft begins (`_resolveOffseasonTradeVotes`), post_fa's as the next
+        season starts (`_resolveSeasonStartTradeVotes`).
 
         ⚠️ THE VALUATION CHANGES HERE, IN THE CLUB'S FAVOUR, AND BOTH HALVES MATTER.
         `seasonsOfControl` JUMPS — the walk-years are already gone, so everyone remaining
@@ -8096,14 +8220,16 @@ class SeasonManager:
         otherwise re-run it and trade AGAIN from an already-changed roster — and the
         offseason is exactly where this project's restarts land.
         """
-        from constants import TRADING_ENABLED
+        from constants import tradingEnabled, tradeVotesEnabled
+        from managers import tradeVotes
         step = f'trade_{passName}'
         if self._isOffseasonStepComplete(step):
             logger.info(f"Offseason trade pass '{passName}' already complete — skipping")
             return []
-        if not TRADING_ENABLED or not self.currentSeason:
+        if not tradingEnabled() or not self.currentSeason:
             self._markOffseasonStepComplete(step)
             return []
+        postFa = passName == 'post_fa'
         settled = []
         try:
             from managers import tradeManager
@@ -8111,53 +8237,107 @@ class SeasonManager:
             season = self.currentSeason.seasonNumber
             self._ensureDraftPicks(season)
             brain = self._foBrainForOffseason()
+            votes = tradeVotesEnabled()
             # `week=None` is what tells the valuation this is the offseason: whole
             # seasons of control, and contention at parity.
-            for entry in tradeManager.runWeeklyPass(
-                    self.playerManager, teamManager, brain, season, None,
-                    draftOrder=self._draftOrderIds()):
+            entries = tradeManager.runWeeklyPass(
+                self.playerManager, teamManager, brain, season, None,
+                draftOrder=self._draftOrderIds(),
+                excludeTeamIds=tradeVotes.openTeamIds() if votes else None,
+                pickTrades=not postFa)
+            if votes:
+                if postFa:
+                    tradeVotes.propose(self, entries, season, None, tradeVotes.PHASE_POST_FA,
+                                       tradeVotes.CLOSE_SEASON_START,
+                                       self.timingManager._nextSeasonAnchorUtc())
+                else:
+                    tradeVotes.propose(self, entries, season, None, tradeVotes.PHASE_OFFSEASON,
+                                       tradeVotes.CLOSE_ROOKIE_DRAFT,
+                                       self._offseasonFlowTarget)
+                entries = []
+            for entry in entries:
                 # ⚠️ A PICK TRADE HAS ITS OWN SETTLEMENT — nobody is displaced, nothing
                 # is cut and no slot is backfilled, so `settleTrade`'s roster ordering does
                 # not apply to it at all.
-                if entry.get('kind') == 'pick':
-                    result = tradeManager.settlePickTrade(
-                        self, entry['listing'], entry['winner'], season)
-                else:
-                    result = tradeManager.settleTrade(
-                        self, entry['listing'], entry['winner'], season, None)
+                result = tradeVotes.settleEntry(self, entry, season, None,
+                                                fillHoles=True if postFa else None)
                 if result is not None:
                     settled.append(result)
-                    # ⚠️ BOTH CLUBS AND BOTH SIDES. This carried only the seller's name
-                    # (no abbr) and what it gave up, so the offseason page could not say
-                    # who the other party was or what came back — and with no abbr the
-                    # row filed under no team at all.
-                    teamsById = {getattr(t, 'id', None): t
-                                 for t in (getattr(teamManager, 'teams', None) or [])}
-
-                    def _abbr(teamId, fallbackName):
-                        t = teamsById.get(teamId)
-                        if t is not None:
-                            return getattr(t, 'abbr', t.name[:3].upper())
-                        return (fallbackName or '')[:3].upper()
-
-                    aGave = ', '.join(p['name'] for p in result.get('aGave') or []) or 'nothing'
-                    bGave = ', '.join(p['name'] for p in result.get('bGave') or []) or 'nothing'
-                    self._offseasonTransactions.append({
-                        'type': 'trade',
-                        'team': result['teamAName'],
-                        'teamAbbr': _abbr(result.get('teamAId'), result['teamAName']),
-                        'counterpartTeam': result.get('teamBName'),
-                        'counterpartAbbr': _abbr(result.get('teamBId'), result.get('teamBName')),
-                        'gave': aGave, 'got': bGave,
-                        'player': aGave,
-                        'position': '—', 'rating': 0,
-                    })
+                    self._noteOffseasonTrade(result)
             if settled:
                 logger.info(f"Offseason trade pass '{passName}': {len(settled)} settled")
         except Exception as e:
             logger.error(f"Offseason trade pass '{passName}' failed: {e}", exc_info=True)
         self._markOffseasonStepComplete(step)
         return settled
+
+    def _deadlineKickoff(self):
+        """The deadline day's first kickoff (week GM_ACTIVE_WEEK), as naive UTC, or None."""
+        from constants import GM_ACTIVE_WEEK
+        try:
+            entry = self.currentSeason.schedule[int(GM_ACTIVE_WEEK) - 1]
+            return entry.get('startTime') if isinstance(entry, dict) else None
+        except Exception:
+            return None
+
+    def _resolveDeadlineTradeVotes(self) -> list:
+        """Close in-season trade votes once the deadline day's games start. Runs every week
+        from the deadline on, so a restart that missed the kickoff still closes them."""
+        from constants import GM_ACTIVE_WEEK, tradingEnabled
+        if not self.currentSeason or int(self.currentSeason.currentWeek or 0) < int(GM_ACTIVE_WEEK):
+            return []
+        try:
+            if not tradingEnabled():
+                return []
+            from managers import tradeVotes
+            out = tradeVotes.resolve(self, tradeVotes.CLOSE_DEADLINE)
+            if any(o['status'] == tradeVotes.APPROVED for o in out):
+                self.playerManager.savePlayerData()
+            return out
+        except Exception as e:
+            logger.error(f"Deadline trade votes failed: {e}", exc_info=True)
+            return []
+
+    def _resolveOffseasonTradeVotes(self) -> list:
+        """Close the votes on pass A's trades as the rookie draft begins. Step-gated like
+        every other offseason phase; settled trades go on the offseason board."""
+        step = 'trade_votes_pre_draft'
+        if self._isOffseasonStepComplete(step):
+            return []
+        out = []
+        try:
+            from constants import tradingEnabled
+            if tradingEnabled():
+                from managers import tradeVotes
+                out = tradeVotes.resolve(self, tradeVotes.CLOSE_ROOKIE_DRAFT)
+                for o in out:
+                    if o.get('manifest'):
+                        self._noteOffseasonTrade(o['manifest'])
+        except Exception as e:
+            logger.error(f"Offseason trade votes failed: {e}", exc_info=True)
+        self._markOffseasonStepComplete(step)
+        return out
+
+    def _resolveSeasonStartTradeVotes(self, seasonNumber: int) -> list:
+        """Close the votes on the after-FA-draft trades as the next season starts, then
+        expire anything a restart left open from an earlier season. Idempotent: a closed
+        proposal is never reopened, so the mid-season resume path through
+        `startNewSeason` finds nothing to do."""
+        out = []
+        try:
+            from constants import tradingEnabled
+            from managers import tradeVotes
+            if tradingEnabled():
+                out = tradeVotes.resolve(self, tradeVotes.CLOSE_SEASON_START)
+                if any(o['status'] == tradeVotes.APPROVED for o in out):
+                    self.playerManager.savePlayerData()
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    if teamManager:
+                        teamManager.saveTeamData()
+            tradeVotes.expireStale(seasonNumber)
+        except Exception as e:
+            logger.error(f"Season-start trade votes failed: {e}", exc_info=True)
+        return out
 
     def _weekIsBanked(self, week: int) -> bool:
         """Has this week's fantasy record been written? The trade seam's gate."""
@@ -8313,8 +8493,7 @@ class SeasonManager:
         free-agent pool as it stands then and fan ratings up to that point. Cached for
         `FO_DESK_PROJECTION_TTL_SECS`. Empty on failure, so a caller can fall back."""
         import time
-        from constants import (FO_DESK_PROJECTION_TTL_SECS, RESIGN_LIMIT_ENABLED,
-                               RESIGN_LIMIT_PER_OFFSEASON)
+        from constants import FO_DESK_PROJECTION_TTL_SECS, RESIGN_LIMIT_PER_OFFSEASON
         # ⚠️ KEYED TO THE CALENDAR, NOT ONLY THE CLOCK. A time-only cache carried one
         # season's projection into the next (a fast sim plays a season inside the TTL),
         # so no walk-year player was found in it and the desk quietly fell back to the
@@ -8344,7 +8523,7 @@ class SeasonManager:
                 slotOwners = [owner for _o, owner in self._rookieDraftSlots(list(faOrder))]
             except Exception:
                 slotOwners = []
-            limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+            limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
             for team in teams:
                 expiring, forcedWalk, kept, _d, _a = self._resignDecision(
                     team, brain, faOrder, slotOwners, limit)
@@ -8626,37 +8805,13 @@ class SeasonManager:
         return self._executeProspectCut(team, prospect, slot, incumbent, finalWindow=True)
 
     def _chargeCutFee(self, team, fee: int) -> bool:
-        """Debit a team's Treasury for a cut. False (and nothing charged) if it
-        cannot cover it — ⚠️ the fee is never allowed to go negative into a debt,
-        because a broke club with a debt line has UNLIMITED roster churn, which is
-        the opposite of what the fee is for."""
-        if fee <= 0:
-            return True
+        """Debit a team's Treasury for a cut (`facilitiesManager.chargeCutFee`). False, with
+        nothing charged, when it cannot cover it."""
         try:
-            from database.connection import get_session
-            from managers.facilitiesManager import getTreasury, setTreasury
+            from managers.facilitiesManager import chargeCutFee
         except Exception:
-            return True             # facilities economy unavailable — do not block the sim
-        teamId = getattr(team, 'id', None)
-        if teamId is None:
-            return True
-        session = get_session()
-        try:
-            balance = getTreasury(session, teamId)
-            if balance < fee:
-                return False
-            setTreasury(session, teamId, balance - fee)
-            session.commit()
-            return True
-        except Exception as e:
-            logger.warning(f"Could not charge cut fee to {team.name}: {e}")
-            try:
-                session.rollback()
-            except Exception:
-                pass
-            return False
-        finally:
-            session.close()
+            return True             # facilities economy unavailable: do not block the sim
+        return chargeCutFee(getattr(team, 'id', None), fee)
 
     def _promoteProspectsAutonomously(self, team, washoutOnly: bool = False) -> list:
         """Promote this team's prospects when the GM rates them over the market.
@@ -8781,6 +8936,8 @@ class SeasonManager:
             prospects.remove(best)
             best.term = bestTerm
             best.termRemaining = bestTerm
+            from managers import payroll
+            payroll.stampSalary(best, prospect=True)
             # ⚠️ Promoting is a commitment for the season. Without this he can be cut
             # again before a snap is played — by the FA draft's upgrade cut, by a trade
             # needing room, or by the very next turn of this same loop making room for
@@ -8838,14 +8995,24 @@ class SeasonManager:
         # list and we want them to survive into the FA phase so a mid-FA
         # refresh still shows the full offseason history. The single wipe
         # at the start of _handleOffseason covers the between-season reset.
-        currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
+        # ⚠️ IT TESTED `hasattr(self, 'currentSeasonNumber')`, an attribute nothing sets, so this
+        # was ALWAYS 1. Harmless while the FA draft only used it for a log file name; the free
+        # agency market seeds contract terms, records comparable contracts and checks
+        # promoted-this-offseason protection with it.
+        currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 1) or 1
 
-        pickGen = self.playerManager.freeAgencyPickGenerator(
-            freeAgencyOrder=freeAgencyOrder,
-            currentSeason=currentSeasonNum,
-            leagueHighlights=leagueHighlights,
-            skipRetirements=True,
-        )
+        from managers import faMarket
+        if faMarket.marketActive():
+            # The free agency market (docs/FREE_AGENCY_MARKET_PLAN.md): players choose, then
+            # the draft's machinery fills only the holes left, with upgrades off.
+            pickGen = self._marketThenFill(freeAgencyOrder, currentSeasonNum, leagueHighlights)
+        else:
+            pickGen = self.playerManager.freeAgencyPickGenerator(
+                freeAgencyOrder=freeAgencyOrder,
+                currentSeason=currentSeasonNum,
+                leagueHighlights=leagueHighlights,
+                skipRetirements=True,
+            )
 
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
@@ -8867,8 +9034,13 @@ class SeasonManager:
                             )
                         )
                         self._offseasonTransactions.append(entry)
+                        if entry.get('isResign'):
+                            # Won back in the free agency market: he walked at step 3, so his
+                            # 'walked' row would read as a departure beside the re-signing.
+                            self._dropRecapEvent('walked', entry.get('playerId'))
                         self._recordOffseasonEvent(
-                            'promotion' if entry.get('isPromotion') else 'fa_pick',
+                            'promotion' if entry.get('isPromotion')
+                            else 'resign' if entry.get('isResign') else 'fa_pick',
                             teamName=entry['team'], teamAbbr=entry['teamAbbr'],
                             playerId=entry.get('playerId'), playerName=entry['player'],
                             position=entry['position'], rating=entry['rating'], tier=entry['tier'])
@@ -8926,11 +9098,56 @@ class SeasonManager:
 
         logger.info("Free agency complete")
     
+    def _dropRecapEvent(self, eventType, playerId) -> None:
+        """Remove this season's recap row of `eventType` for a player, best-effort."""
+        if playerId is None or not self.currentSeason:
+            return
+        try:
+            from database.connection import get_session
+            from database.models import SeasonRecapEvent
+            s = get_session()
+            try:
+                s.query(SeasonRecapEvent).filter_by(
+                    season=self.currentSeason.seasonNumber, event_type=eventType,
+                    player_id=playerId).delete(synchronize_session=False)
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.debug(f"recap event drop failed ({eventType}, {playerId}): {e}")
+
+    def _marketThenFill(self, freeAgencyOrder, season, leagueHighlights):
+        """The signing period, then the FA draft generator for any hole it left (upgrades
+        off). Yields the FA draft's event shapes, so the live feed and recap handle both.
+        'market' lines (offers and bidding wars) are logged; the feed for them is the
+        frontend's to build."""
+        from managers import faMarket
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        brain = self._foBrainForOffseason()
+        events = faMarket.runSigningPeriod(self.playerManager, teams, brain, season,
+                                           freeAgencyOrder, {}, leagueHighlights)
+        for e in events:
+            if e.get('type') == 'market':
+                logger.info(f"FA market: {e['text']}")
+                continue
+            yield e
+        try:
+            yield from self.playerManager.freeAgencyPickGenerator(
+                freeAgencyOrder=freeAgencyOrder, currentSeason=season,
+                leagueHighlights=leagueHighlights, skipRetirements=True, allowUpgrades=False)
+        finally:
+            # The market's reduced asks only hold for this FA step.
+            from managers import payroll
+            for p in self.playerManager.freeAgents:
+                p._marketAsk = None
+            payroll.flushContracts()
+
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
                               rating=None, tier=None, session=None,
-                              tradeId=None) -> None:
+                              tradeId=None, season=None) -> None:
         """Persist one offseason transaction/announcement for the Season Recap.
         Best-effort + idempotent per (season, eventType, playerId|teamId) so an
         offseason resume/restart never duplicates or breaks the offseason.
@@ -8940,7 +9157,11 @@ class SeasonManager:
         write (e.g. HoF induction) self-deadlocks on the single-writer lock and
         stalls the whole sim task for the 30s busy_timeout."""
         try:
-            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            # ⚠️ `season` WINS WHEN GIVEN. Between `advanceToNextSeason` and the new Season,
+            # `currentSeason` is None, and the trades fans approved after the FA draft settle
+            # exactly then (`_resolveSeasonStartTradeVotes`); read from here, every one of
+            # them was silently left out of the recap.
+            season = season or (self.currentSeason.seasonNumber if self.currentSeason else 0)
             if not season:
                 return
             if team is not None:
@@ -8987,22 +9208,36 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"recap event record failed ({eventType}): {e}")
 
+    # The detail a forced payroll cut is recorded with. It is written at SEASON END,
+    # before the fresh-offseason wipe below, so the wipe spares it by this prefix.
+    UNPAID_CUT_DETAIL = 'Unpaid:'
+
     def _clearRecapEvents(self, season: int) -> None:
         """Wipe a season's recap event log (called on FRESH offseason entry so a
-        rebuild starts clean; skipped on resume)."""
+        rebuild starts clean; skipped on resume).
+
+        ⚠️ SPARES THE SEASON-END FORCED PAYROLL CUTS. They are recorded just before the
+        offseason starts, so a plain wipe deleted every one of them: the news item went
+        out and the cut never reached the recap or the offseason moves feed. They are
+        not part of a partly built offseason, and the season-end check never re-runs
+        for them (the cut player is already off the roster)."""
         try:
             from database.connection import get_session
             from database.models import SeasonRecapEvent
             s = get_session()
             try:
-                s.query(SeasonRecapEvent).filter_by(season=season).delete()
+                from sqlalchemy import and_, not_
+                unpaidCut = and_(SeasonRecapEvent.event_type == 'cut',
+                                 SeasonRecapEvent.detail.like(f"{self.UNPAID_CUT_DETAIL}%"))
+                s.query(SeasonRecapEvent).filter(SeasonRecapEvent.season == season,
+                                                 not_(unpaidCut)).delete(synchronize_session=False)
                 s.commit()
             finally:
                 s.close()
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
-    def _resignDecision(self, team, brain, faOrder, slotOwners, limit):
+    def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True):
         """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,
         teamsAhead)`. Read-only: nothing on the players changes here.
 
@@ -9069,7 +9304,52 @@ class SeasonManager:
                                    pickDepth=pickDepth, team=team,
                                    teamsAhead=teamsAhead, internal=internal,
                                    lastChance=lastChance)
+        if afford:
+            kept = self._affordableResigns(team, expiring, kept)
         return expiring, forcedWalk, kept, pickDepth, teamsAhead
+
+    def _affordableResigns(self, team, expiring, kept, salaryFor=None, seasons=None) -> list:
+        """The re-signs this team can pay for, in the GM's priority order
+        (docs/TREASURY_PAYROLL_PLAN.md §5). A keeper whose asking salary does not fit
+        the budget walks to free agency, the next one is then tried, and every slot
+        still open keeps a minimum salary in reserve so the FA draft can fill it.
+        Read-only, like the decision it filters."""
+        from managers import payroll
+        if not payroll.salariesActive() or not kept:
+            return kept
+        from managers import payroll
+        season = getattr(self.currentSeason, 'seasonNumber', 0)
+        if not payroll._finances:
+            # The Front Office desk projects this mid-season, before any offseason has
+            # set finances: budget on the last full season's income.
+            self._refreshPayrollFinances(season if getattr(self, '_offseasonFlowPhase', None)
+                                         else season - 1)
+        if not payroll.hasFinances(getattr(team, 'id', None)):
+            return kept
+        income, upkeep = payroll.financesOf(getattr(team, 'id', None))
+        balance = payroll.balanceOf(getattr(team, 'id', None))
+        expiringIds = {id(p) for p in expiring}
+        contracts = payroll.schedule(team, preDecrement=True, exclude=expiringIds)
+        retiring = sum(1 for p in payroll.rosterPlayers(team) if getattr(p, 'willRetire', False))
+        minimum = payroll.minimumSalary()
+        affordable = []
+        for i, p in enumerate(kept):
+            # Slots still to fill after this decision: every expiring player not yet
+            # accepted except this one, plus the retiring players' slots.
+            openAfter = (len(expiring) - len(affordable) - 1) + retiring
+            reserve = [(minimum, 1)] * max(0, openAfter)
+            salary = salaryFor(p) if salaryFor else payroll.askingSalary(p)
+            term = payroll.contractTerm(self.playerManager, p, season)
+            room = payroll.maxAffordable(contracts + reserve, term, balance, income, upkeep,
+                                         seasons=seasons)
+            if salary <= room:
+                affordable.append(p)
+                contracts.append((salary, term))
+            else:
+                logger.info(f"Payroll: {team.name} cannot afford to re-sign {p.name} "
+                            f"({getattr(p, 'playerRating', 0)}) at {salary}F a season "
+                            f"for {term} (room {room}F)")
+        return affordable
 
     def _applyRetentionLimits(self) -> None:
         """Per team, decide which EXPIRING players (contract up this offseason) get
@@ -9096,7 +9376,7 @@ class SeasonManager:
         expiring, 0 kept). A switch that silently empties every roster is worse
         than no switch. See PARITY_PROSPECT_PLAN.md P5.
         """
-        from constants import RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON
+        from constants import RESIGN_LIMIT_PER_OFFSEASON
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
@@ -9116,7 +9396,7 @@ class SeasonManager:
         # so a userless sim wasn't an all-walk extreme; the brain decides for
         # every league now, so there is nothing left for it to stand in for.
         # retention_harness.py still sets it and is unaffected.
-        limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+        limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
 
         # ASSESSMENT SWEEP ORDER (plan Part A). With the brain driving, teams
         # are evaluated BEST-FIRST — Floos Bowl champion, then win% descending —
@@ -9147,6 +9427,15 @@ class SeasonManager:
             'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
         }
         cutTally = 0
+        from managers import faMarket
+        from managers.playerManager import fanVerdict
+        marketMode = faMarket.marketActive()
+        if marketMode:
+            from managers import payroll
+            season = getattr(self.currentSeason, 'seasonNumber', 0)
+            marketStanding = faMarket.teamStanding(list(teamManager.teams), season, brain)
+            logger.info("Retention: free agency market active; teams offer first, players "
+                        "accept or test the market")
         # Which slots of THIS draft each club owns (slot k = the k-th pick), traded picks
         # included: the same reader the draft itself uses.
         try:
@@ -9158,7 +9447,50 @@ class SeasonManager:
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
             expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
-                team, brain, faOrder, slotOwners, limit)
+                team, brain, faOrder, slotOwners, limit, afford=not marketMode)
+            if marketMode:
+                # THE RE-SIGN HEAD START (owner, 2026-11-01). The team offers the players
+                # its GM wants (plus anyone its fans voted to keep, budget permitting), at
+                # his asking salary less his pull toward it; the rest it declines. Each
+                # player offered accepts or tests the free agency market, where this team
+                # can still bid for him like anyone else.
+                from constants import FA_RESIGN_BUDGET_SEASONS
+                wanted = list(kept) + [p for p in expiring
+                                       if fanVerdict(p) == 'keep' and p not in kept]
+                # The offer comes first (it can be above his ask for a player the team wants),
+                # then the budget, at that salary, over the deal's first seasons.
+                offers = {id(p): faMarket.resignOffer(p, team, marketStanding, payroll.minimumSalary())
+                          for p in wanted}
+                offered = self._affordableResigns(
+                    team, expiring, wanted, salaryFor=lambda p: offers[id(p)][0],
+                    seasons=FA_RESIGN_BUDGET_SEASONS)
+                accepted = []
+                for p in offered:
+                    salary, pull = offers[id(p)]
+                    accepts = faMarket.acceptsResign(p, salary, pull, season)
+                    logger.info("Re-sign offer: " + json.dumps({
+                        'season': season, 'team': getattr(team, 'abbr', team.name), 'playerId': p.id,
+                        'player': p.name, 'position': p.position.name,
+                        'rating': round(getattr(p, 'playerRating', 0), 1), 'motive': faMarket.motiveOf(p),
+                        'ask': payroll.askingSalary(p), 'salary': salary, 'accepted': bool(accepts)}))
+                    if accepts:
+                        p._resignSalary = salary
+                        accepted.append(p)
+                    else:
+                        logger.info(f"Re-sign: {p.name} ({getattr(p, 'playerRating', 0)}, "
+                                    f"{faMarket.motiveOf(p)}) turns down the {team.name}'s "
+                                    f"{salary}F and tests free agency")
+                        if getattr(p, 'playerRating', 0) >= 84:
+                            self._publishTeamNews('signing', f"{p.name} turns down the {team.name} "
+                                                  f"and tests free agency", team)
+                kept = accepted
+                for p in expiring:
+                    if p not in offered:
+                        logger.info("Re-sign offer: " + json.dumps({
+                            'season': season, 'team': getattr(team, 'abbr', team.name), 'playerId': p.id,
+                            'player': p.name, 'position': p.position.name,
+                            'rating': round(getattr(p, 'playerRating', 0), 1), 'motive': faMarket.motiveOf(p),
+                            'ask': payroll.askingSalary(p), 'salary': None, 'accepted': False}))
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds
@@ -9176,8 +9508,10 @@ class SeasonManager:
             # CUT-FOR-UPGRADE. Released LIVE so the teams later in the sweep
             # assess against the fuller market this one just created.
             # (chooseCuts already takes the team positionally and forwards it.)
-            cuts = brain.chooseCuts(team, coach=coach, pickDepth=pickDepth,
-                                    teamsAhead=teamsAhead)
+            # With the free agency market a team releases a starter only when it lands his
+            # replacement there (a conditional release), so nobody is cut on a guess.
+            cuts = [] if marketMode else brain.chooseCuts(team, coach=coach, pickDepth=pickDepth,
+                                                           teamsAhead=teamsAhead)
             for player, slot in cuts:
                 self.playerManager.releasePlayerToFreeAgency(player, team, faLists)
                 cutTally += 1
@@ -9229,8 +9563,20 @@ class SeasonManager:
                     # Re-signed (fan vote or retention-limit keep) — renew contract
                     # and bump the re-sign count (re-sign-once forces a walk once the
                     # count hits RESIGN_ONCE_LIMIT).
-                    player.term = self.playerManager._getPlayerTerm(player)
+                    # The term the re-sign decision priced (a seeded roll, `contractTerm`).
+                    from managers import payroll
+                    player.term = payroll.contractTerm(
+                        self.playerManager, player, getattr(self.currentSeason, 'seasonNumber', 0))
                     player.termRemaining = player.term
+                    # A re-sign is a new contract: it locks his asking salary now, or the
+                    # salary he accepted in the free agency market's re-sign head start.
+                    from managers import payroll
+                    offered = getattr(player, '_resignSalary', None)
+                    if offered is not None and payroll.salariesActive():
+                        player.salary = int(offered)
+                    else:
+                        payroll.stampSalary(player)
+                    player._resignSalary = None
                     player.teamResignCount = int(getattr(player, 'teamResignCount', 0) or 0) + 1
                     player._gmResigned = False
                     leagueHighlights.insert(0, {
@@ -10756,6 +11102,32 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Supporter dividend accrual failed (s{season} w{week}): {e}")
 
+    def _accrueGateRevenue(self, season: int, week: int) -> None:
+        """Pay this week's gate revenue into every team's Treasury. Idempotent per team
+        per week, so the week-end replay after a restart pays nothing twice."""
+        try:
+            from database.connection import get_session
+            from managers import facilitiesManager, gateRevenue
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                shareUnit = facilitiesManager.computeShareUnit(
+                    session, season - 1, numTeams=max(1, len(teams)))
+                paid = gateRevenue.accrueWeeklyGate(session, season, week, shareUnit,
+                                                    [t.id for t in teams])
+                session.commit()
+                if paid:
+                    logger.info(f"Gate revenue s{season} w{week}: {sum(paid.values())}F "
+                                f"to {len(paid)} team(s)")
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Gate revenue accrual failed (s{season} w{week}): {e}")
+
     def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
         """Award Floobits to top leaderboard performers for the week."""
         from constants import (
@@ -11859,6 +12231,8 @@ class SeasonManager:
             starters = [p for p in team.rosterDict.values() if p is not None]
             if len(starters) < 4:
                 continue
+            # The Locker Room absorbs part of a complacency slide (LOCKER_ROOM_SETBACK_CUSHION).
+            keep = 1.0 - team.setbackCushion() if hasattr(team, 'setbackCushion') else 1.0
 
             # Hot team complacency check
             if winPct >= 0.6:
@@ -11873,7 +12247,7 @@ class SeasonManager:
                     # belief axis, so it isn't scaled by stability.
                     sb = getattr(p.attributes, 'selfBelief', 80) or 80
                     confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
-                    drift = -(_formRand(5, 18) / 100) * vulnerability * overperformFactor
+                    drift = -(_formRand(5, 18) / 100) * vulnerability * overperformFactor * keep
                     p.attributes.confidenceModifier = round(
                         max(-5.0, p.attributes.confidenceModifier + drift * confStability), 3)
                     p.attributes.determinationModifier = round(
@@ -11991,6 +12365,10 @@ class SeasonManager:
                 else:
                     trait = team.collectiveResolve()
             target *= FORM_TRAIT_BASE + FORM_TRAIT_SCALE * trait
+            # The Locker Room makes a cold stretch shallower (LOCKER_ROOM_SETBACK_CUSHION);
+            # a hot one is left alone.
+            if target < 0 and hasattr(team, 'setbackCushion'):
+                target *= 1.0 - team.setbackCushion()
 
             offset = getattr(team, 'formOffset', 0.0) or 0.0
             offset += (target - offset) * FORM_REVERSION + _gauss(0, FORM_NOISE)
@@ -12079,6 +12457,8 @@ class SeasonManager:
 
             if abs(roomSwing) < 0.04:
                 continue  # Near-neutral team: no contagion signal worth applying
+            # The Locker Room absorbs part of a toxic room's pull (LOCKER_ROOM_SETBACK_CUSHION).
+            keep = 1.0 - team.setbackCushion() if hasattr(team, 'setbackCushion') else 1.0
             for p in starters:
                 # Selfish: a player's own attitude offsets how much they're
                 # influenced. A player aligned with the room shifts less; a
@@ -12088,6 +12468,8 @@ class SeasonManager:
                 # Final drift: room signal scaled by how far this player is
                 # from the room (selfPull). Capped at ±0.10/week.
                 drift = max(-0.10, min(0.10, roomSwing * 0.5 + selfPull * 0.3))
+                if drift < 0:
+                    drift *= keep
                 p.attributes.confidenceModifier = round(
                     max(-5.0, min(5.0, p.attributes.confidenceModifier + drift)), 3)
                 p.attributes.determinationModifier = round(
@@ -12217,13 +12599,237 @@ class SeasonManager:
         except ImportError:
             pass
 
-    def _resolveFacilityVotes(self, completedSeason: int) -> None:
-        """Resolve the season's facility vote per team — the plurality-winning
-        facility gets an upgrade/build project opened into the queue (Phase 3).
-        Runs AFTER the waterfall so the new project opens fresh for next season's
-        funding (it shows in Active Projects and is funded over the coming season
-        rather than built instantly by this season's Treasury). Reads post-waterfall
-        levels. No votes → no new project (Treasury just accumulates)."""
+    _FACILITY_PAYMENT_KEY = 'facility_payment_due'   # = facilitiesManager.PAYMENT_RUN_KEY
+
+    def _markFacilityPaymentDue(self, completedSeason: int) -> None:
+        """Season end: record that this season's facility payment run is owed."""
+        try:
+            from game_rules import _writeAppSetting
+            _writeAppSetting(self._FACILITY_PAYMENT_KEY, str(completedSeason))
+        except Exception as e:
+            logger.error(f"Could not mark the facility payment run due: {e}")
+
+    def _runFacilityPayment(self, season: int) -> None:
+        """The offseason facility payment run: the Treasury pays upkeep, then funds
+        projects in each team's ranked order (fans' ballots), at most one upgrade per
+        facility per year; unpaid facilities decay. Costs are share-denominated off the
+        PRIOR season's faucet (the rates fans funded against during the season).
+
+        ⚠️ RUNS ONLY WHEN THIS SEASON'S RUN IS DUE, and marks it done in the same commit.
+        A season that ended under the old code already paid its season-end waterfall, so
+        it has no 'due' marker and is skipped rather than charged twice.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import AppSetting
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                row = session.query(AppSetting).filter_by(key=self._FACILITY_PAYMENT_KEY).first()
+                if row is None or row.value != str(season):
+                    logger.info(f"Facility payment run: none due for season {season} "
+                                f"(marker={row.value if row else None}), skipping")
+                    return
+                shareUnit = facilitiesManager.computeShareUnit(
+                    session, season - 1, numTeams=max(1, len(teams)))
+                injected = facilitiesManager.applyTreasuryInjection(session, teams)
+                if injected:
+                    logger.info(f"Facility payment run: FLOOS_TREASURY_INJECT added "
+                                f"{sum(injected.values())}F across {len(injected)} team(s)")
+                logs = facilitiesManager.applyPaymentRun(session, teams, season, shareUnit)
+                row.value = f"done:{season}"
+                session.commit()
+                logger.info(f"Facility payment run: shareUnit={shareUnit:.0f}, "
+                            f"{len(logs)} team(s) had decay/builds")
+                for name, lines in logs:
+                    logger.info(f"  {name}: {'; '.join(lines)}")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Facility payment run failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _enforcePayrollAtSeasonEnd(self, season: int) -> list:
+        """Season end (docs/TREASURY_PAYROLL_PLAN.md §5): a team whose balance cannot
+        cover next season's committed payroll, even with nothing spent on upkeep, cuts
+        players to close the gap (`payroll.chooseForcedCuts`). No cut fee; a cut player's
+        contract and salary end and he joins this offseason's free agency.
+
+        Protected, cut only as a last resort and least valuable first: fan favorites (a
+        keep verdict from the team's own fans), the team's two best players by the GM's
+        value, and a player on a prospect contract the GM projects as a star.
+
+        Returns [(team name, player name, salary)]."""
+        from managers import payroll
+        if not payroll.salariesActive():
+            return []
+        from managers.playerManager import fanVerdict
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return []
+        brain = None
+        try:
+            brain = self._foBrainForOffseason()
+        except Exception as e:
+            logger.warning(f"Payroll check: no GM brain ({e}); valuing by rating")
+        faLists = {k: [p for p in self.playerManager.freeAgents if p.position.value == v]
+                   for k, v in (('qb', 1), ('rb', 2), ('wr', 3), ('te', 4), ('k', 5))}
+        done = []
+        for team in teamManager.teams:
+            owed = payroll.nextSeasonPayroll(team)
+            if owed <= 0:
+                continue
+            balance = payroll.balanceOf(team.id)
+            gap = owed - balance
+            if gap <= 0:
+                continue
+            coach = getattr(team, 'coach', None)
+            staying = [p for p in payroll.rosterPlayers(team)
+                       if not getattr(p, 'willRetire', False) and payroll.contractRuns(p, True) > 0]
+
+            def _value(p):
+                if brain is not None:
+                    try:
+                        return float(brain.decisionValue(p, coach=coach, team=team))
+                    except Exception:
+                        pass
+                return float(getattr(p, 'playerRating', 0) or 0)
+
+            values = {id(p): _value(p) for p in payroll.rosterPlayers(team)}
+            topTwo = {id(p) for p in sorted(payroll.rosterPlayers(team),
+                                            key=lambda p: -values[id(p)])[:2]}
+            entries = [{'player': p, 'salary': payroll.salaryOf(p), 'value': values[id(p)],
+                        'protected': (id(p) in topTwo or fanVerdict(p) == 'keep'
+                                      or self._projectsAsStarProspect(brain, team, p))}
+                       for p in staying]
+            cuts = payroll.chooseForcedCuts(entries, gap)
+            for e in cuts:
+                p = e['player']
+                self.playerManager.releasePlayerToFreeAgency(p, team, faLists)
+                p.termRemaining = 0
+                p.onProspectContract = False
+                done.append((team.name, p.name, e['salary']))
+                self._recordOffseasonEvent('cut', team=team, player=p,
+                                           detail=f"{self.UNPAID_CUT_DETAIL} payroll short by {gap}F")
+                self._publishTeamNews('signing', f"Unpaid, {p.name} leaves the {team.name}", team)
+                logger.info(f"Payroll: {team.name} short {gap}F of {owed}F next season "
+                            f"(balance {balance}F); cut {p.name} ({e['salary']}F"
+                            f"{', protected' if e['protected'] else ''})")
+        if done:
+            try:
+                self.playerManager.savePlayerData()
+            except Exception as e:
+                logger.error(f"Payroll check: could not save players after cuts: {e}")
+        return done
+
+    @staticmethod
+    def _resignLimitOn() -> bool:
+        """The per-offseason re-sign limit applies until salaries start; then the
+        Treasury limits retention instead (docs/TREASURY_PAYROLL_PLAN.md §5)."""
+        from constants import RESIGN_LIMIT_ENABLED
+        from managers import payroll
+        return RESIGN_LIMIT_ENABLED and not payroll.salariesActive()
+
+    def _projectsAsStarProspect(self, brain, team, player) -> bool:
+        """A player on a prospect contract whom the GM reads as reaching 4 stars or better
+        (`TRADE_RISING_STAR_RATING`), with the trade market's rising-star projection."""
+        if not getattr(player, 'onProspectContract', False) or brain is None:
+            return False
+        try:
+            from constants import TRADE_RISING_STAR_RATING, FO_CEILING_CREDIT
+            from managers.frontOfficeBrain import ARC_DEVELOPING
+            current = float(getattr(player, 'playerRating', 0) or 0)
+            if brain.classifyArc(player) != ARC_DEVELOPING:
+                return current >= float(TRADE_RISING_STAR_RATING)
+            expected = float(player.computeExpectedRating())
+            ceiling = float(brain._ceilingRating(player, team))
+            lean = float(brain._attrLean(getattr(team, 'coach', None), 'playerDevelopment'))
+            projected = max(current, expected + max(0.0, ceiling - expected) * FO_CEILING_CREDIT * lean)
+            return projected >= float(TRADE_RISING_STAR_RATING)
+        except Exception:
+            return False
+
+    def _refreshPayrollFinances(self, season: int) -> None:
+        """Each team's cautious income estimate and facility upkeep, for the payroll
+        budget (`payroll.setFinances`). Income is what `season` brought in: the league
+        baseline, gate revenue and the donation match (`TreasuryIncome`), and fan
+        donations (`TeamFunding.fan_contributions`), scaled by PAYROLL_INCOME_CAUTION.
+        Upkeep is the current facility levels at the coming payment run's prices."""
+        try:
+            from constants import PAYROLL_INCOME_CAUTION
+            from managers import payroll as _payroll
+            if not _payroll.salariesActive() or not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+                return
+            from sqlalchemy import func
+            from database.connection import get_session
+            from database.models import TreasuryIncome, TeamFunding, TeamFacility
+            from managers import facilitiesManager, payroll
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                unit = facilitiesManager.computeShareUnit(
+                    session, season - 1, numTeams=max(1, len(teams)))
+                ledger = dict(session.query(TreasuryIncome.team_id,
+                                            func.coalesce(func.sum(TreasuryIncome.amount), 0))
+                              .filter(TreasuryIncome.season == season)
+                              .group_by(TreasuryIncome.team_id).all())
+                donations = {r.team_id: int(r.fan_contributions or 0) for r in
+                             session.query(TeamFunding).filter_by(season=season).all()}
+                levels = {}
+                for f in session.query(TeamFacility).all():
+                    levels.setdefault(f.team_id, []).append(int(f.level or 0))
+            finally:
+                session.close()
+            finances = {}
+            for t in teams:
+                tid = getattr(t, 'id', None)
+                income = (payroll.leagueBaseline() + int(ledger.get(tid, 0) or 0)
+                          + donations.get(tid, 0)) * float(PAYROLL_INCOME_CAUTION)
+                upkeep = sum(facilitiesManager.upkeepCostFloobits(lv, unit)
+                             for lv in levels.get(tid, []))
+                finances[tid] = (income, upkeep)
+            payroll.setFinances(finances)
+            # The comparable contracts every asking salary is scaled by (`marketRate`),
+            # read here, where no write is open, never inside a signing.
+            payroll.loadContracts(season)
+            # Each player's seasons with his team, for loyalty (`faMarket.loyaltyPull`).
+            from managers import faMarket
+            faMarket.loadTenure(season)
+        except Exception as e:
+            logger.error(f"Could not refresh payroll finances: {e}")
+
+    def _setPayrollShareUnit(self, faucetSeason: int) -> None:
+        """Set the share unit new contracts are priced against (`payroll.shareUnit`)."""
+        try:
+            from managers import payroll
+            if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+                return
+            from database.connection import get_session
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            session = get_session()
+            try:
+                unit = facilitiesManager.computeShareUnit(
+                    session, faucetSeason, numTeams=max(1, len(teamManager.teams) if teamManager else 32))
+            finally:
+                session.close()
+            payroll.setShareUnit(unit)
+            logger.info(f"Payroll: contracts priced at a {unit:.0f}F share unit "
+                        f"(season {faucetSeason} faucet)")
+        except Exception as e:
+            logger.error(f"Could not set the payroll share unit: {e}")
+
+    def _syncFacilityProjects(self, season: int) -> None:
+        """Season start: every facility below the top level has its next level open for
+        funding, and a project fans funded in full while its facility was blocked builds
+        now. Idempotent, so the mid-season resume path can call it on every boot."""
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
             return
         try:
@@ -12234,51 +12840,20 @@ class SeasonManager:
             teams = teamManager.teams if teamManager else []
             session = get_session()
             try:
-                opened = 0
                 for team in teams:
                     levels = {f.facility_key: f.level for f in
                               session.query(TeamFacility).filter_by(team_id=team.id).all()}
-                    proj = facilitiesManager.resolveFacilityVote(
-                        session, team.id, completedSeason, levels)
-                    if proj is not None:
-                        opened += 1
-                        logger.info(f"Facility vote: {getattr(team, 'name', team.id)} → "
-                                    f"{proj.facility_key} Lv{proj.target_level}")
-                session.commit()
-                if opened:
-                    logger.info(f"Facility votes resolved: {opened} project(s) opened")
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Facility vote resolution failed: {e}")
-            finally:
-                session.close()
-        except ImportError:
-            pass
-
-    def _runFacilitySeasonEnd(self, completedSeason: int) -> None:
-        """Season-end facility waterfall + offseason construction (Markets→
-        Facilities). Treasury (already credited with the deposit) pays upkeep,
-        then the oldest open project; funded projects build, unmaintained
-        facilities decay. Costs are share-denominated off the PRIOR season's
-        faucet (the rates fans funded against during the season)."""
-        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
-            return
-        try:
-            from database.connection import get_session
-            from managers import facilitiesManager
-            teamManager = self.serviceContainer.getService('team_manager')
-            teams = teamManager.teams if teamManager else []
-            session = get_session()
-            try:
+                    if levels:
+                        facilitiesManager.ensureOpenProjects(session, team.id, levels, season)
                 shareUnit = facilitiesManager.computeShareUnit(
-                    session, completedSeason - 1, numTeams=max(1, len(teams)))
-                logs = facilitiesManager.applySeasonEnd(session, teams, completedSeason, shareUnit)
+                    session, season - 1, numTeams=max(1, len(teams)))
+                built = facilitiesManager.buildPendingProjects(session, teams, season, shareUnit)
                 session.commit()
-                logger.info(f"Facility season-end: shareUnit={shareUnit:.0f}, "
-                            f"{len(logs)} team(s) had decay/builds")
+                for name, key, lvl in built:
+                    logger.info(f"Facility built at season start: {name} {key} → Lv{lvl}")
             except Exception as e:
                 session.rollback()
-                logger.error(f"Facility season-end failed: {e}")
+                logger.error(f"Facility project sync failed: {e}")
             finally:
                 session.close()
         except ImportError:
@@ -12300,6 +12875,7 @@ class SeasonManager:
                 contributed = 0
                 totalCollected = 0
                 teamFundingAccum = {}  # teamId -> total collected
+                depositsByUser = []    # (userId, teamId, amount), for the league match
                 for user in users:
                     pct = getattr(user, 'team_funding_pct', DEFAULT_FUNDING_PCT)
                     if pct is None:
@@ -12326,11 +12902,23 @@ class SeasonManager:
                     contributed += 1
                     totalCollected += contribution
                     teamFundingAccum[favTeamId] = teamFundingAccum.get(favTeamId, 0) + contribution
+                    depositsByUser.append((user.id, favTeamId, contribution))
+
+                # The league matches each fan's deposit (docs/TREASURY_PAYROLL_PLAN.md §4),
+                # straight into the Treasury, against the same per-season cap as their
+                # direct contributions.
+                from managers import facilitiesManager, gateRevenue
+                matchShare = facilitiesManager.computeShareUnit(session, completedSeason - 1)
+                matchedTotal = 0
+                for uid, tid, amt in depositsByUser:
+                    matchedTotal += gateRevenue.matchDonation(
+                        session, uid, tid, completedSeason, amt, matchShare, 'season_end')
+                if matchedTotal:
+                    logger.info(f"Season-end deposits matched by the league: {matchedTotal}F")
 
                 # Update existing TeamFunding records (created at season start)
                 records = session.query(TeamFunding).filter_by(season=completedSeason).all()
                 recordMap = {r.team_id: r for r in records}
-                from managers import facilitiesManager
                 for teamId, amount in teamFundingAccum.items():
                     rec = recordMap.get(teamId)
                     if rec:
@@ -12338,7 +12926,7 @@ class SeasonManager:
                         rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
                         rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
                     # Dual-feed: the season-end deposit also funds the new facility
-                    # Treasury (the waterfall spends it next). Transitional — the old
+                    # Treasury (the offseason payment run spends it). Transitional — the old
                     # TeamFunding ledger above still drives the Market label until cutover.
                     facilitiesManager.addTreasury(session, teamId, amount)
 
@@ -12450,12 +13038,12 @@ class SeasonManager:
         """Contribute Floobits toward a team's facilities (Markets→Facilities).
 
         target:
-          - 'treasury' (default) → the general Treasury pool (the season-end
-            waterfall spends it on upkeep then the oldest open project).
+          - 'treasury' (default) → the general Treasury pool (the offseason
+            payment run spends it on upkeep, then projects in the fans' ranked order).
           - 'upkeep' (+facilityKey) → that facility's upkeep bar — pre-protects
-            it so the waterfall doesn't have to cover it.
-          - 'project' (+projectId) → an open project's bar — accelerates it past
-            the FIFO waterfall.
+            it so the payment run doesn't have to cover it.
+          - 'project' (+projectId) → an open project's bar — funds that facility
+            directly, ahead of the ranked order.
 
         Deducts from the user (favorite team only) and credits the chosen bar.
         Returns the new balance + the team's Treasury. Raises ValueError on failure.
@@ -12529,16 +13117,25 @@ class SeasonManager:
 
             currencyRepo.spendFunds(userId, amount, 'facility_contribution',
                                     description=desc, season=season)
+            # The league match lands in the Treasury whatever bar the fan funded.
+            from managers import gateRevenue
+            matched = gateRevenue.matchDonation(session, userId, teamId, season, amount,
+                                                shareUnit, target)
             if target == 'upkeep':
                 fac.upkeep_funded = (fac.upkeep_funded or 0) + amount
             elif target == 'project':
                 proj.funded = (proj.funded or 0) + amount
                 # Immediate build: if this contribution completes the project, apply it
                 # NOW — the facility level jumps and its perks go live from the team's
-                # next game, instead of waiting for the season-end resolution. Upkeep on
-                # a facility built this way is waived for the rest of this season.
+                # next game, instead of waiting for the payment run. Upkeep on a facility
+                # built this way is waived at the next payment run.
                 projectCostF = facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit)
-                if (proj.funded or 0) >= projectCostF:
+                # One upgrade per facility per year: a facility the payment run upgraded
+                # last offseason, or that fans already built this season, keeps the money
+                # and builds at the next opportunity instead (`projectBuildTiming`).
+                if ((proj.funded or 0) >= projectCostF
+                        and not facilitiesManager.midSeasonBlocked(
+                            session, teamId, proj.facility_key, season)):
                     teamManager = self.serviceContainer.getService('team_manager')
                     teamObj = teamManager.getTeamById(teamId) if teamManager else None
                     builtLevel = facilitiesManager.buildProjectNow(session, teamId, proj, teamObj, season)
@@ -12555,6 +13152,7 @@ class SeasonManager:
             return {
                 'teamId': teamId, 'amount': amount, 'target': target,
                 'soloFunded': soloFunded,
+                'matched': matched,
                 'projectBuilt': builtKey is not None,
                 'builtFacilityKey': builtKey,
                 'builtLevel': builtLevel,
@@ -12673,11 +13271,166 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to restore reigning champion: {e}")
 
+    TALENT_CLASS_KEY = 'prospect_talent_class_season'
+
+    def _writeTalentClassMarker(self, season: int) -> None:
+        """Record that `season`'s draft class has its hidden talent drawn."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        from database.connection import get_session
+        from database.models import AppSetting
+        session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key=self.TALENT_CLASS_KEY).first()
+            if row is None:
+                session.add(AppSetting(key=self.TALENT_CLASS_KEY, value=str(int(season))))
+            else:
+                row.value = str(int(season))
+            session.commit()
+        finally:
+            session.close()
+
+    def _writeClassGrownMarker(self, season: int) -> None:
+        """Record that `season`'s class was generated at full size (nothing to grow)."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        from database.connection import get_session
+        from database.models import AppSetting
+        session = get_session()
+        try:
+            row = session.query(AppSetting).filter_by(key=self.CLASS_GROWN_KEY).first()
+            if row is None:
+                session.add(AppSetting(key=self.CLASS_GROWN_KEY, value=str(int(season))))
+            else:
+                row.value = str(int(season))
+            session.commit()
+        finally:
+            session.close()
+
+    def _drawTalentForLegacyClass(self, rookies: list, season: int) -> None:
+        """A draft class the old code generated has no hidden talent: draw it now, once.
+
+        Owner, 2026-11-02: season 13 rolled over a few hours before prospects' hidden
+        talent shipped, so its class was generated without it. Nobody has played a snap,
+        and the draw moves only trueSkill and potential (never the debut rating), which the
+        public consensus excludes, so nothing fans see changes.
+        ⚠️ THE MARKER IS WRITTEN FIRST. If the save after it fails, a restart finds the
+        marker and draws nothing, leaving the class as the old code made it; written
+        after, a crash between the two would draw a second shift on top of the first."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import AppSetting
+            session = get_session()
+            try:
+                row = session.query(AppSetting).filter_by(key=self.TALENT_CLASS_KEY).first()
+                if row is not None and row.value == str(int(season)):
+                    return
+            finally:
+                session.close()
+            self._writeTalentClassMarker(season)
+            drawn = 0
+            for p in rookies:
+                if int(getattr(p, 'talentShift', 0) or 0) != 0:
+                    continue
+                shift = self.playerManager.drawTalentShift()
+                if shift:
+                    p.shiftTalent(shift)
+                    p.talentShift = shift
+                    drawn += 1
+            self.playerManager.savePlayerData()
+            logger.info(f"Season {season} draft class predates hidden talent: drew it for "
+                        f"{drawn} of {len(rookies)} prospects")
+        except Exception as e:
+            logger.error(f"Could not draw hidden talent for the season {season} class: {e}")
+
+    CLASS_GROWN_KEY = 'prospect_class_grown_season'
+
+    def _growLegacyClass(self, rookies: list, season: int) -> None:
+        """A draft class the old code generated at one prospect per team: add the rest, once.
+
+        Owner, 2026-11-02: season 13 rolled over a few hours before classes grew to
+        ROOKIE_CLASS_PER_TEAM (1.5) per team, and the owner wanted this season's pool grown
+        too. The additions come from the normal generator, so they carry hidden talent like
+        any new class; the existing prospects get theirs from `_drawTalentForLegacyClass`,
+        which runs first and marks its draw, so nobody is drawn twice.
+        ⚠️ THE MARKER IS WRITTEN FIRST, as there: a failed save after it leaves the class at
+        its old size rather than a restart adding another batch on top."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            missing = int(self.playerManager.rookieClassSize()) - len(rookies)
+            if missing <= 0:
+                return
+            from database.connection import get_session
+            from database.models import AppSetting
+            session = get_session()
+            try:
+                row = session.query(AppSetting).filter_by(key=self.CLASS_GROWN_KEY).first()
+                if row is not None and row.value == str(int(season)):
+                    return
+                if row is None:
+                    session.add(AppSetting(key=self.CLASS_GROWN_KEY, value=str(int(season))))
+                else:
+                    row.value = str(int(season))
+                session.commit()
+            finally:
+                session.close()
+            added = self.playerManager._generateRookieClass(season, count=missing)
+            for r in added:
+                r.is_upcoming_rookie = True
+                r.team = 'Upcoming Rookie'
+                if r not in self.playerManager.activePlayers:
+                    self.playerManager.activePlayers.append(r)
+                self.playerManager.addToPositionList(r)
+            self.playerManager.sortPlayersByPosition()
+            self.playerManager.savePlayerData()
+            logger.info(f"Season {season} draft class had {len(rookies)} prospects; added "
+                        f"{len(added)} to reach {len(rookies) + len(added)}")
+        except Exception as e:
+            logger.error(f"Could not grow the season {season} draft class: {e}")
+
+    def _topUpFlatBaseline(self, session, season: int, leagueBaseline: int) -> None:
+        """A season whose funding was created by the old code paid every team the flat
+        FUNDING_BASELINE_PER_TEAM; top each team up to the share-denominated baseline.
+
+        Owner, 2026-11-02: season 13 rolled over under the old code a few hours before
+        the treasury shipped, so its teams got 200F where the new baseline is ~0.25 of a
+        share. Only rows still carrying exactly the flat amount are touched, and the row is
+        rewritten to the new figure in the same commit as the Treasury credit, so this
+        runs once and is a no-op for any season the new code created (or if the new
+        baseline is not above the flat one)."""
+        from constants import FUNDING_BASELINE_PER_TEAM
+        from database.models import TeamFunding, TeamTreasury
+        flat = int(FUNDING_BASELINE_PER_TEAM)
+        add = int(leagueBaseline) - flat
+        if add <= 0:
+            return
+        rows = session.query(TeamFunding).filter_by(season=season, baseline_funding=flat).all()
+        if not rows:
+            return
+        for r in rows:
+            r.baseline_funding = int(leagueBaseline)
+            r.current_funding = int(r.current_funding or 0) + add
+            r.effective_funding = int(r.effective_funding or 0) + add
+            t = session.query(TeamTreasury).filter_by(team_id=r.team_id).first()
+            if t is None:
+                session.add(TeamTreasury(team_id=r.team_id, balance=int(leagueBaseline)))
+            else:
+                t.balance = int(t.balance or 0) + add
+        session.commit()
+        logger.info(f"Season {season} funding was created under the flat {flat}F baseline: "
+                    f"topped {len(rows)} team(s) up by {add}F to {leagueBaseline}F")
+
     def _initializeTeamFunding(self, currentSeason: int) -> None:
         """Create TeamFunding records at season start with league baseline + carry-forward.
         Assigns initial tiers so teams have funding effects from week 1."""
         import math
         from constants import FUNDING_BASELINE_PER_TEAM, FUNDING_DECAY_RATE
+        from managers import payroll
+        # Sized to a minimum-salary roster plus a modest facility set (payroll.leagueBaseline).
+        leagueBaseline = payroll.leagueBaseline()
         previousSeason = currentSeason - 1
         try:
             from database.connection import get_session
@@ -12719,6 +13472,7 @@ class SeasonManager:
                 # Check if records already exist for this season (resume after restart)
                 existing = session.query(TeamFunding).filter_by(season=currentSeason).first()
                 if existing:
+                    self._topUpFlatBaseline(session, currentSeason, leagueBaseline)
                     # Records already created — just load tiers onto runtime teams
                     records = session.query(TeamFunding).filter_by(season=currentSeason).all()
                     tierMap = {
@@ -12743,7 +13497,7 @@ class SeasonManager:
                 for team in teamManager.teams:
                     carriedFunding = math.floor(prevFunding.get(team.id, 0) * FUNDING_DECAY_RATE)
                     carriedByTeam[team.id] = carriedFunding
-                    baseline = FUNDING_BASELINE_PER_TEAM
+                    baseline = leagueBaseline
                     currentFunding = baseline
                     effectiveFunding = currentFunding + carriedFunding
 
@@ -12763,6 +13517,10 @@ class SeasonManager:
                     session.add(funding)
 
                 session.flush()
+                try:
+                    payroll.markFundedSeasonStarted(currentSeason, session)
+                except Exception as e:
+                    logger.warning(f"Could not stamp the first funded season: {e}")
 
                 # Facilities (Markets→Facilities): reset each facility's upkeep
                 # tally for the new season + top up the Treasury (first activation
@@ -12772,7 +13530,7 @@ class SeasonManager:
                     from managers import facilitiesManager
                     facilitiesManager.prepareSeasonStart(
                         session, [t.id for t in teamManager.teams],
-                        carriedByTeam, FUNDING_BASELINE_PER_TEAM)
+                        carriedByTeam, leagueBaseline)
                     session.flush()
                 except Exception as e:
                     logger.warning(f"Facility season-start prep failed: {e}")

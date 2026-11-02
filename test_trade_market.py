@@ -104,6 +104,15 @@ class StubBrain:
     def _attrLean(self, coach, attr):
         return 0.5
 
+    # The brain's view of a player's projection and how much growth a team expects to
+    # realize (frontOfficeBrain.expectedFor / developmentLean, 2026-10-30). The stub
+    # reads the player's own expected rating and the same neutral lean as _attrLean.
+    def expectedFor(self, player, team=None):
+        return float(player.computeExpectedRating())
+
+    def developmentLean(self, coach, team=None):
+        return self._attrLean(coach, 'playerDevelopment')
+
 
 def _congest(team, ratings=(84, 80, 76), position=Position.WR):
     """Put more walk-year players on a club than `RESIGN_LIMIT_PER_OFFSEASON` can keep.

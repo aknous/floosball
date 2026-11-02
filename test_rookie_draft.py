@@ -9,7 +9,7 @@ signing a 74. The uncertainty IS the feature.
 See docs/PROSPECT_DRAFT_PLAN.md.
 """
 
-from constants import ROOKIE_DRAFT_CLASS_SIZE, PROSPECT_SLOT_CAP_PER_POSITION
+from constants import ROOKIE_DRAFT_CLASS_SIZE, PROSPECT_SLOT_CAP_PER_POSITION, ROOKIE_CLASS_PER_TEAM
 from managers.playerManager import PlayerManager
 from floosball_player import Position
 
@@ -67,11 +67,16 @@ class Harness:
     def __init__(self, rookies):
         self.activePlayers = list(rookies)
         self.freeAgents = []
+        self.unusedNames = []
         self.positioned = []
         self.sorted = False
 
     def addToPositionList(self, player):
         self.positioned.append(player)
+
+    def removeFromPositionList(self, player):
+        if player in self.positioned:
+            self.positioned.remove(player)
 
     def sortPlayersByPosition(self):
         self.sorted = True
@@ -83,6 +88,10 @@ class Harness:
     countTeamProspectsAtPosition = PlayerManager.countTeamProspectsAtPosition
     hasOpenProspectSlot = PlayerManager.hasOpenProspectSlot
     rookieDraftPickGenerator = PlayerManager.rookieDraftPickGenerator
+    washOutUndrafted = PlayerManager.washOutUndrafted
+    positionSupplyDeficits = PlayerManager.positionSupplyDeficits
+    _playersWithARecord = staticmethod(PlayerManager._playersWithARecord)
+    _removeUnsignedPlayer = PlayerManager._removeUnsignedPlayer
     findPickBuyer = PlayerManager.findPickBuyer
     handOverNextSeasonPick = PlayerManager.handOverNextSeasonPick
     forfeitPayoutFor = PlayerManager.forfeitPayoutFor
@@ -123,7 +132,8 @@ def test_class_size_is_counted_not_a_constant():
 
     pm = Harness([])
     pm.serviceContainer = Container()
-    assert PlayerManager.rookieClassSize(pm) == 32
+    # 1.5 prospects per team since 2026-10-30 (ROOKIE_CLASS_PER_TEAM): more than the draft.
+    assert PlayerManager.rookieClassSize(pm) == round(32 * ROOKIE_CLASS_PER_TEAM)
     assert ROOKIE_DRAFT_CLASS_SIZE != 32, \
         "the stale constant now matches the league by accident — the test proves nothing"
     print(f"PASS class size is counted (32), not the stale constant ({ROOKIE_DRAFT_CLASS_SIZE})")
@@ -136,7 +146,7 @@ def test_class_size_falls_back_when_no_league_is_loaded():
 
     pm = Harness([])
     pm.serviceContainer = Container()
-    assert PlayerManager.rookieClassSize(pm) == ROOKIE_DRAFT_CLASS_SIZE
+    assert PlayerManager.rookieClassSize(pm) == round(ROOKIE_DRAFT_CLASS_SIZE * ROOKIE_CLASS_PER_TEAM)
     print("PASS an unloaded league falls back rather than drafting zero")
 
 
