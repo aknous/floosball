@@ -5,10 +5,11 @@ right now in actual free agent markets, contracts are based on what a comparable
 recently received. this should be an incentive to not overspend because that will make
 players more expensive"
 
-A player's asking salary is the curve price times `payroll.marketRate`: 1 plus the premium
-recent market contracts at his position and a similar rating paid over the ask they were
-offered against, shrunk toward 1.0 and capped. An overpay raises comparable players' prices,
-and prices return to the curve as those contracts age out; nothing compounds.
+A player's asking salary is the curve price times `payroll.marketRate`: 1 plus the average
+premium recent market contracts at his position and a similar rating paid over their curve
+price, shrunk toward 1.0 and capped. It moves both ways: an overpay raises comparable
+players' prices, stars signing below the curve lower them, and with no new signal prices
+return to the curve as contracts age out.
 
 Run: .venv/bin/python -m pytest -q test_contract_comps.py
 """
@@ -59,17 +60,23 @@ def test_anUncontestedSigningLeavesThePriceAlone():
     assert payroll.marketRate('WR', 88) == pytest.approx(1.0)
 
 
-def test_pricesDoNotCompound():
-    # A signing at today's raised ask reads as uncontested, so a raised rate does not feed
-    # itself; only paying OVER the ask moves it.
+def test_pricesReturnToTheCurveWhenSigningsStopPayingOver():
     for i in range(10):
         payroll.recordContract(_p(90, pid=i), 1300, 'market', 12, ask=1000)
     raised = payroll.marketRate('WR', 90)
     payroll._compSeason = 13
     for i in range(10):
-        ask = 1000 * raised
-        payroll.recordContract(_p(90, pid=100 + i), int(round(ask)), 'market', 13, ask=ask)
-    assert payroll.marketRate('WR', 90) < raised
+        payroll.recordContract(_p(90, pid=100 + i), 1000, 'market', 13, ask=1000)
+    assert 1.0 < payroll.marketRate('WR', 90) < raised
+
+
+def test_starsSigningBelowTheCurvePullPricesDown():
+    # Owner, 2026-11-01: prices move both ways, so stars nobody would pay full price for
+    # get cheaper next offseason.
+    for i in range(10):
+        payroll.recordContract(_p(92, pid=i), 600, 'lastcall', 13, ask=1000)
+    assert payroll.marketRate('WR', 92) < 1.0
+    assert payroll.askingSalary(_p(92, pid=50)) < payroll.baseAskingSalary(_p(92, pid=50))
 
 
 def test_theRateIsCapped():

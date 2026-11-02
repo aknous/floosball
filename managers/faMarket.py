@@ -460,6 +460,77 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                     pm._promoteProspectIntoSlot(team, best, slot, freeAgencyDict,
                                                 leagueHighlights, events)
 
+    def sign(team, f, slot, salary, term, releaseId, passLabel, motive, pullValue, ask):
+        """Sign `f` into `slot` (releasing `releaseId` there first, cut fee charged). False,
+        and nothing changed, if the fee cannot be paid or the slot is not free."""
+        teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+        releasedName = None
+        if releaseId is not None:
+            inc = team.rosterDict.get(slot)
+            if inc is not None and inc.id == releaseId:
+                fee = int(cutFeeFor(inc))
+                if not chargeCutFee(team.id, fee):
+                    logger.info(f"FA market: {team.name} cannot pay the {fee}F cut fee to "
+                                f"release {inc.name}; {f.name} stays on the market")
+                    return False
+                faLists = {k: [p for p in pm.freeAgents if p.position.value == v]
+                           for k, v in (('qb', 1), ('rb', 2), ('wr', 3), ('te', 4), ('k', 5))}
+                pm.releasePlayerToFreeAgency(inc, team, faLists)
+                inc.termRemaining = 0
+                released[team.id].add(inc.id)
+                releasedName = inc.name
+                events.append({'type': 'cut', 'team': team.name, 'teamAbbr': teamAbbr,
+                               'playerId': inc.id, 'player': inc.name,
+                               'position': inc.position.name,
+                               'rating': round(getattr(inc, 'playerRating', 0), 1),
+                               'tier': getattr(getattr(inc, 'playerTier', None), 'name', ''),
+                               'slot': slot, 'forPlayer': f.name, 'fee': fee})
+        if team.rosterDict.get(slot) is not None:
+            logger.warning(f"FA market: {team.name} {slot} not free for {f.name}; skipped")
+            return False
+        wasHome = getattr(f, 'previousTeam', None) == team.name
+        if f in pm.freeAgents:
+            pm.freeAgents.remove(f)
+        f.team = team
+        f.freeAgentYears = 0
+        team.rosterDict[slot] = f
+        team._draftFilledSlots.add(slot)
+        team.assignPlayerNumber(f)
+        f.term = int(term)
+        f.termRemaining = f.term
+        f.salary = int(salary) if payroll.salariesActive() else 0
+        # A comparable contract, measured against his CURVE price (85% of it for an
+        # 'opportunity' player, who takes that by choice), so prices move both ways: a
+        # bidding war pushes players like him up, a star who only signs at a reduced price
+        # pulls them down. The shrink toward 1.0 in `payroll.marketRate` anchors it to the
+        # curve, so it cannot run away in either direction.
+        reference = payroll.baseAskingSalary(f) * (FA_OPPORTUNITY_ASK if motive == 'opportunity' else 1.0)
+        payroll.recordContract(f, f.salary, 'lastcall' if passLabel == 'last call' else 'market',
+                               season, ask=reference)
+        if passLabel == 'last call':
+            reason = 'one-season deal'
+        else:
+            reason = REASONS[motive] if pullValue > 0 or motive == 'opportunity' else 'for the money'
+        freeAgencyDict[f"{team.name}_{f.name}"] = {
+            'name': f.name, 'pos': f.position.name, 'rating': f.attributes.skillRating,
+            'tier': f.playerTier.value, 'term': f.term,
+            'previousTeam': getattr(f, 'previousTeam', 'Rookie'), 'roster': 'Starting'}
+        text = (f"{f.name} ({f.position.name}) {'re-signs with' if wasHome else 'signs with'} "
+                f"the {team.name}, {f.term} season(s) at {f.salary}F: {reason}")
+        leagueHighlights.insert(0, {'event': {'text': text}})
+        events.append({'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                       'playerId': f.id, 'player': f.name, 'position': f.position.name,
+                       'rating': round(f.playerRating, 1), 'tier': f.playerTier.name,
+                       'slot': slot, 'salary': f.salary, 'motive': motive,
+                       'reason': reason, 'isResign': wasHome, 'market': True})
+        logger.info(f"FA market {passLabel}: {text}")
+        logger.info("FA market signing: " + json.dumps({
+            'season': season, 'pass': passLabel, 'team': teamAbbr, 'playerId': f.id, 'player': f.name,
+            'position': f.position.name, 'rating': round(f.playerRating, 1), 'motive': motive,
+            'ask': int(ask), 'salary': f.salary, 'term': f.term, 'reason': reason,
+            'returning': wasHome, 'released': releasedName}))
+        return True
+
     for passNo in range(1, max(1, FA_MARKET_ROUNDS) + 1):
         pool = [f for f in pm.freeAgents if not getattr(f, 'willRetire', False)
                 and getattr(f, 'id', None) is not None]
@@ -612,75 +683,80 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
         # cheaper passes and sat unsigned (a 96 kicker and a 94 QB, synthetic-fan run).
 
         byWid = {w.wid: w for w in wants}
-        faLists = {k: [p for p in pm.freeAgents if p.position.value == v]
-                   for k, v in (('qb', 1), ('rb', 2), ('wr', 3), ('te', 4), ('k', 5))}
         for pid, (wantId, salary) in sorted(signings.items(), key=lambda kv: rank.get(byWid[kv[1][0]].teamId, 0)):
             w = byWid[wantId]
             team, f = byId[w.teamId], poolById[pid]
-            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
-            if w.release is not None:
-                inc = team.rosterDict.get(w.slot)
-                if inc is not None and inc.id == w.release:
-                    fee = int(cutFeeFor(inc))
-                    if not chargeCutFee(team.id, fee):
-                        logger.info(f"FA market: {team.name} cannot pay the {fee}F cut fee to "
-                                    f"release {inc.name}; {f.name} stays on the market")
-                        continue
-                    pm.releasePlayerToFreeAgency(inc, team, faLists)
-                    inc.termRemaining = 0
-                    released[team.id].add(inc.id)
-                    events.append({'type': 'cut', 'team': team.name, 'teamAbbr': teamAbbr,
-                                   'playerId': inc.id, 'player': inc.name,
-                                   'position': inc.position.name,
-                                   'rating': round(getattr(inc, 'playerRating', 0), 1),
-                                   'tier': getattr(getattr(inc, 'playerTier', None), 'name', ''),
-                                   'slot': w.slot, 'forPlayer': f.name, 'fee': fee})
-            if team.rosterDict.get(w.slot) is not None:
-                logger.warning(f"FA market: {team.name} {w.slot} not free for {f.name}; skipped")
-                continue
-            wasHome = getattr(f, 'previousTeam', None) == team.name
-            if f in pm.freeAgents:
-                pm.freeAgents.remove(f)
-            f.team = team
-            f.freeAgentYears = 0
-            team.rosterDict[w.slot] = f
-            team._draftFilledSlots.add(w.slot)
-            team.assignPlayerNumber(f)
-            f.term = w.term or payroll.contractTerm(pm, f, season)
-            f.termRemaining = f.term
-            f.salary = int(salary) if payroll.salariesActive() else 0
-            motive = motives[pid]
-            # Measured against the price he was offered against: his ask this pass (85% of it
-            # for an 'opportunity' player). The market never opens below that, so the premium
-            # is 1.0 uncontested and above it in a bidding war; a player taking less from a team
-            # he likes only narrows how far above.
-            reference = asks[pid] * (FA_OPPORTUNITY_ASK if motive == 'opportunity' else 1.0)
-            payroll.recordContract(f, f.salary, 'market', season, ask=reference)
-            reason = REASONS[motive] if pull(pid, team.id) > 0 or motive == 'opportunity' else 'for the money'
-            freeAgencyDict[f"{team.name}_{f.name}"] = {
-                'name': f.name, 'pos': f.position.name, 'rating': f.attributes.skillRating,
-                'tier': f.playerTier.value, 'term': f.term,
-                'previousTeam': getattr(f, 'previousTeam', 'Rookie'), 'roster': 'Starting'}
-            text = (f"{f.name} ({f.position.name}) {'re-signs with' if wasHome else 'signs with'} "
-                    f"the {team.name}, {f.term} season(s) at {f.salary}F: {reason}")
-            leagueHighlights.insert(0, {'event': {'text': text}})
-            events.append({'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                           'playerId': f.id, 'player': f.name, 'position': f.position.name,
-                           'rating': round(f.playerRating, 1), 'tier': f.playerTier.name,
-                           'slot': w.slot, 'salary': f.salary, 'motive': motive,
-                           'reason': reason, 'isResign': wasHome, 'market': True})
-            logger.info(f"FA market pass {passNo}: {text}")
-            logger.info("FA market signing: " + json.dumps({
-                'season': season, 'pass': passNo, 'team': teamAbbr, 'playerId': f.id, 'player': f.name,
-                'position': f.position.name, 'rating': round(f.playerRating, 1), 'motive': motive,
-                'ask': asks[pid], 'salary': f.salary, 'term': f.term, 'reason': reason,
-                'returning': wasHome, 'released': next((e['player'] for e in events[::-1]
-                                                        if e.get('type') == 'cut' and e.get('forPlayer') == f.name), None)}))
+            sign(team, f, w.slot, salary, w.term or payroll.contractTerm(pm, f, season), w.release,
+                 passNo, motives[pid], pull(pid, team.id), asks[pid])
         signedIds = set(signings)
         for f in pool:
             if f.id not in signedIds:
                 unsignedPasses[f.id] = unsignedPasses.get(f.id, 0) + 1
         logger.info(f"FA market pass {passNo}: {len(signings)} signing(s), {len(offers)} offer(s)")
+    # THE LAST CALL (owner, 2026-11-01: "we really need to fix the problem of high skill
+    # players not getting signed. we cant just have rosters get filled with cheap mid
+    # talent"). Every unsigned player rated FA_LAST_CALL_MIN_RATING or more, best first, gets
+    # a one-season offer from each team with a hole at his position or that he would
+    # upgrade (the market's own rules: the GM's bar, nobody signed this offseason, no
+    # protected player, the cut fee), at what its budget can spend after holding a minimum
+    # salary back for its other open slots, never above his ask and never under
+    # FA_LAST_CALL_FLOOR of his curve price. He takes the best offer by salary plus his
+    # pull, an exact tie to the worse team. Next offseason he is back at his full price.
+    from constants import FA_LAST_CALL_ENABLED, FA_LAST_CALL_MIN_RATING, FA_LAST_CALL_FLOOR
+    if FA_LAST_CALL_ENABLED:
+        minimum = payroll.minimumSalary()
+        lcValues = {}
+
+        def lcValue(team, p):
+            key = (team.id, p.id)
+            if key not in lcValues:
+                lcValues[key] = float(brain.decisionValue(p, getattr(team, 'coach', None), team=team))
+            return lcValues[key]
+
+        leftovers = sorted((f for f in pm.freeAgents if not getattr(f, 'willRetire', False)
+                            and getattr(f, 'id', None) is not None
+                            and float(getattr(f, 'playerRating', 0) or 0) >= FA_LAST_CALL_MIN_RATING),
+                           key=lambda f: -float(f.playerRating))
+        for f in leftovers:
+            ask = payroll.askingSalary(f)
+            floor = max(minimum, int(round(FA_LAST_CALL_FLOOR * payroll.baseAskingSalary(f))))
+            motive = motiveOf(f)
+            best = None
+            for team in teams:
+                if f.id in released[team.id] or (
+                        getattr(f, 'previousTeam', None) == team.name and fanVerdict(f) == 'walk'):
+                    continue
+                slots = POS_SLOTS[f.position.value]
+                openHere = [sl for sl in slots if team.rosterDict.get(sl) is None]
+                coach = getattr(team, 'coach', None)
+                if openHere:
+                    slot, releaseId, relSal, fee = openHere[0], None, 0, 0
+                else:
+                    held = [(sl, team.rosterDict.get(sl)) for sl in slots
+                            if sl not in team._draftFilledSlots
+                            and not signedThisOffseason(team.rosterDict.get(sl))
+                            and not isCutProtected(team.rosterDict.get(sl), season)]
+                    if not held:
+                        continue
+                    slot, inc = min(held, key=lambda h: lcValue(team, h[1]))
+                    baseline = lcValue(team, inc) + float(brain.starterStanding(inc, team, coach))
+                    bar = (getattr(pm, '_faCutBars', None) or {}).get(team.id, 6.0)
+                    if lcValue(team, f) - baseline < bar:
+                        continue
+                    releaseId, relSal, fee = inc.id, payroll.salaryOf(inc), int(cutFeeFor(inc))
+                otherOpen = sum(1 for sl in SLOTS if team.rosterDict.get(sl) is None) - (1 if releaseId is None else 0)
+                spend = _room(team, payroll) - minimum * max(0, otherOpen) + (relSal - fee if releaseId else 0)
+                offer = int(min(ask, spend)) if spend != float('inf') else int(ask)
+                if offer < floor:
+                    continue
+                p = teamPull(f, team, ask, (success, comfort))
+                key = (offer + p, -rank.get(team.id, 0))
+                if best is None or key > best[0]:
+                    best = (key, team, slot, offer, releaseId, p)
+            if best is not None:
+                _key, team, slot, offer, releaseId, p = best
+                sign(team, f, slot, offer, 1, releaseId, 'last call', motive, p, ask)
+
     # Whoever the market could not place keeps the price he fell to for the hole-filling
     # step that follows (`payroll.askingSalary` honors `_marketAsk`), instead of jumping
     # back to his full price: a star nobody could afford signs cheaper rather than sitting.

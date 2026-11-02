@@ -2387,17 +2387,21 @@ DONATION_MATCH_CAP_SHARES = 0.18
 #   salary = shareUnit x (SALARY_MIN_SHARES
 #                         + SALARY_TOP_SHARES x POSITION_VALUE[pos] x x ** SALARY_EXPONENT)
 #   x = (rating - SALARY_FLOOR_RATING) / (100 - SALARY_FLOOR_RATING), clamped to 0..1
-# STEEPER FOR STARS (owner, 2026-11-01): top 2.26 / exponent 4.0 (was 0.95 / 2.75), anchored
-# so an 84 costs what it did. At a 5,850F share unit a QB asks ~185F at 78 (was 285), ~885F at
-# 84, ~3,000F at 90 (was 2,040) and ~6,760F at 95 (was 3,540); six 95s cost ~28,100F a season
-# (was 14,800). A WR or RB about three quarters of that, a kicker about a third. Still
-# provisional; the asking price is then scaled by comparable contracts (`marketRate`).
+# SIZED TO WHAT TEAMS HAVE (owner, 2026-11-01: "we really need to fix the problem of high skill
+# players not getting signed"): top 0.6 / exponent 3.5. The steeper 2.26 / 4.0 (and even the
+# original 0.95 / 2.75) priced a star at 3-4x a typical team's whole salary budget (the
+# 0.25-share baseline less facility upkeep, ~1,000-1,500F a season at a 5,850F share unit), so
+# only the few fan-rich teams could sign one and 15-16 players rated 84+ went unsigned. Now a
+# QB asks ~120F at 78, ~370F at 84, ~1,000F at 90, ~1,340F at 92 and ~2,000F at 95: an average
+# team can carry one star and a solid cast (a 92 WR + five 80s ~1,670F), six 92s still cost
+# ~5,700F. Convex: a 92 costs ~11x a 78. A WR or RB about three quarters of the QB price, a
+# kicker about a third. The asking price is then scaled by comparable contracts (`marketRate`).
 # The minimum, ~55F, is what every roster spot costs at least.
 SALARY_ENABLED = True
 SALARY_MIN_SHARES = 0.01
 SALARY_FLOOR_RATING = 68
-SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '2.26'))
-SALARY_EXPONENT = float(_os.environ.get('FLOOS_SALARY_EXP', '4.0'))
+SALARY_TOP_SHARES = float(_os.environ.get('FLOOS_SALARY_TOP', '0.6'))
+SALARY_EXPONENT = float(_os.environ.get('FLOOS_SALARY_EXP', '3.5'))
 # A prospect promoted onto the roster signs for this share of his asking salary (never
 # under the minimum), so the draft stays the poor team's route to talent.
 SALARY_PROSPECT_FRACTION = 0.25
@@ -2444,8 +2448,15 @@ FA_COMP_SEASONS = 2             # offseasons of contracts that count
 FA_COMP_RECENCY = 0.5           # weight of last offseason's contracts against this one's
 FA_COMP_RATING_WINDOW = 5       # a contract counts fully at the same rating, not at all 5 away
 FA_COMP_PRIOR = 3.0             # as if this many contracts at exactly the curve price
-FA_COMP_MIN = 0.7
+FA_COMP_MIN = 0.6
 FA_COMP_MAX = 1.6
+# The last call (owner, 2026-11-01): after the market's passes, every unsigned player rated
+# FA_LAST_CALL_MIN_RATING or more gets one-season offers from each team with a hole at his
+# position or that he would upgrade, at what its budget can spend, down to FA_LAST_CALL_FLOOR of
+# his curve price; he takes the best. A good player never sits out a season.
+FA_LAST_CALL_ENABLED = True
+FA_LAST_CALL_MIN_RATING = 76
+FA_LAST_CALL_FLOOR = 0.4
 # The re-sign head start (owner, 2026-11-01): a team offers its walk-year players first, at
 # their asking salary less their pull toward it. A player accepts if offer + pull reaches
 # what he thinks he is worth this offseason, a share of his ask drawn in this range (seeded

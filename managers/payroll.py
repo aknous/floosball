@@ -117,15 +117,18 @@ def askingSalary(player, unit: float = None, prospect: bool = False) -> int:
 # ... contracts are based on what a comparable player recently received. this should be an
 # incentive to not overspend because that will make players more expensive"
 #
-# Every free agency market signing records its PREMIUM: the salary over the asking price he
-# was offered against. The market never opens below that ask, so an uncontested signing is
-# 1.0 and a bidding war is above it, up to the bid cap. The market rate is 1 plus the recency- and rating-weighted average premium of
-# recent comparables, shrunk toward 1.0. ⚠️ MEASURED AGAINST THE ASK, NOT THE CURVE: a ratio
-# to the curve feeds the market rate back into itself (a signing at today's rate reads as
-# today's rate, and every discount compounds), which drifted prices down every offseason
-# on the first run. Against the ask nothing compounds: overpaying raises prices, and they
-# return to the curve as those contracts age out. Re-signs and hole fills sign at their
-# ask by definition and carry no signal, so only market signings are recorded.
+# Every free agency market signing (and last-call deal) records its PREMIUM: the salary over
+# the player's CURVE price (85% of it for an 'opportunity' player, who takes that by choice).
+# The market rate is 1 plus the recency- and rating-weighted average premium of recent
+# comparables, shrunk toward 1.0 by `FA_COMP_PRIOR` contracts at the curve price, and capped.
+# It moves BOTH WAYS (owner, 2026-11-01): a bidding war pushes players like him up; a star who
+# only signs late at a reduced price, or on a last-call deal, pulls them down, so prices settle
+# where good players actually sign. ⚠️ It does not compound: it is an AVERAGE of recent
+# contracts against the curve, shrunk toward the curve, so with no new signal it returns to
+# the curve as contracts age out. (An earlier version measured against the curve while
+# counting hometown discounts, opportunity deals and fill signings, every one of them below
+# the curve, and drifted down every offseason; those personal discounts are not recorded or
+# are normalized out.) Re-signs and hole fills are not recorded.
 #
 # Kept in memory as (season, position, rating, premium): loaded from `contract_signings` at
 # the safe points the season manager already reads finances (`_refreshPayrollFinances`),
