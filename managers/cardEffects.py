@@ -1256,7 +1256,13 @@ SHARED_EFFECT_POOL = [
     # Their high-rated counterparts (Entourage 3-star-plus, Showoff 5-star) are KEPT — the
     # objection is to rewarding weakness, not to reading a rating. Dropped from the minting
     # pool; compute/templates stay dormant so owned copies still score.
-    "honor_roll", "garbage_time", "loyalty_bonus",
+    "honor_roll", "garbage_time",
+    # NOTE: "loyalty_bonus" retired (owner call 2026-11-01). It paid per win x the favorite
+    # team's win streak, the same trigger as Bandwagon Express, and the edition dials left
+    # the holographic copy paying 2-3x the prismatic one (rating 80, seasons 5-7: mean 35
+    # FP a week vs ~18, max 195 vs ~55) because its payout grows with the square of the
+    # streak. Dropped from the minting pool; compute/templates stay dormant so owned copies
+    # still score.
     "homer", "gone_streaking", "rng", "snake_eyes", "avalanche", "hedge",
     # NOTE: the OVER/UNDERPERFORMANCE set — "resplendent" (Hot Stove), "windfall",
     # "buy_low", "reclamation", "rising_tide", "spectacle" — retired together (owner call
