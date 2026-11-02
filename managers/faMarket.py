@@ -18,6 +18,7 @@ Two layers, like `payroll.py`:
     returns events in the FA draft's shape so the live feed and recap record them.
 """
 import hashlib
+import json
 import logging
 import math
 import random
@@ -430,6 +431,12 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             events.append({'type': 'market', 'team': t.name, 'teamAbbr': getattr(t, 'abbr', ''),
                            'player': f.name, 'playerId': f.id, 'salary': e['salary'],
                            'over': byId[e['over']].name if e['over'] else None, 'text': line})
+            # One structured line per offer, so a run can be read back offer by offer.
+            logger.info("FA market offer: " + json.dumps({
+                'season': season, 'pass': passNo, 'team': getattr(t, 'abbr', t.name), 'playerId': f.id,
+                'player': f.name, 'position': f.position.name, 'rating': round(f.playerRating, 1),
+                'motive': motives[f.id], 'ask': asks[f.id], 'salary': e['salary'],
+                'over': getattr(byId[e['over']], 'abbr', None) if e['over'] else None}))
         # ⚠️ NO EARLY EXIT ON A QUIET PASS. It used to stop at the first pass with no
         # signings, before the decay below ran, so a star too dear in pass 1 never got the
         # cheaper passes and sat unsigned (a 96 kicker and a 94 QB, synthetic-fan run).
@@ -493,6 +500,12 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                            'slot': w.slot, 'salary': f.salary, 'motive': motive,
                            'reason': reason, 'isResign': wasHome, 'market': True})
             logger.info(f"FA market pass {passNo}: {text}")
+            logger.info("FA market signing: " + json.dumps({
+                'season': season, 'pass': passNo, 'team': teamAbbr, 'playerId': f.id, 'player': f.name,
+                'position': f.position.name, 'rating': round(f.playerRating, 1), 'motive': motive,
+                'ask': asks[pid], 'salary': f.salary, 'term': f.term, 'reason': reason,
+                'returning': wasHome, 'released': next((e['player'] for e in events[::-1]
+                                                        if e.get('type') == 'cut' and e.get('forPlayer') == f.name), None)}))
         signedIds = set(signings)
         for f in pool:
             if f.id not in signedIds:

@@ -9330,7 +9330,13 @@ class SeasonManager:
                 accepted = []
                 for p in offered:
                     salary, pull = faMarket.resignOffer(p, team, marketStanding, payroll.minimumSalary())
-                    if faMarket.acceptsResign(p, salary, pull, season):
+                    accepts = faMarket.acceptsResign(p, salary, pull, season)
+                    logger.info("Re-sign offer: " + json.dumps({
+                        'season': season, 'team': getattr(team, 'abbr', team.name), 'playerId': p.id,
+                        'player': p.name, 'position': p.position.name,
+                        'rating': round(getattr(p, 'playerRating', 0), 1), 'motive': faMarket.motiveOf(p),
+                        'ask': payroll.askingSalary(p), 'salary': salary, 'accepted': bool(accepts)}))
+                    if accepts:
                         p._resignSalary = salary
                         accepted.append(p)
                     else:
@@ -9341,6 +9347,13 @@ class SeasonManager:
                             self._publishTeamNews('signing', f"{p.name} turns down the {team.name} "
                                                   f"and tests free agency", team)
                 kept = accepted
+                for p in expiring:
+                    if p not in offered:
+                        logger.info("Re-sign offer: " + json.dumps({
+                            'season': season, 'team': getattr(team, 'abbr', team.name), 'playerId': p.id,
+                            'player': p.name, 'position': p.position.name,
+                            'rating': round(getattr(p, 'playerRating', 0), 1), 'motive': faMarket.motiveOf(p),
+                            'ask': payroll.askingSalary(p), 'salary': None, 'accepted': False}))
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds
