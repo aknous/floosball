@@ -25,6 +25,7 @@ simply stops listing.
 See docs/TRADING_PLAN.md §3.
 """
 
+from managers import payroll
 import logging
 
 import trading
@@ -1081,9 +1082,9 @@ class TradeMarket:
         coach = getattr(team, 'coach', None)
         current = float(getattr(player, 'playerRating', 0) or 0)
         if self.brain.classifyArc(player) == ARC_DEVELOPING:
-            expected = float(player.computeExpectedRating())
+            expected = float(self.brain.expectedFor(player, team))
             ceiling = float(self.brain._ceilingRating(player, team))
-            devLean = float(self.brain._attrLean(coach, 'playerDevelopment'))
+            devLean = float(self.brain.developmentLean(coach, team))
             return max(current, expected + max(0.0, ceiling - expected)
                        * FO_CEILING_CREDIT * devLean)
         return float(self.brain.trueForwardRating(player, coach, team))
@@ -2208,7 +2209,7 @@ class TradeMarket:
 
 
 def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
-                  draftOrder=None) -> list:
+                  draftOrder=None, excludeTeamIds=None, pickTrades: bool = True) -> list:
     """One pass of the market. Returns the settled trades as manifests.
 
     ⚠️ SETTLED SEQUENTIALLY, RE-VALIDATING EACH REMAINING ACCEPTED TRADE AGAINST THE NEW
@@ -2216,7 +2217,13 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
     and that prospect may himself be the asset another club is buying, two accepted trades
     can target the same roster slot, and A -> B -> A dependencies are possible. Cheaper
     than a batch solver and it matches how the FA draft already runs one pick at a time.
+
+    `excludeTeamIds`: teams sitting out this pass, neither selling nor buying. A team in a
+    trade still waiting on its fan vote (`managers/tradeVotes.py`) sits out, so nothing it
+    has promised can be promised again. `pickTrades=False` skips trading up the draft (the
+    pass after the FA draft, when this year's picks are spent).
     """
+    excluded = set(excludeTeamIds or ())
     # ⚠️ THE FUNCTION, NOT THE CONSTANT — an imported name is a copy and the admin kill
     # switch could never reach it. See `constants.tradingEnabled`.
     # ⚠️ ONE WINDOW DEFINITION, shared with the fan-facing `/api/transactions`. The
@@ -2231,6 +2238,8 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
     bidsUsed = {}
 
     for team in list(getattr(teamManager, 'teams', None) or []):
+        if getattr(team, 'id', None) in excluded:
+            continue
         for listing in market.listingsFor(team):
             # ⚠️ RE-CHECK LEGALITY AT SETTLEMENT, not at listing time. An earlier trade in
             # this same pass may have taken the backfill this one was counting on.
@@ -2238,6 +2247,8 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
                 continue
             bids = []
             for buyer in market.counterpartiesFor(listing):
+                if getattr(buyer, 'id', None) in excluded:
+                    continue
                 if bidsUsed.get(getattr(buyer, 'id', None), 0) >= TRADE_BIDS_PER_TEAM_PER_WEEK:
                     continue
                 bid = market.bidFor(listing, buyer)
@@ -2257,11 +2268,15 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
     # ⚠️ RUN BEFORE THE PLAYER INQUIRIES so a club that moves up has spent its picks before
     # it starts shopping for bodies with them. The other order lets it promise the same
     # pick to two different deals in one pass.
-    if week is None:
+    if week is None and pickTrades:
         for buyer in list(getattr(teamManager, 'teams', None) or []):
+            if getattr(buyer, 'id', None) in excluded:
+                continue
             if bidsUsed.get(getattr(buyer, 'id', None), 0) >= TRADE_BIDS_PER_TEAM_PER_WEEK:
                 continue
             for listing in market.pickInquiriesFor(buyer):
+                if getattr(listing.team, 'id', None) in excluded:
+                    continue
                 bid = market.bidForPick(listing, buyer)
                 if bid is None:
                     continue
@@ -2282,8 +2297,12 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
     for buyer in list(getattr(teamManager, 'teams', None) or []):
         if bidsUsed.get(getattr(buyer, 'id', None), 0) >= TRADE_BIDS_PER_TEAM_PER_WEEK:
             continue
+        if getattr(buyer, 'id', None) in excluded:
+            continue
         for inquiry in market.inquiriesFor(buyer):
             if not _stillListable(inquiry):
+                continue
+            if getattr(inquiry.team, 'id', None) in excluded:
                 continue
             # ⚠️ Re-checked inside the loop, not only above it: a club is allowed one
             # acquisition a pass, and the first inquiry may already have used it.
@@ -2301,7 +2320,7 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
     return settled
 
 
-def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
+def settlePickTrade(seasonManager, listing, winner, season: int, dryRun: bool = False):
     """Execute a trade-up. Returns the manifest, or None.
 
     ⚠️ DELIBERATELY SHORT, AND THAT IS THE WHOLE ARGUMENT FOR A SEPARATE PATH. Nobody is
@@ -2341,9 +2360,12 @@ def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
                 return None     # he moved since the bid was priced
             starSlot = _openSlotFor(seller, star)
             if starSlot is None:
-                starSlot = _cutToMakeRoom(seasonManager, seller, star, week=None, moves=moves)
+                starSlot = _cutToMakeRoom(seasonManager, seller, star, week=None, moves=moves,
+                                          dryRun=dryRun)
             if starSlot is None:
                 return None
+    if dryRun:
+        return True
 
     session = get_session()
     try:
@@ -2390,6 +2412,7 @@ def settlePickTrade(seasonManager, listing, winner, season: int) -> dict:
         'moves': moves,
     }
     tradeId = _persistTrade(manifest)
+    manifest['tradeId'] = tradeId
     _recordTrade(seasonManager, manifest, tradeId)
     _publishTrade(seasonManager, manifest)
     logger.info(f"TRADE UP: {buyer.name} moved up to S{listing.pick['season']} "
@@ -2408,7 +2431,8 @@ def _stillListable(listing) -> bool:
 # SETTLEMENT
 # ============================================================================
 
-def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
+def settleTrade(seasonManager, listing, winner, season: int, week=None,
+                fillHoles: bool = None, dryRun: bool = False):
     """Execute one accepted trade, in order. Returns the manifest, or None.
 
     The order is not arbitrary — each step depends on the one before:
@@ -2423,7 +2447,17 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     ⚠️ STEP 1 IS NOT OPTIONAL AND NEVER RELIES ON THE ENGINE TOLERATING `None`. An empty
     roster slot rates 50 — worse than any free agent — so a trade that cannot be backfilled
     is a trade that must not happen.
+
+    `fillHoles`: whether the seller must replace the player now. In season, yes; in the
+    offseason before the FA draft, no (the draft fills the hole). The pass AFTER the FA
+    draft prices as the offseason (`week=None`) but has no draft left to fill a hole, so
+    it settles with `fillHoles=True`. Defaults to in-season-or-not.
+
+    `dryRun`: run step 1 only and return True if the trade could settle now, moving and
+    charging nothing.
     """
+    if fillHoles is None:
+        fillHoles = week is not None
     seller, buyer = listing.team, winner.team
     player = listing.player
     slot = _slotOf(seller, player)
@@ -2440,8 +2474,9 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     moves = []
 
     if swap is None:
-        backfill = _findBackfill(seasonManager, seller, player, week=week)
-        if backfill is None and week is not None:
+        backfill = _findBackfill(seasonManager, seller, player, week=week,
+                                 allowSigning=fillHoles)
+        if backfill is None and fillHoles:
             # ⚠️ IN-SEASON ONLY. The seller would be left with a hole and there is no
             # signing path to close it, so declining is correct; the listing goes unsold
             # this week and is re-derived next week. In the OFFSEASON a hole is fine —
@@ -2457,7 +2492,8 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
             # NEVER has an open slot, and a settlement that requires one shuts every
             # contender out of the market. Measured before this existed: 728 listings and
             # 709 clearing bids across a season, and ZERO trades.
-            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player, week=week, moves=moves)
+            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player, week=week, moves=moves,
+                                       dryRun=dryRun)
             if buyerSlot is None:
                 return None
     else:
@@ -2465,6 +2501,8 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
         buyerSlot = _slotOf(buyer, swap)
         if buyerSlot is None:
             return None         # he moved since the bid was priced
+    if dryRun:
+        return True
 
     # ---- 2. move ----------------------------------------------------------
     # ⚠️ RESOLVE EVERY OUTGOING PLAYER BEFORE ANY SLOT IS WRITTEN. The move below puts the
@@ -2650,9 +2688,36 @@ def _openSlotFor(team, player):
     return None
 
 
-def _cutToMakeRoom(seasonManager, buyer, incoming, week=None, moves=None):
+def _canPayCutFee(team, fee) -> bool:
+    """Whether `seasonManager._chargeCutFee` would succeed, charging nothing. Same rule:
+    the balance must cover the fee, and an unavailable economy does not block."""
+    if fee <= 0:
+        return True
+    try:
+        from database.connection import get_session
+        from managers.facilitiesManager import getTreasury
+    except Exception:
+        return True
+    teamId = getattr(team, 'id', None)
+    if teamId is None:
+        return True
+    session = get_session()
+    try:
+        return getTreasury(session, teamId) >= fee
+    except Exception:
+        return False
+    finally:
+        session.close()
+
+
+def _cutToMakeRoom(seasonManager, buyer, incoming, week=None, moves=None,
+                   dryRun: bool = False):
     """Cut the weakest incumbent at the incoming player's position. Returns the freed
     slot, or None.
+
+    `dryRun`: run every check (protections, whether the buyer can pay the fee) and return
+    the slot that WOULD be freed, cutting and charging nothing. A fan vote is only opened
+    on a trade that could settle now (`tradeVotes.propose`).
 
     ⚠️ CUTTING A PLAYER WITH TERM LEFT COSTS TREASURY, and that is the SAFE use of a
     currency with a 227x spread across the league. Treasury was rejected as a trade ASSET
@@ -2662,7 +2727,7 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None, moves=None):
     keep churning it.
 
     ⚠️ It reconnects the two economies deliberately: Treasury's other claim is facility
-    upkeep, and `resolveSeasonEnd` spends it at season end. A club that cuts freely
+    upkeep, and `resolvePaymentRun` spends it in the offseason. A club that cuts freely
     in-season loses a facility level in the offseason. No extra rule needed.
 
     ⚠️ AND A CLUB THAT CANNOT PAY CANNOT CUT — floored at zero, never a debt, because a
@@ -2731,6 +2796,8 @@ def _cutToMakeRoom(seasonManager, buyer, incoming, week=None, moves=None):
     # refused 35 of 38 accepted trades that the market had correctly cleared. The only
     # thing left to check here is whether the club can pay.
     fee = cutFeeFor(worst)
+    if dryRun:
+        return worstSlot if _canPayCutFee(buyer, fee) else None
     if not seasonManager._chargeCutFee(buyer, fee):
         return None
     try:
@@ -2769,7 +2836,7 @@ def _isTrulyUnrostered(player) -> bool:
     return team is None or isinstance(team, str)
 
 
-def _findBackfill(seasonManager, team, player, week=None):
+def _findBackfill(seasonManager, team, player, week=None, allowSigning: bool = None):
     """Who replaces him — a ready prospect, else the best signable free agent.
 
     ⚠️ `max(readyProspect, bestAvailableFreeAgent)`, and mid-season free-agent signing is
@@ -2799,7 +2866,9 @@ def _findBackfill(seasonManager, team, player, week=None):
         rating = float(getattr(prospect, 'playerRating', 0) or 0)
         if rating > bestRating:
             best, bestRating = ('prospect', prospect), rating
-    if week is None:
+    if allowSigning is None:
+        allowSigning = week is not None
+    if not allowSigning:
         # ⚠️ NOTHING AT ALL IN THE OFFSEASON — not a signing, and not a promotion either
         # (owner, 2026-09-16: "positions slots on the roster that are emptied due to a
         # trade dont need to be filled right away, because the FA draft is coming up. the
@@ -2852,6 +2921,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
             team.prospects.remove(person)
         person.term = personTerm
         person.termRemaining = personTerm
+        payroll.stampSalary(person, prospect=True)
     else:
         pm = seasonManager.playerManager
         if person in getattr(pm, 'freeAgents', []):
@@ -2864,6 +2934,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
         # replacement, converting a roster hole into an asset.
         person.term = int(TRADE_MIDSEASON_SIGNING_TERM)
         person.termRemaining = person.term
+        payroll.stampSalary(person)
     team.rosterDict[slot] = person
     # ⚠️ DELIBERATELY NOT STAMPED `wasAcquiredThisSeason`. Signing a free agent and trading
     # him on is legitimate if somebody wants him (owner, 2026-09-15: "I dont think its an

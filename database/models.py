@@ -198,12 +198,26 @@ class Player(Base):
     # lost on the first restart, and since nothing else records it there would be no error
     # — just a prospect who quietly never blooms. Nullable: 0/NULL means none pending.
     late_bloom_pending: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    # Hidden talent (docs/PROSPECT_UNCERTAINTY_PLAN.md): attribute points already in trueSkill/potential that the public consensus does not know about.
+    talent_shift: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    # Why this player signs where he does in free agency (docs/FREE_AGENCY_MARKET_PLAN.md):
+    # 'hometown' | 'winner' | 'comfort' | 'opportunity'. NULL until first needed, when it is
+    # rolled from his personality on a seed fixed by his id (`faMarket.motiveOf`).
+    fa_motive: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # The team that drafted him (or, before the draft records, the first team he played
+    # for): a 'hometown' player takes a discount to sign there.
+    home_team_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
     prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
     # True from the moment a prospect is promoted until that promotion contract expires.
     # While set he can only stay rostered or be traded, never cut (see
     # `playerManager.isCutProtected`). Travels with him through a trade.
     on_prospect_contract: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Salary in Floobits a season, LOCKED when the contract is signed and paid from the
+    # team's Treasury at each payment run for the contract's term (managers/payroll.py).
+    # 0 = no salary: a contract signed before payroll shipped (grandfathered) or a
+    # player not under contract.
+    salary: Mapped[int] = mapped_column(Integer, default=0)
     drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     # True after _generateRookieClass, before the offseason rookie draft.
     # Upcoming rookies are visible to fans all season for scouting/voting but
@@ -677,12 +691,13 @@ class TeamFacility(Base):
 
 
 class FacilityProject(Base):
-    """An open (in-progress) facility build/upgrade in a team's queue.
+    """A facility's next level, open for funding, or a built one.
 
-    Created when a project is opened (Phase 3: by fan vote). Fans fund it
-    directly all season; the season-end waterfall tops up the OLDEST open
-    project. Persists across seasons until fully funded (then it builds in the
-    offseason and status→built). See docs/MARKETS_FACILITIES_PLAN.md §3.
+    Every facility below the top level always has exactly one open project
+    (`facilitiesManager.ensureOpenProjects`). Fans fund it directly during the
+    season (it builds the moment it is fully funded unless the facility already
+    had its upgrade this year); the offseason payment run funds open projects in
+    the team's ranked order. See docs/TREASURY_PAYROLL_PLAN.md §3.
     """
     __tablename__ = "facility_projects"
 
@@ -696,6 +711,9 @@ class FacilityProject(Base):
     opened_season: Mapped[int] = mapped_column(Integer, nullable=False)      # FIFO key
     status: Mapped[str] = mapped_column(String(8), default="open", nullable=False)  # 'open' | 'built'
     built_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Who built it: 'run' (the offseason payment run) or 'fans' (fully funded
+    # mid-season). Enforces one upgrade per facility per year. NULL = legacy, read as 'fans'.
+    built_by: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
 
     __table_args__ = (
         Index("idx_facility_project_team", "team_id"),
@@ -724,10 +742,9 @@ class TeamTreasury(Base):
 
 
 class FacilityVote(Base):
-    """A fan's vote for which facility a team should invest in NEXT (Markets→
-    Facilities, Phase 3). One vote per fan per team per season, changeable
-    (single-vote plurality). Resolved at season end — the plurality winner gets
-    an upgrade/build project opened into the queue.
+    """LEGACY: a fan's single vote for the team's next facility project. Replaced
+    by `FacilityRanking` (owner, 2026-10-22); kept only so the one-shot backfill can
+    seed each fan's ranking from their last vote. Nothing reads it otherwise.
     """
     __tablename__ = "facility_votes"
 
@@ -744,6 +761,81 @@ class FacilityVote(Base):
 
     def __repr__(self):
         return f"<FacilityVote(team={self.team_id}, user={self.user_id}, {self.facility_key}, S{self.season})>"
+
+
+class ContractSigning(Base):
+    """One free agency market contract (docs/FREE_AGENCY_MARKET_PLAN.md, comparable
+    contracts): the salary, the player's curve price (`ask`, 85% of it for an 'opportunity'
+    player), and the PREMIUM, salary over that. The recent ones set the
+    market rate every asking salary is scaled by (`payroll.marketRate`)."""
+    __tablename__ = "contract_signings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    player_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    position: Mapped[str] = mapped_column(String(4), nullable=False)
+    rating: Mapped[float] = mapped_column(Float, nullable=False)
+    salary: Mapped[int] = mapped_column(Integer, nullable=False)
+    ask: Mapped[int] = mapped_column(Integer, nullable=False)
+    premium: Mapped[float] = mapped_column(Float, nullable=False)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)   # market | lastcall
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class TreasuryIncome(Base):
+    """League money paid into a team's Treasury (docs/TREASURY_PAYROLL_PLAN.md §4).
+
+    kind 'gate': one row per team per regular-season week, the gate revenue its active
+    fans brought in (`amount`, with the fan count and weights in `detail_json`). Unique
+    per (team, season, week, kind), which is what makes a re-run of a week a no-op.
+    kind 'match': one row per matched donation; `user_id` is the donor and `basis` the
+    part of their donation that was matched, summed per fan per season against the cap.
+    """
+    __tablename__ = "treasury_income"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)       # 'gate' | 'match'
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    basis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    detail_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_treasury_income_team_season", "team_id", "season"),
+        Index("idx_treasury_income_user_season", "user_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<TreasuryIncome({self.kind}, team={self.team_id}, S{self.season}W{self.week}, {self.amount})>"
+
+
+class FacilityRanking(Base):
+    """A fan's ranked ballot of their team's facilities (owner, 2026-10-22).
+
+    Every facility in priority order, as a JSON list of facility keys. One per fan
+    per team, and it PERSISTS across seasons until the fan changes it. The team's
+    build order is a points count over the ballots of its current fans
+    (`facilitiesManager.combinedOrder`).
+    """
+    __tablename__ = "facility_rankings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    ranking_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "user_id", name="uq_facility_ranking"),
+        Index("idx_facility_ranking_team", "team_id"),
+    )
+
+    def __repr__(self):
+        return f"<FacilityRanking(team={self.team_id}, user={self.user_id})>"
 
 
 class Game(Base):
@@ -2970,3 +3062,59 @@ class Trade(Base):
 
     def __repr__(self):
         return f"<Trade(s{self.season} w{self.week} {self.team_a_id}<->{self.team_b_id})>"
+
+
+class TradeProposal(Base):
+    """A trade the market agreed, waiting on the fans' approval vote
+    (`managers/tradeVotes.py`, owner 2026-10-30).
+
+    It carries everything settlement needs to run later, possibly after a restart:
+    `listing_json` is the seller's side ({playerId} or {pick}, trigger, ask, floor, why) and
+    `bid_json` the buyer's ({pieces, value, why}), both plain ids and numbers so the
+    `Listing`/`Bid` objects can be rebuilt against the live rosters at close.
+    `assets_json` is the display manifest ({aGave, bGave}) fans vote on.
+
+    status: open | approved (settled, `trade_id` set) | rejected (the vote failed)
+    | failed (approved, but no longer possible at close) | expired (never resolved).
+    close_kind: deadline | rookie_draft | season_start, the event that closes the vote;
+    `closes_at` is when that is expected, for display.
+    """
+    __tablename__ = "trade_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    week: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase: Mapped[str] = mapped_column(String(24), nullable=False, default='in_season')
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default='player')
+    team_a_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    team_b_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    listing_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    bid_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    assets_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default='open', index=True)
+    close_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    closes_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    trade_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<TradeProposal({self.id} s{self.season} {self.status} {self.team_a_id}<->{self.team_b_id})>"
+
+
+class TradeVote(Base):
+    """One user's vote on one trade proposal. Changeable (or withdrawn) while it is open."""
+    __tablename__ = "trade_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    proposal_id: Mapped[int] = mapped_column(Integer, ForeignKey("trade_proposals.id"),
+                                             nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    approve: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("proposal_id", "user_id", name="uq_trade_vote_user"),
+    )

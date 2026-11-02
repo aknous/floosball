@@ -151,6 +151,11 @@ def test_the_gate_blocks_a_cut_that_clears_the_margin_but_not_the_odds():
         name = 'Test'
         rosterDict = {'qb': incumbent}
 
+        # A full Scouting Department: since 2026-10-30 it is 60% of the read, so the
+        # best GM alone is no longer a perfect scout.
+        def facilityEffect(self, key):
+            return 1.0 if key == 'scouting_bonus' else 0.0
+
     sharp = FakeCoach(scouting=100)
     # The margin IS cleared — the star is far enough ahead to qualify.
     star = brain.decisionValue(FakePlayer("Star", 99), sharp)

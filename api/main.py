@@ -767,6 +767,8 @@ async def get_team(team_id: int, response: Response):
                     'defensiveRatingStars': PlayerResponseBuilder.calculateStarRating(player.defensiveRating),
                     'defensivePosition': player.defensivePosition.value if player.defensivePosition else None,
                     'termRemaining': player.termRemaining,
+                    # Floobits a season, locked at signing; 0 = a contract from before payroll.
+                    'salary': int(getattr(player, 'salary', 0) or 0),
                     # Promoted prospect on his promotion contract: rostered or traded, never cut.
                     'protectedProspect': bool(getattr(player, 'onProspectContract', False)),
                     'tier': player.playerTier.name if hasattr(player.playerTier, 'name') else str(player.playerTier),
@@ -1220,20 +1222,21 @@ def _viewingClubFor(user):
 
 
 def _prospectProjection(player):
-    """A player's TRUE projection for fans: `{expected, ceiling}`, or None.
+    """A player's PUBLIC projection for fans: `{expected, ceiling}`, or None.
 
     expected = overall at trueSkill (natural development)
     ceiling  = overall at potential (perfect development)
 
-    ⚠️ FANS SEE THE TRUTH; ONLY THE CLUBS GUESS (owner, 2026-09-27). Each club's scouted
-    read (the scouting model) is what its GM acts on, and it is never presented anywhere.
-    Blurred bands made sense when fans voted on prospects as the GM; the front office is
-    autonomous now, so a fan is watching, not deciding. Serving per-club bands is also
-    what made the same prospect read 81/88 on his team page and 72/74 on his profile.
+    ⚠️ FANS SEE THE PUBLIC CONSENSUS (owner, 2026-10-30, docs/PROSPECT_UNCERTAINTY_PLAN.md).
+    It used to be the truth (2026-09-27), and the truth is now partly hidden talent that only
+    good scouts can see: showing it would tell fans who the busts and diamonds are before any
+    GM knew. The consensus is the projection with the unrevealed part of the shift taken back
+    out (`Player.projectionFor(0)`); it closes on the truth as the player develops. ⚠️ The
+    2026-09-27 rule's real point stands: ONE number on every page, never a per-club band.
     """
     try:
-        return {"expected": round(float(player.computeExpectedRating()), 1),
-                "ceiling": round(float(player.computeCeilingRating()), 1)}
+        expected, ceiling = player.projectionFor(0.0)
+        return {"expected": round(float(expected), 1), "ceiling": round(float(ceiling), 1)}
     except Exception:
         return None
 
@@ -8046,6 +8049,54 @@ def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+def _teamPayroll(teamId: int) -> int:
+    try:
+        from managers import payroll
+        tm = floosball_app.teamManager if floosball_app else None
+        team = next((t for t in (tm.teams if tm else []) if t.id == teamId), None)
+        return payroll.seasonPayroll(team) if team else 0
+    except Exception:
+        return 0
+
+
+def _salaryEnabled() -> bool:
+    # Whether salaries are charging yet, not merely whether the feature exists: the
+    # first funded season shows no payroll (docs/TREASURY_PAYROLL_PLAN.md §5).
+    from managers import payroll
+    return payroll.salariesActive()
+
+
+def _payrollMinimum() -> int:
+    try:
+        from managers import payroll
+        return payroll.minimumSalary()
+    except Exception:
+        return 0
+
+def _payrollOutlook(session, teamId: int, season: int):
+    """In-season only: whether the team is on course to fall short of next season's
+    payroll at the season-end check (docs/TREASURY_PAYROLL_PLAN.md §5). None once the
+    check has run for this season (its payment-run marker is written right after) or
+    with payroll off."""
+    try:
+        from database.models import AppSetting
+        from managers import payroll, facilitiesManager
+        from standings_view import regularSeasonWeeks
+        marker = session.query(AppSetting).filter_by(key=facilitiesManager.PAYMENT_RUN_KEY).first()
+        if marker and marker.value in (str(season), f"done:{season}"):
+            return None
+        sm = floosball_app.seasonManager
+        tm = floosball_app.teamManager
+        team = next((t for t in (tm.teams if tm else []) if t.id == teamId), None)
+        weeks = regularSeasonWeeks(sm.currentSeason.schedule) if sm and sm.currentSeason else 0
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        return payroll.payrollOutlook(session, team, season, weeks or 28, shareUnit)
+    except Exception as e:
+        logger.warning(f"Payroll outlook failed for team {teamId}: {e}")
+        return None
+
+
 @app.get("/api/teams/{team_id}/facilities")
 def get_team_facilities(team_id: int):
     """Team facilities state (Markets→Facilities): levels + effects + upkeep,
@@ -8065,29 +8116,34 @@ def get_team_facilities(team_id: int):
         facRows = session.query(TeamFacility).filter_by(team_id=team_id).all()
         levels = {f.facility_key: f.level for f in facRows}
         openProjRows = session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()
-        upgradingKeys = {p.facility_key for p in openProjRows}
+        # A facility fans built this year has its upkeep WAIVED at the next payment run.
+        builtThisYear = facilitiesManager.fanBuiltThisYear(session, team_id, season)
+        order = facilitiesManager.teamOrder(session, team_id, levels)
         facilities = []
         for f in facRows:
             cfg = FACILITY_CATALOG.get(f.facility_key, {})
-            # A facility under active upgrade has its upkeep WAIVED this season.
-            upgrading = f.facility_key in upgradingKeys
+            waived = f.facility_key in builtThisYear
             facilities.append({
                 'key': f.facility_key,
                 'name': cfg.get('name', f.facility_key),
                 'level': f.level,
                 'maxLevel': FACILITY_MAX_LEVEL,
                 'effect': cfg.get('effect'),
-                'upgrading': upgrading,
-                'upkeepCost': 0 if upgrading else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
+                'upgrading': waived,          # kept for older clients: "upkeep waived"
+                'builtThisYear': waived,
+                'upkeepCost': 0 if waived else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
                 'upkeepFunded': f.upkeep_funded or 0,
                 'upgradeCost': facilitiesManager.upgradeCostFloobits(f.level, shareUnit),
             })
-        projects = [{
+        projects = sorted([{
             'id': p.id, 'facilityKey': p.facility_key, 'kind': p.kind,
             'targetLevel': p.target_level,
             'cost': facilitiesManager.projectCostFloobits(p.cost_shares, shareUnit),
             'funded': p.funded, 'openedSeason': p.opened_season,
-        } for p in openProjRows]
+            'rank': order.index(p.facility_key) + 1 if p.facility_key in order else None,
+            # 'now' | 'payment_run' | 'next_season': when a fully funded bar builds
+            'buildsAt': facilitiesManager.projectBuildTiming(session, team_id, p.facility_key, season),
+        } for p in openProjRows], key=lambda x: x['rank'] or 99)
         return build_success_response({
             'teamId': team_id,
             'treasury': facilitiesManager.getTreasury(session, team_id),
@@ -8095,6 +8151,14 @@ def get_team_facilities(team_id: int):
             'shareUnit': round(shareUnit),
             'facilities': facilities,
             'projects': projects,
+            'order': order,
+            'paymentRunDone': facilitiesManager.paymentRunDone(session, season),
+            # Payroll (docs/TREASURY_PAYROLL_PLAN.md §5): this season's salaries, paid first
+            # at the payment run, and what a roster spot costs at least.
+            'payroll': _teamPayroll(team_id),
+            'minimumSalary': _payrollMinimum(),
+            'payrollOutlook': _payrollOutlook(session, team_id, season),
+            'salaryEnabled': _salaryEnabled(),
         })
     finally:
         session.close()
@@ -8174,65 +8238,69 @@ def get_league_facilities():
         session.close()
 
 
-@app.get("/api/teams/{team_id}/facilities/vote")
-def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
-    """Facility vote ballot: the facilities eligible to be the team's next
-    project (not maxed, not already in progress) + the current user's vote.
-    Tallies are hidden while the season is live (anti-bandwagon)."""
+@app.get("/api/teams/{team_id}/facilities/ranking")
+def get_facility_ranking(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """The team's facility build order from its fans' ranked ballots, and the
+    current user's own ranking (owner, 2026-10-22). The payment run funds the
+    facilities in `order`, one upgrade per facility per year."""
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     from database.connection import get_session
-    from database.models import TeamFacility, FacilityProject
+    from database.models import TeamFacility
     from managers import facilitiesManager
+    from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
     sm = floosball_app.seasonManager
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     session = get_session()
     try:
         levels = {f.facility_key: f.level for f in
                   session.query(TeamFacility).filter_by(team_id=team_id).all()}
-        openKeys = {p.facility_key for p in
-                    session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()}
-        candidates = facilitiesManager.voteCandidates(levels, openKeys)
-        # enrich each candidate with what winning it would cost: the build (to reach
-        # the target level) and the upkeep it would then carry each season.
+        ballots = facilitiesManager.teamBallots(session, team_id)
+        order = facilitiesManager.combinedOrder(levels, ballots)
         shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
-        tallies = facilitiesManager.tallyFacilityVotes(session, team_id, season)
-        for c in candidates:
-            c['cost'] = facilitiesManager.upgradeCostFloobits(c['currentLevel'], shareUnit)
-            c['upkeep'] = facilitiesManager.upkeepCostFloobits(c['targetLevel'], shareUnit)
-            c['votes'] = tallies.get(c['key'], 0)
-        myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
+        facilities = []
+        for key in order:
+            lvl = levels.get(key, 0)
+            facilities.append({
+                'key': key, 'name': FACILITY_CATALOG[key].get('name', key),
+                'level': lvl, 'maxLevel': FACILITY_MAX_LEVEL,
+                'maxed': lvl >= FACILITY_MAX_LEVEL,
+                'cost': facilitiesManager.upgradeCostFloobits(lvl, shareUnit),
+                'upkeep': facilitiesManager.upkeepCostFloobits(min(lvl + 1, FACILITY_MAX_LEVEL), shareUnit),
+            })
+        mine = facilitiesManager.getRanking(session, team_id, user.id) if user else None
         return build_success_response({
             'teamId': team_id, 'season': season,
-            'candidates': candidates, 'myVote': myVote,
+            'order': order, 'ballots': len(ballots),
+            'facilities': facilities,
+            'myRanking': facilitiesManager.normalizeBallot(mine, levels) if mine else None,
         })
     finally:
         session.close()
 
 
-@app.post("/api/teams/{team_id}/facilities/vote")
-def post_facility_vote(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
-    """Cast/change the user's facility vote (one per fan/team/season). Favorite
-    team only. body: {facilityKey}."""
+@app.post("/api/teams/{team_id}/facilities/ranking")
+def post_facility_ranking(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Save the user's ranked ballot: every facility key, in priority order. Favorite
+    team only. Persists across seasons until changed. body: {ranking: [keys]}."""
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    facilityKey = payload.get("facilityKey")
-    if not facilityKey:
-        raise HTTPException(status_code=400, detail="'facilityKey' is required")
+    ranking = payload.get("ranking")
     from database.connection import get_session
-    from database.models import User as _UserModel
+    from database.models import User as _UserModel, TeamFacility
     from managers import facilitiesManager
-    sm = floosball_app.seasonManager
-    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     session = get_session()
     try:
         dbUser = session.query(_UserModel).filter_by(id=user.id).first()
         if not dbUser or dbUser.favorite_team_id != team_id:
-            raise HTTPException(status_code=400, detail="You can only vote for your favorite team")
-        facilitiesManager.castFacilityVote(session, team_id, user.id, facilityKey, season)
+            raise HTTPException(status_code=400, detail="You can only rank your favorite team's facilities")
+        facilitiesManager.setRanking(session, team_id, user.id, ranking)
         session.commit()
+        levels = {f.facility_key: f.level for f in
+                  session.query(TeamFacility).filter_by(team_id=team_id).all()}
         return build_success_response({
-            'teamId': team_id, 'season': season, 'myVote': facilityKey,
+            'teamId': team_id, 'myRanking': ranking,
+            'order': facilitiesManager.teamOrder(session, team_id, levels),
         })
     except ValueError as e:
         session.rollback()
@@ -8958,6 +9026,138 @@ def _ratingsByPlayerId() -> dict:
     return out
 
 
+class _TradeVoteRequest(BaseModel):
+    approve: Optional[bool] = None      # True yes, False no, None withdraws the vote
+
+
+def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes) -> dict:
+    """One trade proposal for the Transactions page: what each side gives, why, when the
+    vote closes, the tally against the rule and the caller's own vote."""
+    from managers import tradeVotes
+    assets = p.assets_json or {}
+    lj, bj = p.listing_json or {}, p.bid_json or {}
+    if p.status == tradeVotes.OPEN:
+        v = tradeVotes.tally(session, p)
+    else:
+        v = dict(p.result_json or {})
+    teams = v.get('teams') or {}
+    def teamTally(tid):
+        t = teams.get(tid) or teams.get(str(tid)) or {}
+        return {"fans": t.get('fans', 0), "need": t.get('need', 0),
+                "yes": t.get('yes', 0), "no": t.get('no', 0)}
+    return {
+        "id": p.id, "season": p.season, "week": p.week, "phase": p.phase,
+        "status": p.status, "closeKind": p.close_kind, "closesAt": _utcIso(p.closes_at),
+        "resolvedAt": _utcIso(p.resolved_at), "tradeId": p.trade_id,
+        "teamA": teamBlob(p.team_a_id), "teamB": teamBlob(p.team_b_id),
+        "aGave": _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins),
+        "bGave": _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins),
+        "trigger": lj.get('trigger'), "sellerWhy": lj.get('why'), "buyerWhy": bj.get('why'),
+        "tally": {"yes": v.get('yes', 0), "no": v.get('no', 0),
+                  "passing": bool(v.get('passed')), "reason": v.get('reason'),
+                  "teamA": teamTally(p.team_a_id), "teamB": teamTally(p.team_b_id)},
+        "note": (p.result_json or {}).get('note') if p.status != tradeVotes.OPEN else None,
+        "myVote": myVotes.get(p.id),
+    }
+
+
+@app.get("/api/trade-votes")
+def get_trade_votes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
+    """Trades waiting on the fans' approval vote, and this season's closed ones
+    (`managers/tradeVotes.py`). Everyone signed in can vote on every trade; see
+    `constants.py` "Fan approval votes on trades" for the rule. Tallies are shown while a
+    vote is open, so a team's fans can see how far they are from their bar. Hidden with
+    the rest of trading while it is off."""
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=15")
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    if _tradesHidden():
+        return build_success_response({"open": [], "closed": [], "enabled": False})
+    from constants import tradeVotesEnabled
+    from database.connection import get_session
+    from database.models import TradeProposal, TradeVote
+    from managers import tradeVotes
+
+    sm, tm = floosball_app.seasonManager, floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    teamsById = {getattr(t, 'id', None): t for t in (getattr(tm, 'teams', None) or [])}
+
+    def teamBlob(teamId):
+        team = teamsById.get(teamId)
+        if team is None:
+            return None
+        return {"id": teamId, "name": team.name,
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', None)}
+
+    session = get_session()
+    try:
+        rows = (session.query(TradeProposal)
+                .filter((TradeProposal.status == tradeVotes.OPEN)
+                        | (TradeProposal.season >= season - 1))
+                .order_by(TradeProposal.id.desc()).limit(80).all())
+        myVotes = {}
+        if user is not None and rows:
+            myVotes = {pid: bool(a) for pid, a in session.query(
+                TradeVote.proposal_id, TradeVote.approve).filter(
+                TradeVote.user_id == user.id,
+                TradeVote.proposal_id.in_([r.id for r in rows])).all()}
+        ratingById = _ratingsByPlayerId()
+        pickOrigins = _pickOriginsFor(session, rows, teamBlob)
+        out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes)
+               for r in rows if r.status != tradeVotes.EXPIRED]
+        return build_success_response({
+            "open": [r for r in out if r["status"] == tradeVotes.OPEN],
+            "closed": [r for r in out if r["status"] != tradeVotes.OPEN][:30],
+            "enabled": tradeVotesEnabled(),
+            "myTeamId": getattr(user, 'favorite_team_id', None) if user else None,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/trade-votes/{proposal_id}/vote")
+def cast_trade_vote(proposal_id: int, req: _TradeVoteRequest,
+                    user: _User = Depends(_getCurrentUser)):
+    """Vote yes or no on an open trade, change the vote, or withdraw it (`approve: null`)."""
+    if _tradesHidden():
+        raise HTTPException(404, "Trading is off")
+    from datetime import datetime as _dt
+    from database.connection import get_session
+    from database.models import TradeProposal, TradeVote
+    from managers import tradeVotes
+    session = get_session()
+    try:
+        p = session.get(TradeProposal, proposal_id)
+        if p is None:
+            raise HTTPException(404, "No such trade")
+        if p.status != tradeVotes.OPEN:
+            raise HTTPException(409, "This vote has closed")
+        row = session.query(TradeVote).filter_by(proposal_id=p.id, user_id=user.id).first()
+        if req.approve is None:
+            if row is not None:
+                session.delete(row)
+        elif row is None:
+            session.add(TradeVote(proposal_id=p.id, user_id=user.id, approve=bool(req.approve)))
+        else:
+            row.approve = bool(req.approve)
+            row.updated_at = _dt.utcnow()
+        session.commit()
+        v = tradeVotes.tally(session, p)
+        return build_success_response({
+            "id": p.id, "myVote": req.approve,
+            "tally": {"yes": v['yes'], "no": v['no'], "passing": v['passed'],
+                      "reason": v['reason']}})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Trade vote failed: {e}")
+        raise HTTPException(500, "Could not record the vote")
+    finally:
+        session.close()
+
+
 def _tradeAssetsWithRatings(assets, ratingById, pickOrigins=None) -> list:
     """A trade manifest side with each player/prospect's current rating attached, and each
     pick's ORIGINAL team (`pickOrigins`, from `_pickOriginsFor`).
@@ -9208,13 +9408,13 @@ def get_player_rating_history(player_id: int):
     #   ceiling  = top rating at potential (perfect development)
     # Only for active players (live attrs); hidden for undrafted prospects so the
     # profile can't leak what the rookie-ballot scouting range deliberately blurs.
-    # True values for every active player, prospects included (see `_prospectProjection`).
+    # The public consensus for every active player, prospects included (see
+    # `_prospectProjection`): hidden talent stays hidden here too.
     expected = None
     ceiling = None
-    if player is not None and hasattr(player, 'computeCeilingRating'):
+    if player is not None and hasattr(player, 'projectionFor'):
         try:
-            expected = player.computeExpectedRating()
-            ceiling = player.computeCeilingRating()
+            expected, ceiling = player.projectionFor(0.0)
         except Exception:
             expected = None
             ceiling = None
@@ -15665,7 +15865,8 @@ def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
     """Open votes and, for users with DM reminders on, which of them each hasn't cast.
 
     Covers the rule vote (one window per game day, closing at that day's kickoff), the
-    MVP ballot and the Hall of Fame ballot. HoF is approval voting, so approving any one
+    MVP ballot, the Hall of Fame ballot and each open trade approval vote (kind 'trade',
+    with its `closeKind`). HoF is approval voting, so approving any one
     player counts as voted. Returns {votes: [{key, kind, label, closesAt}],
     missing: {discordId: [key, ...]}}; a vote's key changes with each window, so the
     bot can tell a new vote from one it already announced."""
@@ -15709,6 +15910,21 @@ def bot_get_unvoted(_auth: None = Depends(_checkBotAuth)):
             voters[key] = {uid for (uid,) in session.query(AwardVote.user_id).filter(
                 AwardVote.season == season, AwardVote.award_type == awardType,
                 AwardVote.user_id.in_(userIds)).distinct()}
+
+        # Trade approval votes, one per open trade (managers/tradeVotes.py).
+        if not _tradesHidden():
+            from database.models import TradeProposal, TradeVote
+            tm = floosball_app.teamManager
+            names = {getattr(t, 'id', None): t.name for t in (getattr(tm, 'teams', None) or [])}
+            for p in session.query(TradeProposal).filter(TradeProposal.status == 'open').all():
+                key = f"trade:{p.id}"
+                votes.append({"key": key, "kind": "trade",
+                              "label": f"the {names.get(p.team_a_id, '?')} and "
+                                       f"{names.get(p.team_b_id, '?')} trade",
+                              "closesAt": _utcIso(p.closes_at),
+                              "closeKind": p.close_kind})
+                voters[key] = {uid for (uid,) in session.query(TradeVote.user_id).filter(
+                    TradeVote.proposal_id == p.id, TradeVote.user_id.in_(userIds))}
 
         missing = {}
         for uid in userIds:

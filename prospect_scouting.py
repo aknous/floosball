@@ -45,20 +45,17 @@ def _clamp(value, low, high):
 
 
 def bandFor(vision: float) -> float:
-    """Half-width of the potential band, in rating points, at this club's vision.
+    """Half-width of a club's scouting error band on a prospect's ceiling, in rating
+    points, at this club's vision (`frontOfficeBrain.scoutingVision`, 0..1).
 
-    `vision` is `frontOfficeBrain.scoutingVision` output — 0..1 — which is the one
-    definition of how well a front office sees. ⚠️ `SCOUTING_BANDS` is keyed on the
-    60-100 ATTRIBUTE scale, so the two have to be reconciled here rather than at each
-    call site; the vision normalisation is exactly `(raw - FLOOR) / (CEILING - FLOOR)`,
-    so this inverts it.
+    ⚠️ CONTINUOUS (2026-10-30). It was a four-step table (exact / +-5 / +-10 / +-15 on the
+    60-100 attribute scale), so most Scouting Department levels crossed no step and did
+    nothing at all. Now every point of vision narrows it, from the widest table width at
+    vision 0 to exact at vision 1.
     """
     vision = max(0.0, min(1.0, float(vision or 0.0)))
-    accuracy = FO_SCOUT_VISION_FLOOR + vision * (FO_SCOUT_VISION_CEILING - FO_SCOUT_VISION_FLOOR)
-    for threshold, width in SCOUTING_BANDS:
-        if accuracy >= threshold:
-            return float(width)
-    return float(SCOUTING_BANDS[-1][1])
+    widest = float(max(width for _threshold, width in SCOUTING_BANDS))
+    return widest * (1.0 - vision)
 
 
 def seasonProgress(week: int) -> float:
@@ -154,7 +151,9 @@ def scoutedView(prospect, viewerId, season: int, vision: float, week: int,
     impossible one.
     """
     if truePotential is None:
-        truePotential = prospect.computeCeilingRating()
+        # What this club's eye lands on: the consensus plus the hidden talent it sees.
+        fn = getattr(prospect, 'projectionFor', None)
+        truePotential = fn(vision)[1] if callable(fn) else prospect.computeCeilingRating()
     if currentRating is None:
         currentRating = getattr(prospect, 'playerRating', 0) or 0
     band = bandWidth(vision, week)

@@ -31,6 +31,7 @@ class EventType(Enum):
     WEEK_END = "week_end"
     DAY_COMPLETE = "day_complete"
     REGULAR_SEASON_COMPLETE = "regular_season_complete"
+    TRADE_VOTES_OPEN = "trade_votes_open"  # new fan approval votes on trades (managers/tradeVotes.py)
     
     # Standings events
     STANDINGS_UPDATE = "standings_update"

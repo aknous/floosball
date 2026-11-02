@@ -225,13 +225,19 @@ def test_scouting_department_sharpens_the_read():
     print(f"PASS the Scouting Department buys vision: {bare:.2f} -> {maxed:.2f}")
 
 
-def test_the_facility_never_replaces_the_gm():
-    """A maxed department must not turn a poor evaluator into a good one."""
+def test_the_facility_carries_more_than_the_gm():
+    """⚠️ REVERSED 2026-10-30 (owner): this test used to assert that a maxed department
+    never lifts a poor evaluator past a sharp one. The owner wants the opposite, because
+    fans control the facilities and have no say over the coach: the department is 60% of
+    the read, so the worst GM with a full department sees more than the best GM with none,
+    and the best GM with a full one sees everything."""
     brain = _brain()
     poorMaxed = brain.scoutingVision(FakeCoach(scouting=60), _team('A', 5))
     sharpBare = brain.scoutingVision(FakeCoach(scouting=100), _team('B', 0))
-    assert poorMaxed < sharpBare, (poorMaxed, sharpBare)
-    print(f"PASS a maxed department ({poorMaxed:.2f}) still trails a sharp GM "
+    sharpMaxed = brain.scoutingVision(FakeCoach(scouting=100), _team('C', 5))
+    assert poorMaxed > sharpBare, (poorMaxed, sharpBare)
+    assert sharpMaxed == 1.0
+    print(f"PASS a maxed department ({poorMaxed:.2f}) beats a sharp GM without one "
           f"({sharpBare:.2f})")
 
 
@@ -302,10 +308,11 @@ def test_prospects_are_priced_onto_the_same_board():
     in one currency. A raw playerRating next to a position-weighted value would
     silently favour whichever side wasn't weighted."""
     brain = _brain()
-    team = _team('T', 3)
+    team = _team('T', 5)
     pool = [FakePlayer('FA', 80, seasons=0, pid=1)]
     prospect = FakePlayer('Prospect', 80, seasons=0, pid=2)
-    # A perfect scout, so the per-call error term is zero and the comparison is
+    # A perfect scout (the best GM AND a full department, since 2026-10-30 the department
+    # is 60% of the read), so the per-call error term is zero and the comparison is
     # of the valuations themselves rather than two noise draws.
     board = brain.buildDraftBoard(team, pool, coach=FakeCoach(scouting=100),
                                   alsoValue=[prospect])

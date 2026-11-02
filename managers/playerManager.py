@@ -4,6 +4,7 @@ Replaces the scattered player-related global variables and functions in floosbal
 """
 
 from typing import List, Optional, Dict, Any, Tuple
+from managers import payroll
 import os
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
@@ -36,6 +37,35 @@ def _perfRating(player, attr: str) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _payrollBudget(team):
+    """The team's payroll budget for an FA-draft signing, or None with payroll off.
+    Contracts are post-decrement here (the draft runs after step 3), each carried
+    with its player so an upgrade cut can free his salary."""
+    tid = getattr(team, 'id', None)
+    if not payroll.salariesActive() or not payroll.hasFinances(tid):
+        return None
+    income, upkeep = payroll.financesOf(tid)
+    contracts = []
+    for p in payroll.rosterPlayers(team):
+        sal, runs = payroll.salaryOf(p), payroll.contractRuns(p)
+        if sal > 0 and runs > 0:
+            contracts.append((sal, runs, p))
+    roster = getattr(team, 'rosterDict', None) or {}
+    return {'contracts': contracts, 'balance': payroll.balanceOf(tid),
+            'income': income, 'upkeep': upkeep, 'minimum': payroll.minimumSalary(),
+            'open': sum(1 for s in payroll.ROSTER_SLOTS if roster.get(s) is None)}
+
+
+def _stampSigningSalary(player) -> None:
+    """Lock a salary onto a free agent's new contract: his asking salary, or the minimum
+    for a last-resort generated stopgap."""
+    if getattr(player, '_minimumSalary', False):
+        player.salary = payroll.minimumSalary() if payroll.salariesActive() else 0
+        player._minimumSalary = False
+    else:
+        payroll.stampSalary(player)
 
 
 def stampPromotion(player, season) -> None:
@@ -533,9 +563,13 @@ class PlayerManager:
             # Prospect pipeline state
             player.is_prospect = bool(getattr(db_player, 'is_prospect', False))
             player.lateBloomPending = int(getattr(db_player, 'late_bloom_pending', 0) or 0)
+            player.talentShift = int(getattr(db_player, 'talent_shift', 0) or 0)
+            player.faMotive = getattr(db_player, 'fa_motive', None)
+            player.homeTeamId = getattr(db_player, 'home_team_id', None)
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.onProspectContract = bool(getattr(db_player, 'on_prospect_contract', False))
+            player.salary = int(getattr(db_player, 'salary', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
@@ -1184,7 +1218,7 @@ class PlayerManager:
         left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
         return max(1, int(base), left)
 
-    def _getPlayerTerm(self, player) -> int:
+    def _getPlayerTerm(self, player, rng=None) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
         Rookies (seasonsPlayed == 0) get a standard prove-it contract keyed to
@@ -1193,6 +1227,8 @@ class PlayerManager:
         runs well past their expected retirement (longevity - seasonsPlayed).
         """
         from random import randint
+        if rng is not None:
+            randint = rng.randint   # a seeded roll (`payroll.contractTerm`)
         tier = player.playerTier
         seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
 
@@ -1953,8 +1989,13 @@ class PlayerManager:
                         service_time=player.serviceTime.name if hasattr(player, 'serviceTime') else None,
                         is_prospect=bool(getattr(player, 'is_prospect', False)),
                         is_undrafted=bool(getattr(player, 'is_undrafted', False)),
+                        late_bloom_pending=int(getattr(player, 'lateBloomPending', 0) or 0),
+                        talent_shift=int(getattr(player, 'talentShift', 0) or 0),
+                        fa_motive=getattr(player, 'faMotive', None),
+                        home_team_id=getattr(player, 'homeTeamId', None),
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
                         on_prospect_contract=bool(getattr(player, 'onProspectContract', False)),
+                        salary=int(getattr(player, 'salary', 0) or 0),
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                         will_retire=bool(getattr(player, 'willRetire', False)),
@@ -1986,9 +2027,13 @@ class PlayerManager:
                     db_player.service_time = player.serviceTime.name if hasattr(player, 'serviceTime') else None
                     db_player.is_prospect = bool(getattr(player, 'is_prospect', False))
                     db_player.late_bloom_pending = int(getattr(player, 'lateBloomPending', 0) or 0)
+                    db_player.talent_shift = int(getattr(player, 'talentShift', 0) or 0)
+                    db_player.fa_motive = getattr(player, 'faMotive', None)
+                    db_player.home_team_id = getattr(player, 'homeTeamId', None)
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.on_prospect_contract = bool(getattr(player, 'onProspectContract', False))
+                    db_player.salary = int(getattr(player, 'salary', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
@@ -3282,14 +3327,17 @@ class PlayerManager:
 
                 # Attempt to fill ONE open roster spot
                 # Returns True if roster complete, False if not complete (has open positions)
+                turnEvents = []
                 rosterComplete = self._attemptRosterFill(
                     team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                     freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                    eventLog=eventLog
+                    eventLog=turnEvents
                 )
+                if eventLog is not None:
+                    eventLog.extend(turnEvents)
 
-                if rosterComplete:
-                    # No open positions - team is complete
+                if self._draftTeamIsDone(rosterComplete, turnEvents):
+                    # Full, and this turn found no move worth making - team is complete
                     teamsComplete += 1
                     team.freeAgencyComplete = True
                     if eventLog is not None:
@@ -3344,7 +3392,8 @@ class PlayerManager:
         return freeAgencyHistory
 
     def freeAgencyPickGenerator(self, freeAgencyOrder: List, currentSeason: int,
-                                leagueHighlights: List = None, skipRetirements: bool = False):
+                                leagueHighlights: List = None, skipRetirements: bool = False,
+                                allowUpgrades: bool = True):
         """Generator that yields one FA event at a time for live broadcasting.
 
         Yields dicts with 'type' key: 'on_clock', 'pick', 'team_complete'.
@@ -3424,9 +3473,16 @@ class PlayerManager:
             return
 
         for team in teams:
-            openPositions = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')
-                            if team.rosterDict.get(k) is None]
-            team.freeAgencyComplete = len(openPositions) == 0
+            # ⚠️ A FULL ROSTER STILL GETS TURNS (owner, 2026-11-01: "a team should be able
+            # to cut a roster player (that wasnt just signed that offseason) to sign a
+            # better player"). A team that started the draft full used to be marked done
+            # here and never reached `_upgradeCandidates`, so the only teams that could
+            # upgrade were ones still filling a hole, and a rich team with a full roster
+            # sat on its Treasury while a 90-rated free agent went unsigned. A team is done
+            # once its roster is full and a turn makes no move (`_draftTeamIsDone`).
+            # After the free agency market (`allowUpgrades=False`) the draft only fills the
+            # holes the market left, so a full roster is done before it starts.
+            team.freeAgencyComplete = (not allowUpgrades) and self._rosterIsFull(team)
             # ⚠️ CLEARED PER DRAFT. It lives on the Team, which outlives the offseason, so
             # leaving it would make every slot filled in season N permanently un-upgradable.
             team._draftFilledSlots = set()
@@ -3473,8 +3529,12 @@ class PlayerManager:
 
                 teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 
-                # Yield on-the-clock before attempting pick
-                yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
+                # A team with an open slot is on the clock before it picks. A full team only
+                # goes on the clock if it makes an upgrade: every on_clock waits out the live
+                # pick delay, and a full roster passing is not a pick worth showing.
+                startsFull = self._rosterIsFull(team)
+                if not startsFull:
+                    yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
                 # Priority order: walk fan directives (which may interleave FA
                 # and prospect IDs). Fan-ranked #1 prospects were already
@@ -3498,8 +3558,10 @@ class PlayerManager:
                     rosterComplete = self._attemptRosterFill(
                         team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                         freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                        eventLog=pickEvents,
+                        eventLog=pickEvents, allowUpgrades=allowUpgrades,
                     )
+                    if startsFull and self._turnMadeAMove(pickEvents):
+                        yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
                     for ev in pickEvents:
                         # Log path mirrors the directive walk so the FA log
@@ -3537,13 +3599,14 @@ class PlayerManager:
                             rosterComplete = self._attemptRosterFill(
                                 team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                                 freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                                eventLog=retryEvents,
+                                eventLog=retryEvents, allowUpgrades=allowUpgrades,
                             )
                             for ev in retryEvents:
                                 logFa(f"  LAST-RESORT SIGN: {team.name} signs {ev['player']} at {ev.get('slot', '?')}")
                                 yield ev
 
-                    if rosterComplete:
+                    if self._draftTeamIsDone(rosterComplete, pickEvents) or (
+                            not allowUpgrades and rosterComplete):
                         teamsComplete += 1
                         team.freeAgencyComplete = True
                         yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
@@ -3822,6 +3885,9 @@ class PlayerManager:
         newPlayer.id = max([p.id for p in self.activePlayers], default=0) + 1
         newPlayer.team = 'Free Agent'
         newPlayer.freeAgentYears = 0
+        # Signs for the minimum salary (docs/TREASURY_PAYROLL_PLAN.md §5, G6): the league
+        # baseline always covers it, so a generated stopgap can never be unaffordable.
+        newPlayer._minimumSalary = True
         self.freeAgents.append(newPlayer)
         if newPlayer not in self.activePlayers:
             self.activePlayers.append(newPlayer)
@@ -3833,6 +3899,94 @@ class PlayerManager:
             f"the {pos.name} pool was empty for a team on the clock"
         )
         return newPlayer
+
+    def washOutUndrafted(self, undrafted: List, numTeams: int) -> dict:
+        """The draft's leftovers (docs/PROSPECT_UNCERTAINTY_PLAN.md 3.5, owner 2026-10-30).
+
+        ⚠️ ONLY THE SURPLUS WASHES OUT. Before anyone is removed, each position keeps as
+        many undrafted players as it needs to stay at the supply floor (the post-draft
+        `positionSupplyDeficits`, the drafted class counted), best by public consensus
+        first, as free agents. Kickers are why: the lowest position value on every board
+        means most of the undrafted would be kickers, and washing them all out would leave
+        the floor generating fresh ones, each with a new name.
+
+        The rest are removed like the pool cull removes a never-rostered player
+        (`_removeUnsignedPlayer`: name back to the pool, dependent rows cleared). They
+        never played and never had a card, so there is nothing of theirs to orphan, and
+        `_playersWithARecord` still guards it (fail closed: anyone it cannot clear is kept).
+
+        Returns {'kept': [ids], 'washedOut': [names]}.
+        """
+        deficits = self.positionSupplyDeficits(numTeams, countProspects=True)
+        for rookie in undrafted:
+            rookie.is_upcoming_rookie = False
+            rookie.is_undrafted = True
+            rookie.team = 'Free Agent'
+            rookie.freeAgentYears = 0
+
+        def _consensus(p):
+            try:
+                return float(p.projectionFor(0.0)[0])
+            except Exception:
+                return float(getattr(p, 'playerRating', 0) or 0)
+
+        keep, drop = [], []
+        byPos = {}
+        for r in undrafted:
+            byPos.setdefault(getattr(r, 'position', None), []).append(r)
+        for pos, group in byPos.items():
+            group.sort(key=lambda p: -_consensus(p))
+            need = max(0, int(deficits.get(pos, 0)))
+            keep += group[:need]
+            drop += group[need:]
+        marked = self._playersWithARecord([p.id for p in drop if getattr(p, 'id', None)]) if drop else set()
+        washedOut = []
+        for r in drop:
+            if getattr(r, 'id', None) in marked:
+                keep.append(r)
+                continue
+            washedOut.append(r.name)
+            self._removeUnsignedPlayer(r)
+        for r in keep:
+            if r not in self.freeAgents:
+                self.freeAgents.append(r)
+            if r not in self.activePlayers:
+                self.activePlayers.append(r)
+            self.addToPositionList(r)
+        return {'kept': [r.id for r in keep], 'washedOut': washedOut}
+
+    def positionSupplyDeficits(self, numTeams: int, buffer: int = None,
+                               countProspects: bool = False, withSupply: bool = False):
+        """{Position: how many short} of the supply floor. The counting rule
+        `ensurePositionSupply` generates against; see it for what counts as supply.
+        `withSupply` also returns the counted supply, as (deficits, supply)."""
+        from constants import ROSTER_SUPPLY_BUFFER_PER_POSITION
+        if buffer is None:
+            buffer = ROSTER_SUPPLY_BUFFER_PER_POSITION
+        slotsPerPosition = {
+            FloosPlayer.Position.QB: 1,
+            FloosPlayer.Position.RB: 1,
+            FloosPlayer.Position.WR: 2,
+            FloosPlayer.Position.TE: 1,
+            FloosPlayer.Position.K: 1,
+        }
+        supply = {pos: 0 for pos in slotsPerPosition}
+        for p in self.activePlayers:
+            if getattr(p, 'willRetire', False):
+                continue
+            if getattr(p, 'is_upcoming_rookie', False):
+                continue
+            if getattr(p, 'is_prospect', False) and not countProspects:
+                continue
+            pos = getattr(p, 'position', None)
+            if pos in supply:
+                supply[pos] += 1
+        deficits = {}
+        for pos, perTeam in slotsPerPosition.items():
+            short = numTeams * perTeam + buffer - supply[pos]
+            if short > 0:
+                deficits[pos] = short
+        return (deficits, supply) if withSupply else deficits
 
     def ensurePositionSupply(self, numTeams: int, buffer: int = None,
                              countProspects: bool = False) -> dict:
@@ -3865,39 +4019,21 @@ class PlayerManager:
             FloosPlayer.Position.K: 1,
         }
 
-        # Draftable supply by position. Excludes:
+        # Draftable supply by position (positionSupplyDeficits, the one counting rule,
+        # shared with the draft's wash-out). Excludes:
         #  - retiring players (`willRetire`) — gone in the offseason;
         #  - prospects / the upcoming rookie class (`is_prospect`) — each is
         #    LOCKED to its drafting team (only that team can promote it), so a
         #    prospect does nothing for another team's vacancy. Counting them
         #    overstated availability and let the FA pool come up short, forcing
-        #    the draft's last-resort generation. Excluding them makes the floor
-        #    generate enough genuine free agents (over-generating slightly when
-        #    prospects do get promoted, which is harmless — the extra FAs just
-        #    sit in the pool).
+        #    the draft's last-resort generation.
         # ⚠️ `countProspects` IS FOR THE CHECK AFTER THE ROOKIE DRAFT (owner, 2026-10-02):
         # generation only covers what the drafted class still leaves short. A prospect
         # fills only his own club's hole, so a hole elsewhere at that position can still
         # come up empty; the FA draft's last-resort generation covers exactly that case,
         # which keeps generation to a genuine shortage either way.
-        supply = {pos: 0 for pos in slotsPerPosition}
-        for p in self.activePlayers:
-            if getattr(p, 'willRetire', False):
-                continue
-            if getattr(p, 'is_upcoming_rookie', False):
-                continue
-            if getattr(p, 'is_prospect', False) and not countProspects:
-                continue
-            pos = getattr(p, 'position', None)
-            if pos in supply:
-                supply[pos] += 1
-
-        deficits = {}
-        for pos, perTeam in slotsPerPosition.items():
-            demand = numTeams * perTeam + buffer
-            short = demand - supply[pos]
-            if short > 0:
-                deficits[pos] = short
+        deficits, supply = self.positionSupplyDeficits(numTeams, buffer, countProspects,
+                                                       withSupply=True)
 
         # SUPPLY_DEBUG: show what the floor actually sees. Set the env var to
         # diagnose over-generation (the counted pool vs the real one).
@@ -4145,8 +4281,23 @@ class PlayerManager:
 
     # ── Prospect Pipeline: rookie class generation + draft ──────────────
 
+    @staticmethod
+    def drawTalentShift(rng=None) -> int:
+        """A prospect's hidden talent shift (constants PROSPECT_TALENT_*): a narrow core
+        most of the time, a wide tail sometimes, either sign, mean zero."""
+        import random as _r
+        from constants import (PROSPECT_TALENT_SHIFT_ENABLED, PROSPECT_TALENT_CORE_SD,
+                               PROSPECT_TALENT_TAIL_SHARE, PROSPECT_TALENT_TAIL_SD,
+                               PROSPECT_TALENT_SHIFT_MAX)
+        if not PROSPECT_TALENT_SHIFT_ENABLED:
+            return 0
+        rng = rng or _r
+        sd = PROSPECT_TALENT_TAIL_SD if rng.random() < PROSPECT_TALENT_TAIL_SHARE else PROSPECT_TALENT_CORE_SD
+        h = rng.gauss(0.0, sd)
+        return int(round(max(-PROSPECT_TALENT_SHIFT_MAX, min(PROSPECT_TALENT_SHIFT_MAX, h))))
+
     def rookieClassSize(self) -> int:
-        """How many prospects this season's class holds — ONE PER CLUB, counted.
+        """How many prospects this season's class holds: ROOKIE_CLASS_PER_TEAM per club, counted.
 
         ⚠️ NOT `ROOKIE_DRAFT_CLASS_SIZE`, WHICH IS A 24-TEAM-ERA CONSTANT. The league
         grew to 32 and that number did not, so a restored draft reading it would have
@@ -4156,15 +4307,19 @@ class PlayerManager:
         list and the constant survives only as a floor for a league with no teams
         loaded yet.
         """
-        from constants import ROOKIE_DRAFT_CLASS_SIZE
+        from constants import ROOKIE_DRAFT_CLASS_SIZE, ROOKIE_CLASS_PER_TEAM
+        numTeams = int(ROOKIE_DRAFT_CLASS_SIZE)
         try:
             teamManager = self.serviceContainer.getService('team_manager')
             teams = list(getattr(teamManager, 'teams', None) or [])
             if teams:
-                return len(teams)
+                numTeams = len(teams)
         except Exception:
             pass
-        return int(ROOKIE_DRAFT_CLASS_SIZE)
+        # ⚠️ MORE PROSPECTS THAN PICKS (owner, 2026-10-30): the last teams choose rather
+        # than take what is left, and a diamond the consensus ranks below the pick count
+        # is there for a good scout to find. The undrafted wash out (washOutUndrafted).
+        return int(round(numTeams * ROOKIE_CLASS_PER_TEAM))
 
     def _generateRookieClass(self, currentSeason: int) -> List:
         """Generate this season's rookie class — one prospect per club.
@@ -4207,11 +4362,20 @@ class PlayerManager:
                             (FloosPlayer.Position.TE, 1),
                             (FloosPlayer.Position.K, 1)):
             weightedPosList.extend([pos] * weight)
+        # ⚠️ THE MIX IS DEALT, NOT ROLLED: each full set of six is one of every slot (WR
+        # twice) and only the remainder is drawn. Rolled independently, a 48-player class
+        # could hold 3 kickers or 13, and a thin position is exactly what the wash-out's
+        # supply rule then has to patch.
+        positions = []
+        while len(positions) + len(weightedPosList) <= numRookies:
+            positions.extend(weightedPosList)
+        positions.extend(random.sample(weightedPosList, numRookies - len(positions)))
+        random.shuffle(positions)
 
         nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
         rookies = []
         for i in range(numRookies):
-            pos = weightedPosList[randint(0, len(weightedPosList) - 1)]
+            pos = positions[i]
             player = self.createPlayer(pos, int(physicalSeeds[i]), int(mentalSeeds[i]))
             if not player:
                 continue
@@ -4220,6 +4384,12 @@ class PlayerManager:
             player.seasonsPlayed = 0
             player.team = 'Upcoming Rookie'
             player.applyEntryDiscount(PROSPECT_ENTRY_DISCOUNT)
+            # ⚠️ AFTER THE DISCOUNT: the debut rating is set off the consensus numbers, so
+            # a diamond debuts like the prospect everyone thinks he is.
+            shift = self.drawTalentShift()
+            if shift:
+                player.shiftTalent(shift)
+                player.talentShift = shift
             # ⚠️ ROLLED HERE, APPLIED LATER. The amount is stored on the player and does
             # NOT touch `potentialX`, so `computeCeilingRating` — and therefore every
             # team's scouted band — sees an ordinary prospect. It is applied during a
@@ -4868,6 +5038,7 @@ class PlayerManager:
             pick.is_prospect = True
             pick.is_upcoming_rookie = False
             pick.drafting_team_id = team.id
+            pick.homeTeamId = team.id          # a 'hometown' free agent's discount goes here
             pick.prospect_seasons = 0
             pick.team = 'Prospect'
             if not hasattr(team, 'prospects') or team.prospects is None:
@@ -4895,26 +5066,25 @@ class PlayerManager:
 
             yield {'type': 'pick', **pickRecord}
 
-        # ⚠️ EVERYONE LEFT GOES TO FREE AGENCY, NOT BACK INTO LIMBO. The draft is the
-        # ONE thing that clears `is_upcoming_rookie`; a rookie left holding the flag is
-        # stranded forever — never rostered, never signable, invisible to the sim but
-        # still taking up space in the pool.
-        undrafted = []
-        for rookie in available:
-            rookie.is_upcoming_rookie = False
-            rookie.is_undrafted = True
-            rookie.team = 'Free Agent'
-            rookie.freeAgentYears = 0
-            if rookie not in self.freeAgents:
-                self.freeAgents.append(rookie)
-            if rookie not in self.activePlayers:
-                self.activePlayers.append(rookie)
-            self.addToPositionList(rookie)
-            undrafted.append(rookie.id)
+        # ⚠️ NOBODY IS LEFT IN LIMBO. The draft is the ONE thing that clears
+        # `is_upcoming_rookie`; a rookie left holding the flag is stranded forever. Since
+        # the class is bigger than the draft (ROOKIE_CLASS_PER_TEAM), the undrafted wash
+        # out, except those a position needs to stay at the supply floor, who become free
+        # agents (washOutUndrafted).
+        numTeams = len(leagueTeams or [])
+        if not numTeams:
+            try:
+                numTeams = len(getattr(self.serviceContainer.getService('team_manager'), 'teams', None) or [])
+            except Exception:
+                numTeams = 0
+        numTeams = numTeams or len(draftOrder)
+        outcome = self.washOutUndrafted(list(available), numTeams)
+        undrafted = outcome['kept']
 
         self.sortPlayersByPosition()
-        logger.info(f"Rookie draft complete: {len(picks)} drafted, "
-                    f"{len(undrafted)} undrafted to FA")
+        logger.info(f"Rookie draft complete: {len(picks)} drafted, {len(undrafted)} undrafted "
+                    f"kept as free agents for position supply, {len(outcome['washedOut'])} "
+                    f"washed out")
         yield {'type': 'complete', 'picks': picks, 'undrafted': undrafted}
 
 
@@ -5272,14 +5442,30 @@ class PlayerManager:
             try:
                 from database.connection import get_session
                 from database.models import Player as _DBPlayer
+                from database import models as _M
                 session = get_session()
                 try:
+                    # ⚠️ AND WHAT HANGS OFF HIM: a follow, attention or a fan rating on a
+                    # player who no longer exists would show a dead name. He has no game,
+                    # played season or owned card (that is what made him removable), so
+                    # these are display rows only.
+                    for model in ('FollowedPlayer', 'PlayerAttention', 'AnomalyState',
+                                  'PlayerSentimentRating', 'PlayerRatingHistory',
+                                  'PlayerPersonalityHistory', 'PlayerSeasonStats',
+                                  'PlayerCareerStats', 'PlayerAttributes'):
+                        cls = getattr(_M, model, None)
+                        if cls is not None and hasattr(cls, 'player_id'):
+                            session.query(cls).filter(cls.player_id == pid).delete(
+                                synchronize_session=False)
                     session.query(_DBPlayer).filter(_DBPlayer.id == pid).delete()
                     session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
                 finally:
                     session.close()
             except Exception as e:
-                logger.warning(f"Could not delete culled player {pid}: {e}")
+                logger.warning(f"Could not delete removed player {pid}: {e}")
 
     def _advanceProspectWindow(self) -> dict:
         """Increment prospect_seasons on every prospect; release washouts to the FA pool.
@@ -5344,9 +5530,26 @@ class PlayerManager:
             and getattr(player, 'freeAgentYears', 1) == 0
         )
 
+    @staticmethod
+    def _rosterIsFull(team) -> bool:
+        return all(team.rosterDict.get(k) is not None for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'))
+
+    @staticmethod
+    def _turnMadeAMove(events) -> bool:
+        """A signing or a promotion: something that changed the roster this turn."""
+        return any(ev.get('type') == 'pick' for ev in (events or []))
+
+    @classmethod
+    def _draftTeamIsDone(cls, rosterComplete: bool, events) -> bool:
+        """A team leaves the FA draft once its roster is full and a turn makes no move.
+        A team that just made one (filled a hole, or cut for an upgrade) gets another turn,
+        since the next free agent down the board may be worth another upgrade. Bounded: a
+        slot filled during the draft cannot be cut again (`_draftFilledSlots`)."""
+        return bool(rosterComplete) and not cls._turnMadeAMove(events)
+
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                          eventLog=None) -> bool:
+                          eventLog=None, allowUpgrades: bool = True) -> bool:
         """Sign or promote the best player available — comparing FAs *and*
         the team's prospects across all open roster slots.
 
@@ -5400,7 +5603,52 @@ class PlayerManager:
         # true-rating order, which is the pre-existing behavior.
         board = getattr(self, '_faDraftBoards', {}).get(getattr(team, 'id', None))
 
-        def _bestFaFor(faList, applyReleaseBlock, applyBoard):
+        # ⚠️ PAYROLL (docs/TREASURY_PAYROLL_PLAN.md §5): a team takes only free agents it
+        # can pay, and its GM weighs value against price. `affordMode` widens like the
+        # board tiers below: 'upkeep' (salaries and facility upkeep fit the budget), then
+        # 'payroll' (facilities give way first: the salary fits if upkeep goes unpaid),
+        # then None (nobody fits: take the cheapest so no slot is left empty, G6).
+        budget = _payrollBudget(team)
+        affordMode = ['upkeep']
+        seasonForTerm = self._currentSeasonNumber()
+
+        def _price(p, exclude=None):
+            """(salary, room) for signing p now: his asking salary and the most this
+            team can pay a contract of his term, keeping a minimum salary in reserve
+            for every other open slot. room is None when payroll is off."""
+            if budget is None:
+                return 0, None
+            salary = (payroll.minimumSalary() if getattr(p, '_minimumSalary', False)
+                      else payroll.askingSalary(p))
+            term = payroll.contractTerm(self, p, seasonForTerm)
+            openAfter = budget['open'] - (0 if exclude is not None else 1)
+            contracts = [c for c in budget['contracts']
+                         if exclude is None or c[2] is not exclude]
+            contracts = [(c[0], c[1]) for c in contracts]
+            contracts += [(budget['minimum'], 1)] * max(0, openAfter)
+            room = payroll.maxAffordable(contracts, term, budget['balance'], budget['income'],
+                                         budget['upkeep'],
+                                         includeUpkeep=(affordMode[0] == 'upkeep'))
+            return salary, room
+
+        def _affordable(p, exclude=None):
+            if budget is None or affordMode[0] is None:
+                return True
+            salary, room = _price(p, exclude)
+            return salary <= room
+
+        def _priceFactor(p, exclude=None):
+            """Value per Floobit: a player taking most of what the team can pay is
+            discounted, so a tight budget prefers a cheap 84 to an expensive 88 while a
+            rich team, for whom no salary is a large share, simply takes the best."""
+            if budget is None:
+                return 1.0
+            from constants import FO_SALARY_PRICE_WEIGHT
+            salary, room = _price(p, exclude)
+            share = min(1.0, salary / max(1.0, float(room))) if room and room > 0 else 1.0
+            return max(0.0, 1.0 - float(FO_SALARY_PRICE_WEIGHT) * share)
+
+        def _bestFaFor(faList, applyReleaseBlock, applyBoard, exclude=None):
             """The free agent this team most wants at a position.
 
             With a board, "most wants" is that GM's own valuation over the
@@ -5411,11 +5659,17 @@ class PlayerManager:
             if applyReleaseBlock:
                 eligible = [p for p in eligible
                             if not self._leftThisTeamThisOffseason(p, team)]
+            if budget is not None and affordMode[0] is None:
+                # Nobody fits the budget: the cheapest player keeps the slot filled.
+                return min(eligible, key=lambda p: payroll.askingSalary(p)) if eligible else None
+            eligible = [p for p in eligible if _affordable(p, exclude)]
             if applyBoard and board:
                 onBoard = [p for p in eligible if getattr(p, 'id', None) in board]
                 if onBoard:
-                    return max(onBoard, key=lambda p: board.get(p.id, 0.0))
+                    return max(onBoard, key=lambda p: board.get(p.id, 0.0) * _priceFactor(p, exclude))
                 return None
+            if budget is not None and eligible:
+                return max(eligible, key=lambda p: getattr(p, 'playerRating', 0) * _priceFactor(p, exclude))
             return eligible[0] if eligible else None
 
         # ⚠️ A CLUB MAY ALSO CUT FOR AN OBVIOUS UPGRADE AT A FILLED POSITION (owner,
@@ -5443,12 +5697,6 @@ class PlayerManager:
                 if posVal in firstOpenSlotByPos:
                     continue       # there is a hole here; filling it is not a cut
                 faList = POS_TO_FALIST.get(posVal, [])
-                best = _bestFaFor(faList, True, True)
-                if best is None:
-                    continue
-                bestVal = board.get(getattr(best, 'id', None))
-                if bestVal is None:
-                    continue
                 # replace the WEAKEST man at the position (WR has two slots)
                 # ⚠️ `filledThisDraft` COVERS FA SIGNINGS ONLY, so a prospect promoted
                 # into a slot — by this very function two rounds earlier, or by
@@ -5464,6 +5712,13 @@ class PlayerManager:
                 if not held:
                     continue
                 sl, incumbent, incVal = min(held, key=lambda h: h[2])
+                # The cut ends his contract, so his salary is freed for the upgrade.
+                best = _bestFaFor(faList, True, True, exclude=incumbent)
+                if best is None:
+                    continue
+                bestVal = board.get(getattr(best, 'id', None))
+                if bestVal is None:
+                    continue
                 # The incumbent's board value carries his standing (`buildDraftBoard`
                 # incumbents); the bar is this GM's, moved by its aggressiveness.
                 cutBar = (getattr(self, '_faCutBars', None) or {}).get(
@@ -5560,15 +5815,29 @@ class PlayerManager:
         # raw pool. The last tier is what stops destination preference from ever
         # costing a roster its player — if nobody who'd sign here is left, the
         # club signs whoever remains.
-        candidates = (_gather(applyReleaseBlock=True)
-                      or _gather(applyReleaseBlock=False)
-                      or _gather(applyReleaseBlock=True, applyBoard=False)
-                      or _gather(applyReleaseBlock=False, applyBoard=False))
+        def _gatherAll():
+            return (_gather(applyReleaseBlock=True)
+                    or _gather(applyReleaseBlock=False)
+                    or _gather(applyReleaseBlock=True, applyBoard=False)
+                    or _gather(applyReleaseBlock=False, applyBoard=False))
+        candidates = _gatherAll()
+        if budget is not None:
+            for mode in ('payroll', None):
+                if candidates:
+                    break
+                affordMode[0] = mode
+                candidates = _gatherAll()
+                if candidates:
+                    logger.info(f"Payroll: {team.name} could not afford a free agent with "
+                                f"its facility upkeep counted; widened to "
+                                f"{mode or 'the cheapest available'}")
+            # Upgrades are optional: only ever on a budget that keeps facilities paid.
+            affordMode[0] = 'upkeep'
         # ⚠️ APPENDED, NOT PART OF THE WIDENING CHAIN. The chain widens only when the tier
         # above it found NOTHING, and an upgrade is not a fallback for an unfillable hole --
         # it is an extra option that competes on value. Folding it into the `or` chain would
         # make it fire only when the club could fill nothing at all, which is backwards.
-        candidates = list(candidates) + _upgradeCandidates()
+        candidates = list(candidates) + (_upgradeCandidates() if allowUpgrades else [])
         if not candidates:
             # Nothing left to do: either the roster is full and no upgrade clears the bar
             # (complete), or slots are open and nothing can fill them (not complete).
@@ -5579,11 +5848,14 @@ class PlayerManager:
             valuation, for free agents AND prospects alike, so the comparison
             stays in one currency. Off-board fallbacks use the true rating."""
             player = c[1]
+            factor = 1.0
+            if c[2] in ('fa', 'upgrade'):
+                factor = _priceFactor(player, team.rosterDict.get(c[0]) if c[2] == 'upgrade' else None)
             if board:
                 pid = getattr(player, 'id', None)
                 if pid in board:
-                    return board[pid]
-            return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0))
+                    return board[pid] * factor
+            return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0)) * factor
 
         # Best player available, in this GM's own currency. The fan "fill order"
         # override that used to sit here (FA ballot position priority) is gone with
@@ -5638,6 +5910,15 @@ class PlayerManager:
             # different position would otherwise have released a starter for nothing.
             incumbent = team.rosterDict.get(slot)
             if incumbent is not None:
+                # It costs the cut fee like every other cut (owner, 2026-11-01); a team that
+                # cannot pay it keeps its starter.
+                from managers.frontOfficeBrain import cutFeeFor
+                from managers.facilitiesManager import chargeCutFee
+                fee = int(cutFeeFor(incumbent))
+                if not chargeCutFee(getattr(team, 'id', None), fee):
+                    logger.info(f"FA draft upgrade: {team.name} cannot pay the {fee}F cut fee "
+                                f"for {incumbent.name}; keeps him")
+                    return not firstOpenSlotByPos
                 # ⚠️ ONE RELEASE IMPLEMENTATION. This inlined its own copy first, which is how
                 # the two drifted apart on the sort key alone; `releasePlayerToFreeAgency`
                 # already clears the slot, frees the shirt number, stamps `previousTeam` and
@@ -5721,8 +6002,11 @@ class PlayerManager:
                             f"{windowTerm[1].name} ({windowTerm[1].playerRating}) for "
                             f"{windowTerm[0]} season(s), his window")
             else:
-                selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
+                # The term the budget check priced (a seeded roll, `payroll.contractTerm`).
+                selectedPlayer.term = payroll.contractTerm(
+                    self, selectedPlayer, self._currentSeasonNumber())
             selectedPlayer.termRemaining = selectedPlayer.term
+            _stampSigningSalary(selectedPlayer)
 
             transactionId = f"{team.name}_{selectedPlayer.name}"
             freeAgencyDict[transactionId] = {
@@ -5780,6 +6064,7 @@ class PlayerManager:
             team.prospects.remove(promoted)
         promoted.term = promotedTerm
         promoted.termRemaining = promotedTerm
+        payroll.stampSalary(promoted, prospect=True)
         # ⚠️ Promoting is a commitment for the season, so he cannot be cut again
         # later in this same offseason — including two rounds further into this very
         # draft, which `_draftFilledSlots` does not prevent because that set is
@@ -5882,6 +6167,7 @@ class PlayerManager:
         team.assignPlayerNumber(player)
         player.term = self._getPlayerTerm(player)
         player.termRemaining = player.term
+        _stampSigningSalary(player)
         txId = f"{team.name}_{player.name}"
         freeAgencyDict[txId] = {
             'name': player.name, 'pos': player.position.name,
@@ -5923,6 +6209,7 @@ class PlayerManager:
         # Set contract terms
         newPlayer.term = self._getPlayerTerm(newPlayer)
         newPlayer.termRemaining = newPlayer.term
+        _stampSigningSalary(newPlayer)
         
         # Assign to roster
         team.rosterDict[position] = newPlayer

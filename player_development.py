@@ -24,6 +24,8 @@ from constants import (
     DEV_ATTRIBUTE_FLOOR, DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH,
     DEV_DECLINE_FACTOR_MODE, DEV_PEAK_FLOOR_FRACTION,
     DEV_OVERSHOOT_BASE_CHANCE, DEV_OVERSHOOT_BIAS_PER_POINT,
+    DEV_BIAS_COACH_MAX, DEV_LUCK_ENABLED, DEV_LUCK_SD, DEV_LUCK_DRIFT_PER_BIAS,
+    DEV_LUCK_NEUTRAL_BIAS, DEV_CATCHUP_GAP, DEV_CATCHUP_RATE,
 )
 from logger_config import get_logger
 
@@ -181,6 +183,12 @@ class PlayerDevelopment:
         # per-season overshoot roll — likelier with good coaching/facilities —
         # lifts the cap to the potential ceiling, letting a few players exceed
         # their projection. Declining players never overshoot.
+        # Far below his true level, a rising player grows faster (DEV_CATCHUP_*): the
+        # talent shows up while the public is still finding out about it.
+        if ctx.phase == CareerPhase.RISING and trueSkill:
+            excess = (trueSkill - current) - DEV_CATCHUP_GAP
+            if excess > 0:
+                change += int(round(excess * DEV_CATCHUP_RATE))
         if change > 0:
             ceiling = PlayerDevelopment._growthCeiling(trueSkill, potential)
             if overshoot:
@@ -372,27 +380,70 @@ class PlayerDevelopment:
         return max(FA_SELF_DEV_MIN, int(bias))
 
     @staticmethod
+    def developmentBias(coachDevRating, trainingBonus: float = 0.0) -> float:
+        """The development environment, before rounding: the coach's share
+        (DEV_BIAS_COACH_MAX x his playerDevelopment lean) plus the Training Facility's
+        FACILITY_CATALOG value. Facilities carry 60% (owner, 2026-10-30): the coach tops
+        out at 2.4, a level-5 Training Facility at 3.6. The ONE definition: training and
+        every front-office projection read it, so the two cannot drift apart."""
+        coach = 0.0
+        if coachDevRating is not None:
+            lean = max(0.0, min(1.0, (float(coachDevRating) - 60.0) / 40.0))
+            coach = DEV_BIAS_COACH_MAX * lean
+        return coach + max(0.0, float(trainingBonus or 0.0))
+
+    @staticmethod
+    def resolveBias(raw: float, rng=random) -> int:
+        """An integer devBias from a fractional one, rounded probabilistically, so the
+        dev ranges stay randint-safe while every coach point and facility level still moves
+        the EXPECTED bias (2.4 is 3 forty percent of the time, else 2)."""
+        base = int(raw // 1)
+        frac = raw - base
+        return base + (1 if frac > 0 and rng.random() < frac else 0)
+
+    # The league's own mean development environment, set by the offseason before it trains
+    # anyone (seasonManager). Luck drifts relative to it, so the league as a whole neither
+    # gains nor loses talent from luck whatever its facility levels; None falls back to
+    # DEV_LUCK_NEUTRAL_BIAS (a harness or test with no league).
+    leagueNeutralBias = None
+
+    @staticmethod
+    def applyDevelopmentLuck(player: Any, expectedBias: float, rng=random) -> int:
+        """Development luck (docs/PROSPECT_UNCERTAINTY_PLAN.md 3.2): a RISING player's
+        trueSkill and potential take one shared step, N(drift, DEV_LUCK_SD) attribute
+        points, drift = (expectedBias - DEV_LUCK_NEUTRAL_BIAS) x DEV_LUCK_DRIFT_PER_BIAS. A
+        good coach and Training Facility push him toward his upside, a poor environment
+        wastes it, and nobody knows the step before it happens. Zero on average at the
+        league's average environment. Returns the step applied (0 if none)."""
+        if not DEV_LUCK_ENABLED:
+            return 0
+        ctx = PlayerDevelopment.careerContext(player, 0)
+        if ctx.phase != CareerPhase.RISING:
+            return 0
+        neutral = PlayerDevelopment.leagueNeutralBias
+        if neutral is None:
+            neutral = DEV_LUCK_NEUTRAL_BIAS
+        drift = (float(expectedBias) - float(neutral)) * DEV_LUCK_DRIFT_PER_BIAS
+        step = int(round(rng.gauss(drift, DEV_LUCK_SD)))
+        if step and hasattr(player, 'shiftTalent'):
+            player.shiftTalent(step)
+        return step
+
+    @staticmethod
     def apply_offseason_training(player: Any, position_type: str = None,
                                  coachDevRating: int = None, fundingDevBonus: int = 0) -> Dict[str, Any]:
         """Apply one offseason's training to a player.
 
         coachDevRating (0-100): coach's playerDevelopment attribute.
-        fundingDevBonus: Training Facility bonus (0..2.0, fractional per level).
+        fundingDevBonus: Training Facility bonus (0..3.6, fractional per level).
         Together they form devBias, which accelerates a RISING player's climb (and
         skews prospect booms) but does NOT slow the aging decline.
         Returns a dict of development details for logging.
         """
         try:
-            # devBias: coach (60→0, 80→+2, 100→+4) + Training Facility bonus.
-            # The facility bonus is fractional per level (every level a real step);
-            # resolve it to an integer probabilistically so devBias stays
-            # randint-safe while each level still scales the EXPECTED bias
-            # (e.g. 0.4 → +1 forty percent of the time).
-            fb = float(fundingDevBonus or 0)
-            fundingInt = int(fb // 1)
-            frac = fb - fundingInt
-            if frac > 0 and random.random() < frac:
-                fundingInt += 1
+            # devBias: coach (0..2.4) + Training Facility (0..3.6), facilities carrying 60%
+            # (developmentBias), rounded probabilistically so each coach point and facility
+            # level still moves the EXPECTED bias.
             if coachDevRating is None:
                 # UNROSTERED: no staff, so the player trains off their own
                 # makeup. Floored at zero — being unsigned must never be worse
@@ -400,8 +451,10 @@ class PlayerDevelopment:
                 # fallback produced (devBias -1). No facility bonus either:
                 # they have no facility.
                 devBias = PlayerDevelopment.selfDevelopmentBias(player)
+                expectedBias = float(devBias)
             else:
-                devBias = round((coachDevRating - 60) / 10) + fundingInt
+                expectedBias = PlayerDevelopment.developmentBias(coachDevRating, fundingDevBonus)
+                devBias = PlayerDevelopment.resolveBias(expectedBias)
 
             PlayerDevelopment.update_intangible_attributes(player.attributes)
 
@@ -428,6 +481,10 @@ class PlayerDevelopment:
                             f"LATE BLOOM: {getattr(player, 'name', '?')} gains +{bloomed} "
                             f"on every trained attribute (dev bias {devBias}); "
                             f"nobody scouted this")
+
+            # Development luck moves the cap BEFORE this season's growth, so a lucky step
+            # is something he can grow into this very offseason.
+            luck = PlayerDevelopment.applyDevelopmentLuck(player, expectedBias)
 
             ctx = PlayerDevelopment.careerContext(player, devBias)
 
@@ -462,6 +519,7 @@ class PlayerDevelopment:
 
             return {
                 'lateBloom': bloomed,
+                'luck': luck,
                 'player_name': getattr(player, 'name', 'Unknown'),
                 'position': position_type,
                 'phase': ctx.phase.value,

@@ -290,10 +290,21 @@ class Player:
         # folding it in at generation would put the bloom in every team's scouted band and
         # make the player a top pick. 0 means none pending.
         self.lateBloomPending = 0
+        # ⚠️ HIDDEN TALENT (docs/PROSPECT_UNCERTAINTY_PLAN.md 3.1). Attribute points drawn
+        # at class generation and ALREADY ADDED to every trueSkill/potential, so the
+        # player's real numbers include it. Nobody is shown it: the public consensus is
+        # computed with the unrevealed part taken back out (`unrevealedShift`), and a team
+        # sees `vision` of it. 0 for everyone not generated in a class under this rule.
+        self.talentShift = 0
+        # Free agency (docs/FREE_AGENCY_MARKET_PLAN.md): why he signs where he does, and the
+        # team that drafted him. `faMarket.motiveOf` rolls the motive when first needed.
+        self.faMotive = None
+        self.homeTeamId = None
         self.gamesPlayed = 0
         self.term = 0
         self.termRemaining = 0
         self.capHit = 0
+        self.salary = 0            # Floobits a season, locked at signing (managers/payroll.py)
         self.teamResignCount = 0   # times current team has re-signed (retention limit)
         # willRetire: set during the regular season when a retirement-eligible
         # player is determined to be calling it after this season. Surfaces
@@ -397,10 +408,12 @@ class Player:
                     shortfall = 1.0 - resolve  # 0=full resolve, 1=none
                     confPenaltyMax = max(0, round(20 * shortfall * confStability))
                     detPenaltyMax = max(0, round(20 * shortfall))
+                    # The Locker Room absorbs part of the hit (LOCKER_ROOM_SETBACK_CUSHION).
+                    keep = 1.0 - self._setbackCushion()
                     if confPenaltyMax > 0:
-                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-confPenaltyMax, 0)/100), 3)
+                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + keep * (batched_randint(-confPenaltyMax, 0)/100), 3)
                     if detPenaltyMax > 0:
-                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-detPenaltyMax, 0)/100), 3)
+                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + keep * (batched_randint(-detPenaltyMax, 0)/100), 3)
 
             if self.attributes.confidenceModifier > 5:
                 self.attributes.confidenceModifier = 5
@@ -441,9 +454,21 @@ class Player:
     def updateRating(self):
         pass
 
-    def updateInGameDetermination(self, value):
+    def updateInGameDetermination(self, value, source=None):
+        if value < 0 and source != 'momentum':
+            value *= 1.0 - self._setbackCushion()
         self.gameAttributes.determinationModifier = round(self.gameAttributes.determinationModifier + value, 3)
         self.updateInGameRating()
+
+    def _setbackCushion(self):
+        """Share of a confidence / determination loss this player's Locker Room absorbs
+        (Team.setbackCushion). Momentum is exempt (source='momentum') so its offset can be
+        taken back out exactly."""
+        team = getattr(self, 'team', None)
+        try:
+            return float(team.setbackCushion()) if hasattr(team, 'setbackCushion') else 0.0
+        except Exception:
+            return 0.0
 
     def updateInGameConfidence(self, value, source=None):
         """Adjust the in-game confidence state. The two shock absorbers gate
@@ -456,6 +481,8 @@ class Player:
                     else self.gameAttributes.selfBelief)
             scale = 1.0 - max(-1.0, min(1.0, (attr - 80) / 20.0))
             value *= scale
+        if value < 0 and source != 'momentum':
+            value *= 1.0 - self._setbackCushion()
         self.gameAttributes.confidenceModifier = round(self.gameAttributes.confidenceModifier + value, 3)
         self.updateInGameRating()
 
@@ -507,7 +534,47 @@ class Player:
         self.lateBloomPending = 0
         return bloom
 
-    def computeCeilingRating(self):
+    def shiftTalent(self, points: int) -> None:
+        """Move trueSkill AND potential on every trained attribute by one shared amount
+        (either sign), clamped to the attribute range with potential never below
+        trueSkill. Hidden talent at generation and each season's development luck both go
+        through here. A shared amount is what moves the composite; per-attribute draws
+        average away (see applyLateBloom)."""
+        points = int(points or 0)
+        if not points:
+            return
+        attrs = self.attributes
+        for _attr, trueName, potName in _TRUESKILL_ATTR_TRIPLES:
+            trueVal = getattr(attrs, trueName, 0) or 0
+            potVal = getattr(attrs, potName, 0) or 0
+            if trueVal > 0:
+                trueVal = int(np.clip(trueVal + points, 60, 100))
+                setattr(attrs, trueName, trueVal)
+            if potVal > 0:
+                setattr(attrs, potName, int(np.clip(potVal + points, max(60, trueVal), 100)))
+
+    def talentRevealed(self) -> float:
+        """Share of the hidden talent shift the public has seen, by career seasons (pro +
+        pipeline): 0 on draft day, all of it after a few seasons of development."""
+        from constants import PROSPECT_TALENT_REVEALED as _R
+        from player_development import PlayerDevelopment as _PD
+        seasons = _PD.careerSeasons(self)
+        return float(_R[seasons]) if seasons < len(_R) else 1.0
+
+    def unrevealedShift(self) -> float:
+        """Attribute points of hidden talent nobody outside has seen yet."""
+        h = float(getattr(self, 'talentShift', 0) or 0)
+        return h * (1.0 - self.talentRevealed()) if h else 0.0
+
+    def projectionFor(self, vision: float = 0.0):
+        """(expected, ceiling) as a viewer with this scouting vision sees them: the
+        consensus at vision 0 (what fans are shown), the truth at vision 1. The ONE place
+        the hidden shift is taken back out, so fans, draft boards and GMs read the same
+        model."""
+        unseen = self.unrevealedShift() * (1.0 - max(0.0, min(1.0, float(vision or 0.0))))
+        return self.computeExpectedRating(unseen), self.computeCeilingRating(unseen)
+
+    def computeCeilingRating(self, unseen: float = 0.0):
         """Projected ceiling rating: what this player's rating would be with every
         physical skill attribute developed to its potential. Only the physical
         skill attributes grow via training (PlayerDevelopment develops those);
@@ -530,6 +597,8 @@ class Player:
             for base, pot in pairs:
                 cur = getattr(attrs, base, None)
                 potVal = getattr(attrs, pot, None)
+                if potVal and unseen:
+                    potVal = int(round(np.clip(potVal - unseen, 60, 100)))
                 if cur is not None and potVal and potVal > cur:
                     saved[base] = cur
                     setattr(attrs, base, potVal)
@@ -543,12 +612,13 @@ class Player:
             if saved:
                 self.updateRating()  # restore live ratings
 
-    def computeExpectedRating(self):
+    def computeExpectedRating(self, unseen: float = 0.0):
         """Projected 'expected' rating: what this player's overall rating would be
         with every physical skill attribute developed to its TRUE SKILL — the level
         a prospect naturally develops into over their early seasons (vs the ceiling,
         which is the potential reached only with good development). Same mechanics as
         computeCeilingRating but targeting the trueSkill snapshot instead of potential;
+        `unseen` attribute points are taken off the targets (projectionFor);
         only the physical attrs are lifted (mental attrs don't train). Returns the
         current rating when already developed in (current >= trueSkill everywhere) or
         no trueSkill data exists. By construction this is <= computeCeilingRating()."""
@@ -562,6 +632,8 @@ class Player:
             for base, tru in pairs:
                 cur = getattr(attrs, base, None)
                 truVal = getattr(attrs, tru, None)
+                if truVal and unseen:
+                    truVal = int(round(np.clip(truVal - unseen, 60, 100)))
                 if cur is not None and truVal and truVal > cur:
                     saved[base] = cur
                     setattr(attrs, base, truVal)
