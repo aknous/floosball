@@ -1299,7 +1299,7 @@ FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team
 # With payroll on the baseline is share-denominated (`payroll.leagueBaseline`), never under
 # the flat 200 above: six minimum salaries (0.06 shares) plus upkeep on a level-2 set
 # (5 x 0.015 = 0.075), rounded up. ~820F at a 5,453F share unit. PROVISIONAL (owner).
-FUNDING_BASELINE_SHARES = 0.15
+FUNDING_BASELINE_SHARES = float(_os.environ.get('FLOOS_BASELINE_SHARES', '0.15'))
 # Tiers are assigned by a team's share of total league funding. A team's
 # ratio = effective_funding / (total_league_funding / num_teams). That is,
 # "how many fair-shares of the league's floobits does this team hold?"
