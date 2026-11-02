@@ -9107,7 +9107,7 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
-    def _resignDecision(self, team, brain, faOrder, slotOwners, limit):
+    def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True):
         """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,
         teamsAhead)`. Read-only: nothing on the players changes here.
 
@@ -9174,10 +9174,11 @@ class SeasonManager:
                                    pickDepth=pickDepth, team=team,
                                    teamsAhead=teamsAhead, internal=internal,
                                    lastChance=lastChance)
-        kept = self._affordableResigns(team, expiring, kept)
+        if afford:
+            kept = self._affordableResigns(team, expiring, kept)
         return expiring, forcedWalk, kept, pickDepth, teamsAhead
 
-    def _affordableResigns(self, team, expiring, kept) -> list:
+    def _affordableResigns(self, team, expiring, kept, salaryFor=None, seasons=None) -> list:
         """The re-signs this team can pay for, in the GM's priority order
         (docs/TREASURY_PAYROLL_PLAN.md §5). A keeper whose asking salary does not fit
         the budget walks to free agency, the next one is then tried, and every slot
@@ -9207,9 +9208,10 @@ class SeasonManager:
             # accepted except this one, plus the retiring players' slots.
             openAfter = (len(expiring) - len(affordable) - 1) + retiring
             reserve = [(minimum, 1)] * max(0, openAfter)
-            salary = payroll.askingSalary(p)
+            salary = salaryFor(p) if salaryFor else payroll.askingSalary(p)
             term = payroll.contractTerm(self.playerManager, p, season)
-            room = payroll.maxAffordable(contracts + reserve, term, balance, income, upkeep)
+            room = payroll.maxAffordable(contracts + reserve, term, balance, income, upkeep,
+                                         seasons=seasons)
             if salary <= room:
                 affordable.append(p)
                 contracts.append((salary, term))
@@ -9315,21 +9317,26 @@ class SeasonManager:
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
             expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
-                team, brain, faOrder, slotOwners, limit)
+                team, brain, faOrder, slotOwners, limit, afford=not marketMode)
             if marketMode:
                 # THE RE-SIGN HEAD START (owner, 2026-11-01). The team offers the players
                 # its GM wants (plus anyone its fans voted to keep, budget permitting), at
                 # his asking salary less his pull toward it; the rest it declines. Each
                 # player offered accepts or tests the free agency market, where this team
                 # can still bid for him like anyone else.
-                offered = list(kept)
-                for p in self._affordableResigns(
-                        team, expiring, [p for p in expiring if fanVerdict(p) == 'keep']):
-                    if p not in offered:
-                        offered.append(p)
+                from constants import FA_RESIGN_BUDGET_SEASONS
+                wanted = list(kept) + [p for p in expiring
+                                       if fanVerdict(p) == 'keep' and p not in kept]
+                # The offer comes first (it can be above his ask for a player the team wants),
+                # then the budget, at that salary, over the deal's first seasons.
+                offers = {id(p): faMarket.resignOffer(p, team, marketStanding, payroll.minimumSalary())
+                          for p in wanted}
+                offered = self._affordableResigns(
+                    team, expiring, wanted, salaryFor=lambda p: offers[id(p)][0],
+                    seasons=FA_RESIGN_BUDGET_SEASONS)
                 accepted = []
                 for p in offered:
-                    salary, pull = faMarket.resignOffer(p, team, marketStanding, payroll.minimumSalary())
+                    salary, pull = offers[id(p)]
                     accepts = faMarket.acceptsResign(p, salary, pull, season)
                     logger.info("Re-sign offer: " + json.dumps({
                         'season': season, 'team': getattr(team, 'abbr', team.name), 'playerId': p.id,
@@ -12662,6 +12669,9 @@ class SeasonManager:
             # The comparable contracts every asking salary is scaled by (`marketRate`),
             # read here, where no write is open, never inside a signing.
             payroll.loadContracts(season)
+            # Each player's seasons with his team, for loyalty (`faMarket.loyaltyPull`).
+            from managers import faMarket
+            faMarket.loadTenure(season)
         except Exception as e:
             logger.error(f"Could not refresh payroll finances: {e}")
 

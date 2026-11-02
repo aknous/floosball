@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from constants import (FA_MARKET_ENABLED, FA_MARKET_ROUNDS, FA_ASK_DECAY, FA_MIN_RAISE,
                        FA_MAX_BID_EDGE, FA_MAX_BID_CAP, FA_LIST_LENGTH, FA_HOMETOWN_DISCOUNT, FA_WINNER_PULL,
                        FA_COMFORT_PULL, FA_OPPORTUNITY_ASK, FA_HISTORY_SEASONS,
-                       FA_MOTIVE_PERSONALITY, FA_RESIGN_RESERVATION)
+                       FA_MOTIVE_PERSONALITY, FA_RESIGN_RESERVATION, FA_LOYALTY_PER_SEASON,
+                       FA_LOYALTY_MAX, FA_RESIGN_OFFER_REACH)
 
 from logger_config import get_logger
 logger = get_logger('floosball.faMarket')
@@ -100,22 +101,88 @@ def reservation(player, season: int) -> float:
     return lo + (hi - lo) * random.Random(seed).random()
 
 
+# ─── Loyalty (owner, 2026-11-01: favorite players should not jump teams every offseason) ──
+#
+# {playerId: (teamId, consecutive seasons there ending with the season just played)}, read
+# from `player_season_stats` at the safe point the season manager reads finances
+# (`_refreshPayrollFinances`), never inside a signing.
+_tenure = {}
+
+
+def loadTenure(season: int) -> None:
+    """Each player's run of consecutive seasons with the team he played the latest one for.
+    Call where no write is open."""
+    global _tenure
+    try:
+        from sqlalchemy import text
+        from database.connection import get_session
+        session = get_session()
+        try:
+            rows = session.execute(text(
+                "SELECT player_id, season, team_id FROM player_season_stats "
+                "WHERE team_id IS NOT NULL AND season <= :s ORDER BY player_id, season DESC"),
+                {'s': int(season)}).fetchall()
+        finally:
+            session.close()
+        byPlayer = {}
+        for pid, s, tid in rows:
+            byPlayer.setdefault(pid, []).append((s, tid))
+        out = {}
+        for pid, seasons in byPlayer.items():
+            team, n, expect = seasons[0][1], 0, seasons[0][0]
+            for s, tid in seasons:
+                if tid != team or s != expect:
+                    break
+                n += 1
+                expect -= 1
+            out[pid] = (team, n)
+        _tenure = out
+    except Exception as e:
+        logger.warning(f"FA market: could not load tenure: {e}")
+
+
+def tenureWith(player, teamId) -> int:
+    team, n = _tenure.get(getattr(player, 'id', None), (None, 0))
+    return n if team == teamId and teamId is not None else 0
+
+
+def loyaltyPull(player, teamId, ask: int) -> float:
+    """Floobits of salary he gives up to stay with the team he has played for: a share of
+    his ask per consecutive season there, capped."""
+    return ask * min(float(FA_LOYALTY_MAX), float(FA_LOYALTY_PER_SEASON) * tenureWith(player, teamId))
+
+
 def teamPull(player, team, ask: int, standing: tuple) -> float:
-    """This player's pull toward `team` (Floobits), with `standing` from `teamStanding`."""
+    """This player's pull toward `team` (Floobits): his motive plus his loyalty to the team
+    he has played for, with `standing` from `teamStanding`."""
     success, comfort = standing
     tid = getattr(team, 'id', None)
     return motivePull(motiveOf(player), ask,
                       isHome=getattr(player, 'homeTeamId', None) == tid,
-                      success=success.get(tid, 0.5), comfort=comfort.get(tid, 0.5))
+                      success=success.get(tid, 0.5), comfort=comfort.get(tid, 0.5)) \
+        + loyaltyPull(player, tid, ask)
 
 
 def resignOffer(player, team, standing: tuple, minimum: int) -> tuple:
-    """(salary, pull): the team offers his asking salary less his pull toward it, since
-    the GM knows his motive; never under the league minimum."""
+    """(salary, pull): what a team offers a walk-year player it wants to keep, and his whole
+    pull toward it (motive plus loyalty), which his decision weighs.
+
+    It knows his motive and the range his sense of worth falls in, and offers enough to cover
+    `FA_RESIGN_OFFER_REACH` of the way up that range, less what his MOTIVE gives it (a
+    hometown discount is his to give), at least his ask less that and never more than
+    `FA_MAX_BID_CAP` times his ask; never under the league minimum. ⚠️ LOYALTY IS NOT
+    DISCOUNTED: taking it off the offer made loyalty a pay cut rather than a reason to stay,
+    and retention did not move; it sits on top, on his side of the decision."""
     from managers import payroll
     ask = payroll.askingSalary(player)
-    pull = teamPull(player, team, ask, standing)
-    return max(int(minimum), int(math.ceil(ask - pull))), pull   # rounded up: a fair floor
+    success, comfort = standing
+    tid = getattr(team, 'id', None)
+    motive = motivePull(motiveOf(player), ask, isHome=getattr(player, 'homeTeamId', None) == tid,
+                        success=success.get(tid, 0.5), comfort=comfort.get(tid, 0.5))
+    lo, hi = FA_RESIGN_RESERVATION.get(motiveOf(player), (1.0, 1.0))
+    target = (lo + float(FA_RESIGN_OFFER_REACH) * (hi - lo)) * ask - motive
+    salary = max(ask - motive, min(target, float(FA_MAX_BID_CAP) * ask))
+    return max(int(minimum), int(math.ceil(salary))), motive + loyaltyPull(player, tid, ask)
 
 
 def acceptsResign(player, salary: int, pull: float, season: int) -> bool:
@@ -358,7 +425,8 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
             f = poolById[pid]
             return motivePull(motives[pid], asks[pid],
                               isHome=getattr(f, 'homeTeamId', None) == tid,
-                              success=success.get(tid, 0.5), comfort=comfort.get(tid, 0.5))
+                              success=success.get(tid, 0.5), comfort=comfort.get(tid, 0.5)) \
+                + loyaltyPull(f, tid, asks[pid])
 
         wants, wid = [], 0
         room = {}

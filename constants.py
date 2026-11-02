@@ -2445,6 +2445,20 @@ FA_COMP_MAX = 1.6
 # their asking salary less their pull toward it. A player accepts if offer + pull reaches
 # what he thinks he is worth this offseason, a share of his ask drawn in this range (seeded
 # per player and season); otherwise he tests free agency, where his old team can still bid.
+# Retention (owner, 2026-11-01: players jumping teams makes it hard to have favorite players;
+# target ~60% of walk-year players staying). Three levers:
+#   - LOYALTY: every player is pulled toward the team he has played for, FA_LOYALTY_PER_SEASON
+#     of his ask per consecutive season there, up to FA_LOYALTY_MAX, on top of his motive (in the
+#     re-sign offer and in the market);
+#   - a team re-signing a player it wants offers enough to cover FA_RESIGN_OFFER_REACH of the
+#     way up his range of self-worth, never past FA_MAX_BID_CAP times his ask, rather than the
+#     bare minimum he might accept;
+#   - a re-sign must fit the budget over its first FA_RESIGN_BUDGET_SEASONS seasons, not its
+#     whole term (later seasons are the season-end payroll check's to catch).
+FA_LOYALTY_PER_SEASON = 0.05
+FA_LOYALTY_MAX = 0.20
+FA_RESIGN_OFFER_REACH = 0.5
+FA_RESIGN_BUDGET_SEASONS = 2
 FA_RESIGN_RESERVATION = {
     'hometown': (0.85, 1.00),
     'opportunity': (0.85, 0.85),

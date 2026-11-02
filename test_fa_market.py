@@ -175,9 +175,9 @@ def test_aHometownPlayerTakesHisDiscountAndAWinnerTestsAWeakTeam():
         sal, pull = faMarket.resignOffer(win, team, weak, minimum=50)
         winnerAccepts += faMarket.acceptsResign(win, sal, pull, 13)
     assert homeAccepts == 200            # offered his ask less his discount; he settles at 85-100%
-    # Wants 95-115% of his ask and this team has no pull: a fair offer lands about a quarter
-    # of the time, when he happens to value himself at or under his ask.
-    assert 25 <= winnerAccepts <= 80
+    # Wants 95-115% of his ask and this team has no pull for him. The team offers half way up
+    # that range (FA_RESIGN_OFFER_REACH), so he takes it about half the time.
+    assert 70 <= winnerAccepts <= 130
 
 
 def test_theOfferIsTheAskLessThePull():
@@ -195,3 +195,47 @@ def test_theCutFeeCountsAgainstTheUpgrade():
                   releaseFee=200)]
     got, _ = _run({1: 1500}, wants, room={10: 700})
     assert got == {}
+
+
+# ── retention (owner, 2026-11-01: aim for ~60% of walk-year players staying) ───────────
+
+def test_loyaltyGrowsWithTenureAndIsCapped(monkeypatch):
+    monkeypatch.setattr(faMarket, '_tenure', {1: (3, 2), 2: (3, 9), 3: (4, 5)})
+    p1, p2, p3 = (SimpleNamespace(id=i) for i in (1, 2, 3))
+    assert faMarket.loyaltyPull(p1, 3, 1000) == pytest.approx(100)      # 2 seasons x 5%
+    assert faMarket.loyaltyPull(p2, 3, 1000) == pytest.approx(200)      # capped at 20%
+    assert faMarket.loyaltyPull(p3, 3, 1000) == 0                       # another team's player
+
+
+def test_aWantedPlayerIsOfferedPartWayUpHisRange(monkeypatch):
+    from managers.payroll import setShareUnit, askingSalary
+    import constants
+    setShareUnit(5000)
+    monkeypatch.setattr(faMarket, '_tenure', {})
+    p = _walkYear(21, 'winner')
+    ask = askingSalary(p)
+    sal, pull = faMarket.resignOffer(p, SimpleNamespace(id=3), ({3: 0.0}, {3: 0.0}), minimum=50)
+    lo, hi = constants.FA_RESIGN_RESERVATION['winner']
+    assert pull == 0
+    assert sal == math.ceil((lo + constants.FA_RESIGN_OFFER_REACH * (hi - lo)) * ask)
+
+
+def test_loyaltyMakesAWinnerStayWithHisTeam(monkeypatch):
+    from managers.payroll import setShareUnit
+    setShareUnit(5000)
+    team = SimpleNamespace(id=3)
+    weak = ({3: 0.0}, {3: 0.0})
+    monkeypatch.setattr(faMarket, '_tenure', {3000 + i: (3, 4) for i in range(200)})
+    stays = 0
+    for i in range(200):
+        p = _walkYear(3000 + i, 'winner')
+        sal, pull = faMarket.resignOffer(p, team, weak, minimum=50)
+        stays += faMarket.acceptsResign(p, sal, pull, 13)
+    assert stays == 200      # four seasons there: a 20% loyalty pull covers his whole range
+
+
+def test_aReSignBudgetCanLookOnlyAtTheFirstSeasons():
+    from managers import payroll
+    # 1,000F now, 200F a season of income: a 600F, 4-season deal fits two seasons, not four.
+    assert payroll.maxAffordable([], 4, 1000, 200, 0) < 600
+    assert payroll.maxAffordable([], 4, 1000, 200, 0, seasons=2) >= 600

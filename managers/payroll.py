@@ -404,12 +404,14 @@ def schedule(team, preDecrement: bool = False, exclude=None, skipRetiring: bool 
 
 
 def maxAffordable(contracts: list, term: int, balance: int, income: float, upkeep: float,
-                  includeUpkeep: bool = True) -> int:
+                  includeUpkeep: bool = True, seasons: int = None) -> int:
     """The largest salary a new contract of `term` seasons can carry on top of
-    `contracts` ([(salary, runs)]) and still fit every paid season. Negative when the
-    standing commitments already do not fit."""
+    `contracts` ([(salary, runs)]) and still fit every paid season, or only the first
+    `seasons` of them. Negative when the standing commitments already do not fit."""
     term = max(1, int(term))
     horizon = max([term] + [r for _s, r in contracts])
+    if seasons:
+        horizon = min(horizon, max(1, int(seasons)))
     best = None
     for s in range(1, horizon + 1):
         need = sum(sal * min(r, s) for sal, r in contracts)
