@@ -9080,11 +9080,32 @@ def _ratingsByPlayerId() -> dict:
     return out
 
 
+def _withContractInfo(assets, playersById) -> list:
+    """Trade-vote assets with what a voter needs to judge them: seasons left on a
+    player's contract, and a prospect's public projected range (`_prospectProjection`).
+    Current values, like the ratings: an open vote is about the players as they are now."""
+    if not playersById:
+        return assets
+    for a in assets:
+        player = playersById.get(a.get('id')) if a.get('kind') in ('player', 'prospect') else None
+        if player is None:
+            continue
+        if a.get('kind') == 'prospect' or getattr(player, 'is_prospect', False):
+            proj = _prospectProjection(player)
+            if proj:
+                a['projection'] = {"low": proj["low"], "high": proj["high"]}
+        else:
+            term = getattr(player, 'termRemaining', None)
+            if term is not None:
+                a['termRemaining'] = int(term)
+    return assets
+
+
 class _TradeVoteRequest(BaseModel):
     approve: Optional[bool] = None      # True yes, False no, None withdraws the vote
 
 
-def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes) -> dict:
+def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes, playersById=None) -> dict:
     """One trade proposal for the Transactions page: what each side gives, why, when the
     vote closes, the tally against the rule and the caller's own vote."""
     from managers import tradeVotes
@@ -9104,8 +9125,10 @@ def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes) -> dic
         "status": p.status, "closeKind": p.close_kind, "closesAt": _utcIso(p.closes_at),
         "resolvedAt": _utcIso(p.resolved_at), "tradeId": p.trade_id,
         "teamA": teamBlob(p.team_a_id), "teamB": teamBlob(p.team_b_id),
-        "aGave": _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins),
-        "bGave": _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins),
+        "aGave": _withContractInfo(
+            _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins), playersById),
+        "bGave": _withContractInfo(
+            _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins), playersById),
         "trigger": lj.get('trigger'), "sellerWhy": lj.get('why'), "buyerWhy": bj.get('why'),
         "tally": {"yes": v.get('yes', 0), "no": v.get('no', 0),
                   "passing": bool(v.get('passed')), "reason": v.get('reason'),
@@ -9158,7 +9181,11 @@ def get_trade_votes(response: Response, user: Optional[_User] = Depends(_getOpti
                 TradeVote.proposal_id.in_([r.id for r in rows])).all()}
         ratingById = _ratingsByPlayerId()
         pickOrigins = _pickOriginsFor(session, rows, teamBlob)
-        out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes)
+        pm = floosball_app.playerManager
+        playersById = {getattr(pl, 'id', None): pl
+                       for pl in (getattr(pm, 'activePlayers', None) or [])}
+        out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes,
+                             playersById)
                for r in rows if r.status != tradeVotes.EXPIRED]
         return build_success_response({
             "open": [r for r in out if r["status"] == tradeVotes.OPEN],
