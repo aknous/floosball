@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from logger_config import get_logger
 from constants import CARD_EFFECTS_PER_PLAYER
 from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
-                                  effectValidPositions as _effectValidPositions,
+                                  transplantPositions as _transplantPositions,
                                   effectPoolFor as _effectPoolFor,
                                   trackedStatsFor as _trackedStatsFor,
                                   withLiveCategory, withEffectiveGate)
@@ -1106,8 +1106,9 @@ class CardManager:
             "detail": effectConfig.get("detail"),
             "gateText": effectConfig.get("gateText"),
             # Positions this effect can validly land on via a transplant (shared effects
-            # span all five; position-specific ones only their own).
-            "validPositions": sorted(_effectValidPositions(effectName)),
+            # span all five; position-specific ones only their own; a retired shared
+            # effect still spans all five, see transplantPositions).
+            "validPositions": sorted(_transplantPositions(effectName)),
             # ⚠️ THE STAT THIS CARD IS WATCHING. Around twenty effects score off numbers
             # that appear on no ordinary box score, so a card could read "+FP per
             # well-placed throw" with nowhere to go and look one up. Sent as
@@ -1639,8 +1640,8 @@ class CardManager:
             raise ValueError("Both cards must be the same edition")
         # Position-specific effects can only land on a player whose position they're
         # valid for; shared effects go on any same-edition card.
-        from managers.cardEffects import effectValidPositions
-        valid = effectValidPositions(donorEffect)
+        from managers.cardEffects import transplantPositions
+        valid = transplantPositions(donorEffect)
         if valid and tt.position not in valid:
             posName = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}.get(tt.position, 'that')
             raise ValueError(f"{donorEffect} is position-specific and can't go on a {posName} card")

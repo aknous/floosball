@@ -1458,6 +1458,30 @@ def effectValidPositions(effectName: str) -> set:
             valid.add(pos)
     return valid
 
+
+# Shared effects retired from the mint pool while copies were still live. Owned copies
+# keep scoring, so they must keep moving by transplant too; add a shared effect here when
+# it is retired MID-season. (One retired at a season boundary needs nothing: its cards are
+# from an earlier season and can no longer be donors.)
+RETIRED_SHARED_EFFECTS = {"loyalty_bonus"}
+
+
+def transplantPositions(effectName: str) -> set:
+    """Positions a card with this effect can be transplanted onto. The same as
+    `effectValidPositions` except for a retired shared effect, which that function reports
+    as valid NOWHERE because it reads the live mint pools. That empty set reached the client
+    as `validPositions: []` and the transplant picker dropped those cards as donors, so a
+    mid-season retirement left this season's copies unable to move.
+
+    ⚠️ Kept separate on purpose: `effectValidPositions` doubles as "does this effect still
+    mint", and the supply checks and simcheck harnesses rely on a retired effect reading
+    empty there."""
+    valid = effectValidPositions(effectName)
+    if valid or effectName not in RETIRED_SHARED_EFFECTS:
+        return valid
+    return {pos for pos in range(1, 6)
+            if effectName not in POSITION_EXCLUDED_EFFECTS.get(pos, set())}
+
 # ─── Streak Configuration ────────────────────────────────────────────────────
 
 # resetCondition: what breaks the streak (checked at week end)
