@@ -28,6 +28,7 @@ def _treasuryCoversTheFee(monkeypatch):
     # database the run happens to point at (an empty one refused it and failed the test).
     from managers import facilitiesManager
     monkeypatch.setattr(facilitiesManager, 'chargeCutFee', lambda teamId, fee: True)
+    monkeypatch.setattr(facilitiesManager, 'canPayCutFee', lambda teamId, fee: True)
 
 
 class Pos:
@@ -120,3 +121,24 @@ def test_aTeamFillingItsLastHoleGetsAnotherTurn():
     assert not PlayerManager._draftTeamIsDone(True, [{'type': 'pick'}])
     assert not PlayerManager._draftTeamIsDone(False, [])
     assert PlayerManager._draftTeamIsDone(True, [{'type': 'declined'}])
+
+
+def test_anUpgradeItCannotPayForDoesNotBlockAnOpenSlot(monkeypatch):
+    """2026-11-03: fills and upgrades compete for one pick, and a best-rated upgrade the team
+    could not pay for ended every turn with nothing signed, so the draft force-ended with
+    the team's open slot still empty and its games crashed all season."""
+    from managers import facilitiesManager
+    monkeypatch.setattr(facilitiesManager, 'canPayCutFee', lambda teamId, fee: False)
+    monkeypatch.setattr(facilitiesManager, 'chargeCutFee', lambda teamId, fee: False)
+    weak = P(92, 72, 3, term=3, remaining=2)
+    star = P(1, 95, 3)                       # the upgrade: far better than the open-slot fill
+    kicker = P(3, 70, 5)
+    team = T(_roster(weak))
+    team.rosterDict['k'] = None
+    board = {p.id: p.playerRating for p in list(team.rosterDict.values()) if p} | {
+        star.id: star.playerRating, kicker.id: kicker.playerRating}
+    pm = Stub([star, kicker], board)
+    PlayerManager._attemptRosterFill(
+        pm, team, [team], [], [], [star], [], [kicker], {}, [], eventLog=[])
+    assert team.rosterDict['k'] is kicker, "the open slot was left empty"
+    assert team.rosterDict['wr1'] is weak, "an unaffordable cut went through"

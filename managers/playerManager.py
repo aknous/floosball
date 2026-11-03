@@ -5862,7 +5862,27 @@ class PlayerManager:
         # override that used to sit here (FA ballot position priority) is gone with
         # the binding-vote system — `_gmFaPositionPriority` was only ever assigned an
         # empty dict, so the override never fired.
-        slot, candidate, kind = max(candidates, key=_rating)
+        # ⚠️ AN UPGRADE THE TEAM CANNOT PAY FOR DROPS OUT OF THE CHOICE, it does not end the
+        # turn (2026-11-03). Fills and upgrades compete for one pick, so when the best was an
+        # upgrade whose cut fee the Treasury could not cover the turn returned with nothing
+        # signed, the same upgrade won every later turn too, and the draft hit its 100-round
+        # safety valve with the team's open slots still empty: a season of games crashing on
+        # a missing player (measured in the trade-market harness, old code and new).
+        from managers.frontOfficeBrain import cutFeeFor as _cutFeeFor
+        from managers.facilitiesManager import canPayCutFee as _canPayCutFee
+        while True:
+            slot, candidate, kind = max(candidates, key=_rating)
+            if kind != 'upgrade':
+                break
+            incumbent = team.rosterDict.get(slot)
+            if incumbent is None or _canPayCutFee(getattr(team, 'id', None),
+                                                  int(_cutFeeFor(incumbent))):
+                break
+            logger.info(f"FA draft upgrade: {team.name} cannot pay the cut fee for "
+                        f"{incumbent.name}; keeps him")
+            candidates = [c for c in candidates if not (c[2] == 'upgrade' and c[0] == slot)]
+            if not candidates:
+                return not firstOpenSlotByPos
         windowTerm = windowTerms.get((slot, getattr(candidate, 'id', None))) \
             if kind == 'fa' else None
 
