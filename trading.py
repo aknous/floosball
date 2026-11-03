@@ -88,10 +88,9 @@ def contentionRamp(week: int = None) -> float:
     identically, there is no gap to trade across, and nothing fires. The market opens as
     the table separates — a deadline without a deadline rule.
 
-    The offseason (`week=None`) returns 0.0 for the same reason it is true there:
-    contention is unknown for a season that has not been played, so every club is back at
-    parity. ⚠️ That removes the buyer/seller asymmetry entirely, which is why the
-    offseason market cannot run on contention and runs on the other three triggers.
+    The offseason (`week=None`) returns 0.0: this season's evidence is over and the next
+    has not started. The market prices the offseason on `priorNowWeight` instead
+    (next season's ELO prior), not on this ramp.
     """
     if week is None:
         return 0.0
@@ -114,6 +113,31 @@ def nowWeight(contention: float, leagueMeanContention: float, week: int = None) 
     raw = (max(0.0, float(contention or 0.0)) / mean) ** TRADE_CONTENTION_EXPONENT
     ramp = contentionRamp(week)
     return 1.0 + (raw - 1.0) * ramp
+
+
+def priorContention(elo) -> float:
+    """A club's expected win rate NEXT season against an average opponent, as the
+    offseason sees it: its ELO regressed the way the season reset regresses it
+    (`ELO_SEASON_REGRESSION`), then the standard ELO odds against 1500.
+
+    ⚠️ THE REGRESSION IS THE UNCERTAINTY, so the offseason weight takes no ramp. It is
+    the same prior the sim opens the season's odds with, so the market and the schedule
+    agree about who is good."""
+    from constants import ELO_SEASON_REGRESSION
+    try:
+        e = float(elo)
+    except (TypeError, ValueError):
+        return 0.5
+    regressed = 1500.0 + (e - 1500.0) * (1.0 - ELO_SEASON_REGRESSION)
+    return 1.0 / (1.0 + 10.0 ** ((1500.0 - regressed) / 400.0))
+
+
+def priorNowWeight(prior: float, leagueMeanPrior: float) -> float:
+    """`nowWeight` in the offseason, off `priorContention` rather than the record."""
+    mean = float(leagueMeanPrior or 0.0)
+    if mean <= 0:
+        return 1.0
+    return (max(0.0, float(prior or 0.0)) / mean) ** TRADE_CONTENTION_EXPONENT
 
 
 def laterWeight(now: float) -> float:

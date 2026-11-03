@@ -7,15 +7,16 @@ IS persisted, so this recomputes it:
   contending   win% (team_season_stats for the latest season) >= the league mean
   decline      position-weighted share of the six starters with seasons_played >= longevity
   window       contending -> 'closing' if decline >= 0.22 else 'open'   <- the Timeline gate
-               otherwise  -> 'closed' if decline >= 0.22, 'opening' if ascent >= 0.70,
+               otherwise  -> 'closed' if decline >= 0.22, 'opening' if ascent >= 0.50,
                              else 'middling'
 
 ⚠️ THE DECLINE AXIS IS EXACT; THE ASCENT AXIS IS A PROXY. `classifyArc` calls a player
 'developing' when their POTENTIAL rating beats today's by 2, and that ceiling re-runs the
 whole per-position rating formula including the defensive half, which is not stored. Here
 it is approximated from the offensive half only (potential_skill_rating vs skill_rating),
-which is marked in the output. It only affects non-contenders ('opening' vs 'middling') —
-for a contender the window turns on the decline share alone, which is exact.
+which is marked in the output. It also skips the live rule that a player at or past his peak
+season is never 'developing' (`FrontOfficeBrain._isPastPeak`), so it over-reads ascent.
+Both only affect non-contenders ('opening' vs 'middling') — for a contender the window turns on the decline share alone, which is exact.
 
 Usage:
     .venv/bin/python tools_team_windows.py
@@ -33,7 +34,7 @@ DB = os.path.join(os.environ.get('DATABASE_DIR', os.path.join(HERE, 'data')), 'f
 POSITION_VALUE = {1: 1.00, 2: 0.78, 3: 0.72, 4: 0.60, 5: 0.35}   # QB RB WR TE K
 POSITION_NAME = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
 DECLINE_HIGH = 0.22      # TRADE_WINDOW_DECLINE_HIGH
-ASCENT_HIGH = 0.70       # TRADE_WINDOW_ASCENT_HIGH
+ASCENT_HIGH = 0.50       # TRADE_WINDOW_ASCENT_HIGH
 DEVELOPING_HEADROOM = 2  # FO_DEVELOPING_HEADROOM
 HORIZON_TERM = 3         # _horizonMismatch: a contender's long deals
 

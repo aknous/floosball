@@ -38,7 +38,8 @@ def test_aRisingPlayersLaterYearsCount():
     assert three > one
     f = FO_CEILING_CREDIT * brain.developmentLean(coach, team)
     levels = [14 * ((1 - f) - (1 - f) ** k) for k in (1, 2, 3)]
-    expected = sum(levels) / 3 * brain.scoutingVision(coach, team) * POSITION_VALUE['TE']
+    # Scouting is in the ceiling read already, so it is not applied again (seenForward).
+    expected = sum(levels) / 3 * POSITION_VALUE['TE']
     assert abs((three - one) - expected) < 1e-6
     # Never more than the gap to his ceiling, however long the deal.
     assert brain.contractTermAdjustment(young, 20, coach, team) < 14 * POSITION_VALUE['TE']
@@ -50,12 +51,15 @@ def test_aPrimePlayerIsTheSameOverAnyTerm():
     assert brain.contractTermAdjustment(prime, 4, _coach(), _team()) == 0.0
 
 
-def test_aBetterScoutSeesMoreOfTheRise():
+def test_scoutingIsNotChargedTwiceOnAKnownRise():
+    """Scouting acts through the ceiling READ (hidden talent, the prospect band). For a
+    player with nothing hidden both scouts read the same ceiling, so they credit the same
+    rise; it used to be discounted by vision again on top (2026-11-02)."""
     brain, team = Brain(), _team()
     young = _rising(4, 76, 92)
     poor = brain.contractTermAdjustment(young, 3, _coach(scouting=60), team)
     sharp = brain.contractTermAdjustment(young, 3, _coach(scouting=100), team)
-    assert sharp > poor > 0
+    assert sharp == poor > 0
 
 
 def test_onTheSameSheetTheRisingPlayerOutranksTheFadingOneOnALongDeal():

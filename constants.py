@@ -3582,6 +3582,10 @@ TRADE_CUT_FEE_WEIGHT = 0.25
 # the anchor every surplus-over-replacement number in the front office and the trade
 # market prices against, and it is measured off the pool rather than guessed.
 REPLACEMENT_RATING = 67.0
+# Share of the distance to 1500 a team's ELO gives back at the season reset
+# (`teamManager.updateEloRatings`). The trade market's offseason prior reads the same
+# number (`trading.priorContention`) so the two cannot drift.
+ELO_SEASON_REGRESSION = 0.5
 
 # ============================================================================
 # IN-SEASON AND OFFSEASON TRADING  (docs/TRADING_PLAN.md)
@@ -3964,7 +3968,12 @@ TRADE_WINDOW_ENABLED = True
 # qualified and an aging franchise quarterback — the textbook closing window — read as wide
 # open. The measured median regressing share is 17%, so this sits just above it.
 TRADE_WINDOW_DECLINE_HIGH = 0.22
-TRADE_WINDOW_ASCENT_HIGH = 0.70     # this much still climbing = the window is ahead
+# ⚠️ A MAJORITY STILL RISING (2026-11-02; was 0.70). The old bar was set off a spread measured
+# while `classifyArc` called every past-peak player with headroom "developing"; with the label
+# meaning "still rising" no non-contender on the season-11 prod snapshot reached 0.70 (max
+# 0.68), so the window could never open. 'Opening' is a team most of whose weighted starters
+# are still climbing.
+TRADE_WINDOW_ASCENT_HIGH = 0.50
 
 # ⚠️ IT MOVES `nowWeight`, WHICH IS THE ONE DIAL THE WHOLE MARKET ALREADY TURNS ON. A
 # closing contender pays up because next season is worse — the alternative to winning now is

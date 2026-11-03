@@ -156,6 +156,9 @@ class TradeMarket:
         self.draftOrder = list(draftOrder) if draftOrder else None
         self._contention = {}
         self._leagueMean = 0.0
+        # Offseason only: each club's expected strength next season (`trading.priorContention`).
+        self._prior = {}
+        self._priorMean = 0.0
         # Cached per pass: the sweep asks for it once per listing and once per bid.
         self._cannotKeepCache = {}
         self._coreCache = {}
@@ -210,6 +213,12 @@ class TradeMarket:
                 (wins + 0.5 * ties) / played) if played else 0.5
         values = list(self._contention.values())
         self._leagueMean = (sum(values) / len(values)) if values else 0.0
+        if self.week is None:
+            for team in getattr(self.teamManager, 'teams', None) or []:
+                self._prior[getattr(team, 'id', None)] = trading.priorContention(
+                    getattr(team, 'elo', None))
+            priors = list(self._prior.values())
+            self._priorMean = (sum(priors) / len(priors)) if priors else 0.0
 
     def teamWindow(self, team) -> str:
         """Where this club sits in its contention cycle: opening / open / closing / closed.
@@ -291,8 +300,18 @@ class TradeMarket:
         # contender pays up because next season is worse — its alternative to winning now is
         # not winning later, it is not winning at all. A club whose window has not opened
         # does the reverse and accumulates.
-        base = trading.nowWeight(self._contention.get(getattr(team, 'id', None), 0.5),
-                                 self._leagueMean, self.week)
+        # ⚠️ THE OFFSEASON PRICES ON NEXT SEASON'S PRIOR, NOT ON PARITY (2026-11-02). Last
+        # season's record is over and this one has not started, and every club used to read
+        # exactly 1.00, so a 2-22 club and a 20-4 club priced the future identically and
+        # only the window label separated them. The prior is the sim's own: ELO regressed
+        # the way the season reset regresses it. ⚠️ `isContending` and the hump still read
+        # the RECORD: they ask how the season went, this asks how the next one looks.
+        if self.week is None and self._prior:
+            base = trading.priorNowWeight(self._prior.get(getattr(team, 'id', None), 0.5),
+                                          self._priorMean)
+        else:
+            base = trading.nowWeight(self._contention.get(getattr(team, 'id', None), 0.5),
+                                     self._leagueMean, self.week)
         window = self.teamWindow(team)
         if window == 'closing':
             return base * TRADE_WINDOW_NOW_CLOSING
@@ -1045,9 +1064,9 @@ class TradeMarket:
         return base + self.needTilt(team) * (dfn - off) / 2.0
 
     def _futureRatingFor(self, team, player) -> float:
-        """THIS club's read of the player's rating in the seasons after this one, blended
-        from today's `ratingFor` by its scouting vision (the blend `perceivedValue` uses,
-        without the per-player scout error).
+        """THIS club's read of the player's rating in the seasons after this one: its
+        projection as it sees it (`brain.seenForward`, the read `perceivedValue` uses,
+        without the per-player scout error), carried onto the need-tilted `ratingFor`.
 
         ⚠️ A DEVELOPING PLAYER IS PRICED AT WHAT HE BECOMES, NOT AT NEXT SEASON'S STEP
         (owner, 2026-10-02: "these players can still be offered in trades, but the GM should
@@ -1067,11 +1086,31 @@ class TradeMarket:
         coach = getattr(team, 'coach', None)
         try:
             current = float(getattr(player, 'playerRating', 0) or 0)
-            vision = float(self.brain.scoutingVision(coach, team))
-            forward = self._projectedRatingFor(team, player)
+            forward = self.brain.seenForward(player, self._projectedRatingFor(team, player),
+                                             coach, team)
         except Exception:
             return present
-        return present + (forward - current) * vision
+        return present + (forward - current)
+
+    def _buyerFutureRating(self, buyer, player, believed: float):
+        """The buyer's read of an incoming player's later seasons: its own projection of
+        him (`_futureRatingFor`), carrying the same scouting error and production read as
+        its `believed` rating for this season.
+
+        ⚠️ THE BUYER PRICED EVERY SEASON AT ONE RATING while the seller projected the later
+        ones (2026-11-03), so on a truly rising player the seller's ask ran ~5 value points
+        (median) over anything a buyer could see, and rising players rarely moved. The
+        offset is `believed` less the buyer's noise-free read of this season
+        (`brain.seasonRating`), so a prime player's later seasons price exactly as before
+        and only the projected growth or decline is added. None when it cannot be read,
+        which prices every season at `believed`, as it used to."""
+        try:
+            coach = getattr(buyer, 'coach', None)
+            thisSeason = self.ratingFor(buyer, player,
+                                        float(self.brain.seasonRating(player, coach, buyer)))
+            return self._futureRatingFor(buyer, player) + (float(believed) - thisSeason)
+        except Exception:
+            return None
 
     def _projectedRatingFor(self, team, player) -> float:
         """Where this club expects the player to end up, BEFORE its scouting blend: a
@@ -1093,9 +1132,8 @@ class TradeMarket:
         """A developing player this club projects to the 4-star line
         (`TRADE_RISING_STAR_RATING`). Bought with quality, not volume (see the constant).
 
-        ⚠️ The PROJECTION, not the scouting-blended read the price uses: a good scout
-        reads Norman Slithers' later seasons at 83 (vision 0.6 of the way to 88), and a
-        blended test would put a player expected to reach 88 a point under the line."""
+        ⚠️ The PROJECTION, not the need-tilted read the price uses, so the line is about
+        the player rather than about this buyer's offense/defense balance."""
         from constants import TRADE_RISING_STAR_RATING
         from managers.frontOfficeBrain import ARC_DEVELOPING
         try:
@@ -1574,7 +1612,8 @@ class TradeMarket:
         # one with room gets the contract that follows, and only then can a keeper clear.
         buyerTerm = (int(getattr(player, 'termRemaining', 0) or 0)
                      + self.retentionTerm(buyer, player, incoming=True))
-        gross = trading.playerValue(believed, buyerTerm, self.week, buyerWeight, posW)
+        gross = trading.playerValue(believed, buyerTerm, self.week, buyerWeight, posW,
+                                    futureRating=self._buyerFutureRating(buyer, player, believed))
         if gross <= 0:
             return None
 
@@ -2096,7 +2135,11 @@ class TradeMarket:
         for prospect in getattr(team, 'prospects', None) or []:
             if wasAcquiredThisSeason(prospect, self.season):
                 continue        # pass-the-parcel, one asset class down
-            ceiling = self._believedCeiling(team, prospect)
+            # ⚠️ READ BY THE CLUB VALUING HIM, NOT THE ONE HOLDING HIM (2026-11-02). The seller
+            # used to price a prospect it was being offered through the BUYER's scouting,
+            # so a good scout could never spot a dud and a poor one could never be sold
+            # one: scouting decided nothing about a prospect changing hands.
+            ceiling = self._believedCeiling(valuer, prospect)
             out.append({
                 'kind': 'prospect',
                 'id': getattr(prospect, 'id', None),

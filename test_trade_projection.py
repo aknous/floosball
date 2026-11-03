@@ -120,20 +120,28 @@ def test_a_projected_star_is_still_tradeable():
     assert id(norman) not in m._coreOf(teams[0])
 
 
-def test_a_poor_scout_sees_less_of_the_future():
+def test_a_poor_scout_sees_half_of_aging_and_all_of_known_growth():
+    """Scouting is already inside a growth read (hidden talent, the prospect band), so a
+    blind scout reads a player with nothing hidden at his projection; aging is public,
+    so even a blind scout sees half of it (2026-11-02)."""
     norman = _player(1, 74, 'Norman', 3, expected=88)
+    fading = _player(2, 74, 'Fading', 3)
 
     class Blind(ProjectingBrain):
         def scoutingVision(self, coach, team=None):
             return 0.0
 
-    m, teams = _market(Blind(arcs={'Norman': 'developing'}, ceilings={'Norman': 90}), [norman])
-    assert abs(m._futureRatingFor(teams[0], norman) - 74) < 1e-6
+    brain = Blind(forward={'Fading': 66}, arcs={'Norman': 'developing', 'Fading': 'regressing'},
+                  ceilings={'Norman': 90})
+    m, teams = _market(brain, [norman, fading])
+    from constants import FO_CEILING_CREDIT
+    assert abs(m._futureRatingFor(teams[0], norman) - (88 + 2 * FO_CEILING_CREDIT)) < 1e-6
+    assert abs(m._futureRatingFor(teams[0], fading) - 70) < 1e-6
 
 
 def test_a_rising_star_is_judged_on_his_projection_not_the_blended_read():
-    """Owner, 2026-10-02: a rising star is bought with quality, not volume. Norman reads 83
-    through a 0.6-vision scout, a point under the line; the test is his projection (88)."""
+    """Owner, 2026-10-02: a rising star is bought with quality, not volume. The test is his
+    projection (88), not the need-tilted price read."""
     norman = _player(1, 74, 'Norman', 2, expected=88)
     modest = _player(2, 74, 'Modest', 2, expected=78)
     prime = _player(3, 86, 'Prime', 2)
@@ -145,7 +153,7 @@ def test_a_rising_star_is_judged_on_his_projection_not_the_blended_read():
     brain = GoodScout(arcs={'Norman': 'developing', 'Modest': 'developing'},
                       ceilings={'Norman': 90, 'Modest': 80})
     m, teams = _market(brain, [norman, modest, prime])
-    assert m._futureRatingFor(teams[0], norman) < 84 <= m._projectedRatingFor(teams[0], norman)
+    assert m._projectedRatingFor(teams[0], norman) >= 84
     assert m._isRisingStar(teams[0], norman)
     assert not m._isRisingStar(teams[0], modest), "a modest ceiling counted as a rising star"
     assert not m._isRisingStar(teams[0], prime), "a prime star is not a RISING star"

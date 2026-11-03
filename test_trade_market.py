@@ -113,6 +113,28 @@ class StubBrain:
     def developmentLean(self, coach, team=None):
         return self._attrLean(coach, 'playerDevelopment')
 
+    # The real rule for acting on a projection (frontOfficeBrain.seenForward): growth as
+    # projected, aging half public plus scouting. A stub player is past his peak when the
+    # stub labels him regressing.
+    def _isPastPeak(self, player):
+        classify = getattr(self, 'classifyArc', None)
+        return callable(classify) and classify(player) == 'regressing'
+
+    def agingSeen(self, coach, team=None):
+        return 0.5 + 0.5 * self.scoutingVision(coach, team)
+
+    def scoutingVision(self, coach, team=None):
+        return 0.5
+
+    def seenForward(self, player, forward, coach=None, team=None):
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        return FrontOfficeBrain.seenForward(self, player, forward, coach, team)
+
+    def seasonRating(self, player, coach=None, team=None):
+        fwd = getattr(self, 'trueForwardRating', None)
+        forward = fwd(player, coach, team) if callable(fwd) else player.playerRating
+        return self.seenForward(player, forward, coach, team)
+
 
 def _congest(team, ratings=(84, 80, 76), position=Position.WR):
     """Put more walk-year players on a club than `RESIGN_LIMIT_PER_OFFSEASON` can keep.
