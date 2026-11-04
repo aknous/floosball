@@ -890,35 +890,6 @@ class TradeMarket:
             return 1.0
         return 1.0 + TRADE_PICK_SCARCITY_PREMIUM if not held else 1.0
 
-    def _emptiedWindowCost(self, buyer, pieces, buyerAssets) -> float:
-        """The extra cost to the buyer of a bundle that hands over EVERY pick it holds in
-        its draft window: it will sit out a draft, charged at what the cheapest of those
-        picks is worth to an average team (`TRADE_EMPTY_WINDOW_COST_SHARE` of its
-        league-average value).
-
-        ⚠️ PRICED ON THE BUNDLE, NOT THE PICK. Teams went short by paying with BOTH later
-        picks in one trade-up, and each looked safe alone because the other was still held
-        (measured, 2026-11-03: a per-pick premium changed nothing).
-
-        ⚠️ AT THE LEAGUE'S PRICE, NOT THE BUYER'S (owner, 2026-11-04). It was the premium on
-        the pick at the buyer's own value, and a contender prices its future at
-        `laterWeight`, so the Raccoons gave up both future picks to move up 16 slots for an
-        extra cost of about 1."""
-        from constants import TRADE_EMPTY_WINDOW_COST_SHARE, TRADE_PICK_RESTOCK_ENABLED
-        if not TRADE_PICK_RESTOCK_ENABLED or not self._hasWindowRows():
-            return 0.0
-        held = self._windowPickIds(buyer)
-        if not held or not held <= {p['id'] for p in pieces if p['kind'] == 'pick'}:
-            return 0.0
-        teams = len(getattr(self.teamManager, 'teams', None) or []) or 32
-        neutral = []
-        for pick in self.picksOwnedBy(buyer):
-            if pick['id'] in held:
-                out = max(0, int(pick['season']) - int(self.season))
-                neutral.append(trading.pickValue(pick['slot'], out,
-                                                 int(pick.get('classSize') or teams), weight=1.0))
-        return min(neutral, default=0.0) * TRADE_EMPTY_WINDOW_COST_SHARE
-
     def _restockListing(self, team, taken: set):
         """A short team puts a player it does not need on the block for a return that must
         include a pick (`pick_restock`).
@@ -972,6 +943,8 @@ class TradeMarket:
         """The pick a buyer would give a short seller: one in the seller's draft window,
         the cheapest on the buyer's own scale. Shaped as an `_assemble` mandatory piece."""
         window = set(self._draftWindowSeasons())
+        if len(self._windowPickIds(buyer)) < 2:
+            return None             # never its last pick in the window
         best = None
         for pick in self.picksOwnedBy(buyer):
             if int(pick['season']) not in window or self._isHeadlinePick(buyer, pick):
@@ -2239,11 +2212,21 @@ class TradeMarket:
                         + self._qualityValue(picks))
             return sum(p['value'] for p in ps)
 
+        # ⚠️ A TEAM NEVER TRADES ITS LAST PICK IN ITS NEXT TWO DRAFTS (owner, 2026-11-04).
+        # Pricing it did not work: the Raccoons emptied their cupboard to move up 16 slots,
+        # and charging the draft sat out at the league's price left trades paying with both
+        # future picks unchanged (27 -> 27 over four seeds), the move-up gain cleared it.
+        windowHeld = set(self._windowPickIds(buyer))
+        windowUsed = {m['id'] for m in pieces if m['kind'] == 'pick'} & windowHeld
         for asset in buyerAssets:
             if seen(pieces) >= bar:
                 break
             if len(pieces) >= (maxPieces or TRADE_MAX_PIECES):
                 break
+            if asset['kind'] == 'pick' and asset['id'] in windowHeld:
+                if not windowHeld - windowUsed - {asset['id']}:
+                    continue        # it would be the last one
+                windowUsed.add(asset['id'])
             if asset['kind'] == 'player':
                 # ⚠️ AT MOST ONE STARTER, and only at the listing's own position. A second
                 # would empty the position the incoming player is meant to fill.
@@ -2296,7 +2279,6 @@ class TradeMarket:
         # same event — charging both makes a swap look twice as expensive as it is and
         # refuses almost every one of them. When it pays in picks instead, the displaced
         # player is a real additional cost (and a cut fee on top).
-        toBuyer += self._emptiedWindowCost(buyer, pieces, buyerAssets)
         costToBuyer = toBuyer if usedPlayer else toBuyer + displaced
         if costToBuyer >= gross:
             self.assembleFail['tooExpensive'] = self.assembleFail.get('tooExpensive', 0) + 1

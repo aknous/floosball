@@ -41,7 +41,11 @@ def _league(n=32):
                           ('wr2', Position.WR), ('te', Position.TE), ('k', Position.K)):
             t.rosterDict[slot] = FakePlayer(i * 20 + hash(slot) % 11, 78, pos,
                                             termRemaining=3)
+        # Two prospects, so a move up can be paid for without a team's last pick in its
+        # next two drafts, which no trade may take (owner, 2026-11-04).
         t.prospects = [FakePlayer(900 + i, 74, Position.WR, termRemaining=3,
+                                  isProspect=True),
+                       FakePlayer(950 + i, 76, Position.TE, termRemaining=3,
                                   isProspect=True)]
         teams.append(t)
     session = get_session()
@@ -55,6 +59,16 @@ def _league(n=32):
     finally:
         session.close()
     return teams
+
+
+def _firstCovered(m, listings, buyer):
+    """The first move up this buyer can pay for, and its bid. A team keeps its last pick
+    in its next two drafts, so the biggest jump is not always affordable."""
+    for listing in listings:
+        bid = m.bidForPick(listing, buyer)
+        if bid is not None:
+            return listing, bid
+    return None, None
 
 
 def _market(teams, week=None):
@@ -131,9 +145,8 @@ def test_the_swap_pick_goes_over_and_is_not_offered_TWICE():
     buyer = teams[16]
     listings = m.pickInquiriesFor(buyer)
     assert listings, "the fixture produced no jump worth making"
-    listing = listings[0]
-    bid = m.bidForPick(listing, buyer)
-    assert bid is not None, "the fixture could not cover the drop"
+    listing, bid = _firstCovered(m, listings, buyer)
+    assert bid is not None, "the fixture could not cover any drop"
 
     ids = [(p['kind'], p['id']) for p in bid.pieces]
     assert ('pick', listing.swapFor['id']) in ids, "the buyer kept its own pick"
@@ -179,8 +192,8 @@ def test_assembly_DROPS_a_piece_the_bar_no_longer_needs():
     teams = _league()
     m = _market(teams)
     buyer = teams[16]
-    listing = m.pickInquiriesFor(buyer)[0]
-    bid = m.bidForPick(listing, buyer)
+    listing, bid = _firstCovered(m, m.pickInquiriesFor(buyer), buyer)
+    assert bid is not None, "the fixture could not cover any drop"
     extras = [p for p in bid.pieces if p['id'] != listing.swapFor['id']]
     total = sum(p['value'] for p in extras)
     for p in extras:

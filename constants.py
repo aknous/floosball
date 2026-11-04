@@ -4215,11 +4215,10 @@ PICK_OUTCOME_BY_SLOT = (
 TRADE_PICK_SHORT_DRAFTS = 2
 TRADE_PICK_SCARCITY_PREMIUM = 0.5
 TRADE_PICK_RESTOCK_ENABLED = True   # read lazily, so a harness can switch it off
-# A bundle that hands over every pick a team holds in its window costs it a draft sat out,
-# charged at the cheapest of those picks' league-average value (weight 1, not the buyer's
-# `laterWeight`, which a contender sets low). In full: the draft it sits out is worth to an
-# average team exactly what that pick is (owner, 2026-11-04).
-TRADE_EMPTY_WINDOW_COST_SHARE = 1.0
+# ⚠️ AND NO TRADE MAY TAKE A TEAM'S LAST PICK IN THOSE DRAFTS (owner, 2026-11-04): a
+# bundle skips it (`TradeMarket._assemble`), a restock payment and the draft-day slot sale
+# (`playerManager.findPickBuyer`) need a second one. Pricing the emptied cupboard instead
+# changed nothing measurable, so it was replaced by this rule.
 
 # ⚠️ A FUTURE PICK IS DISCOUNTED BY SLOT, NOT FLAT, and the measurement says why. Variance
 # by slot over 6,000 simulated classes, as a fraction of the surplus that slot delivers:

@@ -78,9 +78,9 @@ def _pm():
 def _seedPicks(teamIds, season):
     session = get_session()
     try:
-        session.query(DraftPick).filter(DraftPick.season.in_([season, season + 1])).delete(
+        session.query(DraftPick).filter(DraftPick.season.in_([season, season + 1, season + 2])).delete(
             synchronize_session=False)
-        for s in (season, season + 1):
+        for s in (season, season + 1, season + 2):
             for tid in teamIds:
                 session.add(DraftPick(season=s, round_number=1,
                                       original_team_id=tid, current_owner_id=tid))

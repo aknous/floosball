@@ -4744,6 +4744,14 @@ class PlayerManager:
             owns = {r.original_team_id for r in session.query(DraftPick).filter_by(
                 season=int(season) + 1, round_number=1).all()
                 if r.current_owner_id == r.original_team_id and not r.used}
+            # ⚠️ NEVER A TEAM'S LAST PICK IN ITS NEXT TWO DRAFTS (owner, 2026-11-04): it
+            # pays with next season's pick, so it must hold another in the window.
+            from collections import Counter
+            from constants import TRADE_PICK_SHORT_DRAFTS
+            window = range(int(season) + 1, int(season) + 1 + int(TRADE_PICK_SHORT_DRAFTS))
+            held = Counter(r.current_owner_id for r in session.query(DraftPick).filter(
+                DraftPick.season.in_(list(window)), DraftPick.used == False).all())  # noqa: E712
+            owns = {tid for tid in owns if held.get(tid, 0) >= 2}
         except Exception as e:
             logger.warning(f"Could not read next season's picks: {e}")
             owns = set()

@@ -246,26 +246,24 @@ def test_no_pick_rows_means_nobody_is_short():
     assert not m.isShortOfPicks(short) and not m.isShortOfPicks(stocked)
 
 
-def test_a_bundle_that_empties_the_window_pays_the_premium():
-    """Teams went short paying with BOTH later picks in one trade-up; each pick alone
-    looked safe. The premium is charged on the bundle that hands over every window pick."""
+def test_a_bundle_never_takes_a_teams_last_window_pick():
+    """Owner, 2026-11-04: a team may trade one of its next two drafts' picks, never both.
+    Teams emptied the cupboard paying for trade-ups with both later picks at once."""
     a, b = _pick(1, SEASON + 1, slot=10), _pick(2, SEASON + 2, slot=20)
-    m, (buyer, _) = _cupboard({1: [a, b]})
-    assets = [{'kind': 'pick', 'id': 1, 'value': 10.0}, {'kind': 'pick', 'id': 2, 'value': 6.0}]
-    one = [dict(assets[0])]
-    both = [dict(x) for x in assets]
-    assert m._emptiedWindowCost(buyer, one, assets) == 0.0, "one pick left: not short"
-    # The draft it sits out, at the league's price for the cheapest pick, not its own.
-    league = min(trading.pickValue(10, 1, 32, weight=1.0), trading.pickValue(20, 2, 32, weight=1.0))
-    assert abs(m._emptiedWindowCost(buyer, both, assets)
-               - league * constants.TRADE_EMPTY_WINDOW_COST_SHARE) < 1e-9
-    cheap = [dict(x, value=x['value'] * 0.1) for x in assets]
-    assert abs(m._emptiedWindowCost(buyer, [dict(x) for x in cheap], cheap)
-               - m._emptiedWindowCost(buyer, both, assets)) < 1e-9, \
-        "a contender's low price on its future does not lower it"
-    # Its own picks are not marked up one at a time.
-    assert abs(m._pickValueTo(buyer, a)
-               - trading.pickValue(10, 1, weight=trading.laterWeight(m.nowWeight(buyer)))) < 1e-9
+    now = _pick(3, SEASON, slot=5)
+    m, (buyer, seller) = _cupboard({1: [a, b, now]})
+    assets = [{'kind': 'pick', 'id': 1, 'value': 10.0, 'detail': a},
+              {'kind': 'pick', 'id': 2, 'value': 6.0, 'detail': b}]
+    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None: [dict(x) for x in assets]
+    # One window pick clears the bar: fine.
+    got = m._assemble(buyer, seller, bar=5.0, gross=100.0, displaced=0.0)
+    assert [p['id'] for p in got] == [2]
+    # Only both would clear it: refused rather than emptying the window.
+    assert m._assemble(buyer, seller, bar=12.0, gross=100.0, displaced=0.0) == []
+    # This season's pick is outside the window and can go with one window pick.
+    assets.append({'kind': 'pick', 'id': 3, 'value': 9.0, 'detail': now})
+    got = m._assemble(buyer, seller, bar=12.0, gross=100.0, displaced=0.0)
+    assert {p['id'] for p in got} & {1, 2} and not {1, 2} <= {p['id'] for p in got}
 
 
 def test_the_window_is_the_two_drafts_after_this_seasons():
