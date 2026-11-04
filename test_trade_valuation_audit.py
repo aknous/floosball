@@ -255,8 +255,14 @@ def test_a_bundle_that_empties_the_window_pays_the_premium():
     one = [dict(assets[0])]
     both = [dict(x) for x in assets]
     assert m._emptiedWindowCost(buyer, one, assets) == 0.0, "one pick left: not short"
+    # The draft it sits out, at the league's price for the cheapest pick, not its own.
+    league = min(trading.pickValue(10, 1, 32, weight=1.0), trading.pickValue(20, 2, 32, weight=1.0))
     assert abs(m._emptiedWindowCost(buyer, both, assets)
-               - 6.0 * constants.TRADE_PICK_SCARCITY_PREMIUM) < 1e-9
+               - league * constants.TRADE_EMPTY_WINDOW_COST_SHARE) < 1e-9
+    cheap = [dict(x, value=x['value'] * 0.1) for x in assets]
+    assert abs(m._emptiedWindowCost(buyer, [dict(x) for x in cheap], cheap)
+               - m._emptiedWindowCost(buyer, both, assets)) < 1e-9, \
+        "a contender's low price on its future does not lower it"
     # Its own picks are not marked up one at a time.
     assert abs(m._pickValueTo(buyer, a)
                - trading.pickValue(10, 1, weight=trading.laterWeight(m.nowWeight(buyer)))) < 1e-9
@@ -297,3 +303,31 @@ def test_the_offseason_reads_as_the_season_that_just_ended():
     assert 'contract is up' in why(20, 'expiring_surplus')
     assert 'the one season left' in why(None, 'expiring_keeper')
     assert 'the weeks left' in why(20, 'expiring_keeper')
+
+
+
+def test_an_incoming_prospect_is_priced_above_what_the_receiver_has_there():
+    """The Jetskis took two kicker prospects for one kicker slot (owner, 2026-11-04)."""
+    m, (receiver, holder) = _cupboard({})
+    k1 = FakePlayer(60, 70, Position.K)
+    k2 = FakePlayer(61, 68, Position.K)
+    holder.prospects = [k1, k2]
+    for p in (k1, k2):
+        p.prospect_seasons = 1
+    ceilings = {id(k1): 82.0, id(k2): 76.0}
+    m._believedCeiling = lambda team, p: ceilings[id(p)]
+    m._needBar = lambda team, p: 72.0          # the receiver's kicker
+    w = trading.laterWeight(m.nowWeight(receiver))
+    posW = m._positionWeight(k1)
+    got = {a['id']: a for a in m._tradeableAssets(holder, valuingTeam=receiver)
+           if a['kind'] == 'prospect'}
+    assert abs(got[60]['value'] - trading.prospectValue(67 + 10, 1, weight=w, positionWeight=posW)) < 1e-9
+    assert abs(got[61]['value'] - trading.prospectValue(67 + 4, 1, weight=w, positionWeight=posW)) < 1e-9
+    # Both in one package: the second has to beat the first, and cannot.
+    counted = m._countProspectsOnce([dict(got[60]), dict(got[61])])
+    assert counted[0]['value'] == got[60]['value'] and counted[1]['value'] == 0.0
+    # The holder's own price is unchanged.
+    own = {a['id']: a for a in m._tradeableAssets(holder) if a['kind'] == 'prospect'}
+    assert '_need' not in own[60]
+    assert abs(own[60]['value'] - trading.prospectValue(
+        82.0, 1, weight=trading.laterWeight(m.nowWeight(holder)), positionWeight=posW)) < 1e-9

@@ -891,25 +891,33 @@ class TradeMarket:
         return 1.0 + TRADE_PICK_SCARCITY_PREMIUM if not held else 1.0
 
     def _emptiedWindowCost(self, buyer, pieces, buyerAssets) -> float:
-        """The extra cost, on the buyer's own scale, of a bundle that hands over EVERY pick
-        it holds in its draft window: the premium on the cheapest of them, the one it
-        could have kept.
+        """The extra cost to the buyer of a bundle that hands over EVERY pick it holds in
+        its draft window: it will sit out a draft, charged at what the cheapest of those
+        picks is worth to an average team (`TRADE_EMPTY_WINDOW_COST_SHARE` of its
+        league-average value).
 
         ⚠️ PRICED ON THE BUNDLE, NOT THE PICK. Teams went short by paying with BOTH later
         picks in one trade-up, and each looked safe alone because the other was still held
-        (measured, 2026-11-03: a per-pick premium changed nothing)."""
-        from constants import TRADE_PICK_SCARCITY_PREMIUM, TRADE_PICK_RESTOCK_ENABLED
+        (measured, 2026-11-03: a per-pick premium changed nothing).
+
+        ⚠️ AT THE LEAGUE'S PRICE, NOT THE BUYER'S (owner, 2026-11-04). It was the premium on
+        the pick at the buyer's own value, and a contender prices its future at
+        `laterWeight`, so the Raccoons gave up both future picks to move up 16 slots for an
+        extra cost of about 1."""
+        from constants import TRADE_EMPTY_WINDOW_COST_SHARE, TRADE_PICK_RESTOCK_ENABLED
         if not TRADE_PICK_RESTOCK_ENABLED or not self._hasWindowRows():
             return 0.0
         held = self._windowPickIds(buyer)
         if not held or not held <= {p['id'] for p in pieces if p['kind'] == 'pick'}:
             return 0.0
-        mine = {a['id']: a['value'] for a in buyerAssets if a['kind'] == 'pick'}
-        for p in pieces:
-            if p['kind'] == 'pick' and 'buyerValue' in p:
-                mine[p['id']] = p['buyerValue']
-        cheapest = min((mine.get(pid, 0.0) for pid in held), default=0.0)
-        return cheapest * TRADE_PICK_SCARCITY_PREMIUM
+        teams = len(getattr(self.teamManager, 'teams', None) or []) or 32
+        neutral = []
+        for pick in self.picksOwnedBy(buyer):
+            if pick['id'] in held:
+                out = max(0, int(pick['season']) - int(self.season))
+                neutral.append(trading.pickValue(pick['slot'], out,
+                                                 int(pick.get('classSize') or teams), weight=1.0))
+        return min(neutral, default=0.0) * TRADE_EMPTY_WINDOW_COST_SHARE
 
     def _restockListing(self, team, taken: set):
         """A short team puts a player it does not need on the block for a return that must
@@ -2195,8 +2203,9 @@ class TradeMarket:
         value. Both halves are needed: raising only the ceiling changes nothing, because
         the bundle is sized to the bar.
         """
-        sellerValue = {(a['kind'], a['id']): a['value'] for a in self._tradeableAssets(
+        sellerAssets = {(a['kind'], a['id']): a for a in self._tradeableAssets(
             buyer, valuingTeam=seller, swapPosition=swapPosition)}
+        sellerValue = {k: a['value'] for k, a in sellerAssets.items()}
         buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer,
                                             swapPosition=swapPosition)
         # Cheapest FOR THE BUYER first, so it parts with what it minds least.
@@ -2217,6 +2226,7 @@ class TradeMarket:
         from constants import TRADE_PICK_STACKING_DECAY_ENABLED
 
         def seen(ps):
+            ps = self._countProspectsOnce(ps)
             # What the SELLER counts the payment as. For a headline pick or a rising star,
             # quality, not volume (`_qualityValue`) over everything. Otherwise players and
             # prospects count in full and PICKS do not stack: best pick first, each further
@@ -2245,7 +2255,12 @@ class TradeMarket:
                 if asset['kind'] == 'player':
                     usedPlayer = False
                 continue
-            pieces.append(dict(asset, value=worthToSeller))
+            piece = dict(asset, value=worthToSeller)
+            piece.pop('_need', None)
+            need = sellerAssets.get((asset['kind'], asset['id']), {}).get('_need')
+            if need:
+                piece['_need'] = need
+            pieces.append(piece)
             toSeller += worthToSeller
             toBuyer += asset['value']
         if seen(pieces) < bar:
@@ -2287,7 +2302,8 @@ class TradeMarket:
             self.assembleFail['tooExpensive'] = self.assembleFail.get('tooExpensive', 0) + 1
             return []           # it costs the buyer more than the player is worth to it
         self.assembleFail['built'] = self.assembleFail.get('built', 0) + 1
-        return pieces
+        return [{k: v for k, v in p.items() if k != '_need'}
+                for p in self._countProspectsOnce(pieces)]
 
     def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None) -> list:
         """This club's picks, pipeline prospects, and — at `swapPosition` — a starter.
@@ -2340,15 +2356,33 @@ class TradeMarket:
             # so a good scout could never spot a dud and a poor one could never be sold
             # one: scouting decided nothing about a prospect changing hands.
             ceiling = self._believedCeiling(valuer, prospect)
-            out.append({
+            seasons = getattr(prospect, 'prospect_seasons', 0)
+            posW = self._positionWeight(prospect)
+            asset = {
                 'kind': 'prospect',
                 'id': getattr(prospect, 'id', None),
                 'name': getattr(prospect, 'name', '?'),
-                'detail': {'prospectSeasons': getattr(prospect, 'prospect_seasons', 0)},
-                'value': trading.prospectValue(
-                    ceiling, getattr(prospect, 'prospect_seasons', 0), weight=weight,
-                    positionWeight=self._positionWeight(prospect)),
-            })
+                'detail': {'prospectSeasons': seasons},
+                'value': trading.prospectValue(ceiling, seasons, weight=weight,
+                                               positionWeight=posW),
+            }
+            # ⚠️ A TEAM RECEIVING A PROSPECT PRICES WHAT HE ADDS, NOT WHAT HE IS (owner,
+            # 2026-11-04). Counted above replacement, a prospect stuck behind a better
+            # starter or prospect, or a second kicker prospect in one package, was worth as
+            # much as one who fills a hole: the Jetskis took two kicker prospects for one
+            # slot. Measured above what the team already has at his position, the draft's
+            # own need bar (`playerManager._rookieNeedBar`), as a trade bid prices the
+            # upgrade over the man displaced. The holder's own cost is unchanged.
+            if valuer is not team:
+                bar = self._needBar(valuer, prospect)
+                asset['value'] = trading.prospectValue(
+                    REPLACEMENT_RATING + max(0.0, ceiling - bar), seasons, weight=weight,
+                    positionWeight=posW)
+                asset['_need'] = {'ceiling': ceiling, 'bar': bar, 'seasons': seasons,
+                                  'weight': weight, 'posW': posW,
+                                  'pos': getattr(getattr(prospect, 'position', None),
+                                                 'value', None)}
+            out.append(asset)
         if swapPosition is not None:
             # ⚠️ PRESENT VALUE, so `nowWeight` rather than `laterWeight` — a starter plays
             # this season. That is what makes a contender price an incoming rental high
@@ -2374,6 +2408,35 @@ class TradeMarket:
                         futureRating=self._futureRatingFor(valuer, held)),
                 })
         return out
+
+    def _needBar(self, team, prospect) -> float:
+        """What a prospect has to beat at his position on this team (the draft's
+        `_rookieNeedBar`), or replacement where the player manager has no such read."""
+        fn = getattr(self.playerManager, '_rookieNeedBar', None)
+        if fn is not None:
+            try:
+                return float(fn(self.brain, team, prospect))
+            except Exception:
+                pass
+        return float(REPLACEMENT_RATING)
+
+    def _countProspectsOnce(self, pieces) -> list:
+        """The package as the receiving team counts it: a second incoming prospect at one
+        position is measured above the first as well as above what it already has, since
+        only one of them can take the slot."""
+        best, adjusted = {}, {}
+        order = sorted(range(len(pieces)),
+                       key=lambda i: -((pieces[i].get('_need') or {}).get('ceiling') or 0))
+        for i in order:
+            n = pieces[i].get('_need')
+            if not n:
+                continue
+            bar = max(n['bar'], best.get(n['pos'], 0.0))
+            adjusted[i] = trading.prospectValue(
+                REPLACEMENT_RATING + max(0.0, n['ceiling'] - bar), n['seasons'],
+                weight=n['weight'], positionWeight=n['posW'])
+            best[n['pos']] = max(best.get(n['pos'], 0.0), n['ceiling'])
+        return [dict(p, value=adjusted[i]) if i in adjusted else p for i, p in enumerate(pieces)]
 
     def _believedCeiling(self, team, prospect) -> float:
         try:
