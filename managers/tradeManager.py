@@ -65,6 +65,8 @@ TRIGGER_URGENCY = {
     'expiring_surplus': 0,
     'locker_room': 1,
     'blocked_prospect': 2,
+    # A short team going nowhere sells to get back into the draft: chosen, not forced.
+    'pick_restock': 2.5,
     'horizon_mismatch': 3,
     # ⚠️ LAST, because the club is happy either way — it would simply re-sign him. He is
     # on the block at a price, not because anything is forcing the issue.
@@ -176,6 +178,9 @@ class TradeMarket:
         self.pickFail = {}
         self._classCache = None
         self._classBoardCache = {}
+        self._draftWindow = None
+        self._windowHasPicks = False
+        self._shortCache = {}
         self._computeContention()
 
     # ------------------------------------------------------------ context
@@ -441,7 +446,14 @@ class TradeMarket:
         # A walk-year player leaves for NOTHING at season end, which is the whole reason
         # this market exists. He goes first.
         out.sort(key=lambda l: (TRIGGER_URGENCY.get(l.trigger, 99), -l.ask))
-        return out[:TRADE_LISTINGS_PER_TEAM]
+        out = out[:TRADE_LISTINGS_PER_TEAM]
+        # ⚠️ ON TOP OF THE CAP, NOT INSIDE IT. A team posts one listing a pass and a
+        # locker-room or blocked-prospect listing outranked the restock one almost every
+        # time, so it was never posted (measured, 2026-11-03). Only a short team gets it.
+        restock = self._restockListing(team, {id(l.player) for l in out})
+        if restock is not None:
+            out.append(restock)
+        return out
 
     # ------------------------------------------- the blockbuster (offseason)
 
@@ -798,7 +810,7 @@ class TradeMarket:
         prospect this club would expect to get there on its own board (`_classBoard`).
         A future draft's class does not exist yet, so it keeps the generic yield.
         """
-        weight = trading.laterWeight(self.nowWeight(team))
+        weight = trading.laterWeight(self.nowWeight(team)) * self._scarcityFor(team, pick)
         out = int(pick['season']) - int(self.season)
         if out == 0:
             board = self._classBoard(team)
@@ -806,6 +818,143 @@ class TradeMarket:
                 k = max(1, int(pick.get('slot') or len(board)))
                 return board[min(k, len(board)) - 1] * weight
         return trading.pickValue(pick['slot'], out, weight=weight)
+
+    # ----------------------------------------------------- the pick cupboard
+
+    def _draftWindowSeasons(self) -> list:
+        """The TRADE_PICK_SHORT_DRAFTS drafts after this season's.
+
+        ⚠️ THIS SEASON'S PICK DOES NOT COUNT, in any pass: it is spent at the coming draft
+        (or already has been). Counting it let a team trade away both later picks while it
+        still held this year's, and it was short the day after the draft (measured,
+        2026-11-03: a premium on the window that included it changed nothing)."""
+        if self._draftWindow is None:
+            from constants import TRADE_PICK_SHORT_DRAFTS
+            first = int(self.season) + 1
+            try:
+                from database.connection import get_session
+                from database.models import DraftPick
+                session = get_session()
+                try:
+                    window = list(range(first, first + int(TRADE_PICK_SHORT_DRAFTS)))
+                    # ⚠️ NO ROWS IS NOT EVERYONE SHORT. Without pick rows in the window
+                    # (not seeded yet, or an unreadable table) every team would read as
+                    # short and price every pick at the premium.
+                    self._windowHasPicks = session.query(DraftPick.id).filter(
+                        DraftPick.season.in_(window),
+                        DraftPick.used == False).first() is not None   # noqa: E712
+                finally:
+                    session.close()
+            except Exception:
+                self._windowHasPicks = False
+            self._draftWindow = list(range(first, first + int(TRADE_PICK_SHORT_DRAFTS)))
+        return self._draftWindow
+
+    def _windowPickIds(self, team) -> set:
+        """Ids of the picks this team holds in the next TRADE_PICK_SHORT_DRAFTS drafts.
+        Empty when the window has no pick rows at all (see `_draftWindowSeasons`), which
+        `isShortOfPicks` reads as not short."""
+        key = getattr(team, 'id', None)
+        if key not in self._shortCache:
+            window = set(self._draftWindowSeasons())
+            self._shortCache[key] = {p['id'] for p in self.picksOwnedBy(team)
+                                     if int(p['season']) in window}
+        return self._shortCache[key]
+
+    def isShortOfPicks(self, team) -> bool:
+        """Holds no pick in any of the next TRADE_PICK_SHORT_DRAFTS drafts."""
+        return self._windowHasPicks and not self._windowPickIds(team)
+
+    def _scarcityFor(self, team, pick) -> float:
+        """The premium a SHORT team puts on a window pick it is offered: it gets it back
+        into the draft. A team's own picks are priced in `_assemble`, which sees the whole
+        bundle (`_lastWindowPickPremium`)."""
+        from constants import TRADE_PICK_SCARCITY_PREMIUM, TRADE_PICK_RESTOCK_ENABLED
+        if not TRADE_PICK_RESTOCK_ENABLED or not self._windowHasPicks:
+            return 1.0
+        if int(pick.get('season', 0)) not in self._draftWindowSeasons():
+            return 1.0
+        held = self._windowPickIds(team)
+        if pick.get('id') in held:
+            return 1.0
+        return 1.0 + TRADE_PICK_SCARCITY_PREMIUM if not held else 1.0
+
+    def _emptiedWindowCost(self, buyer, pieces, buyerAssets) -> float:
+        """The extra cost, on the buyer's own scale, of a bundle that hands over EVERY pick
+        it holds in its draft window: the premium on the cheapest of them, the one it
+        could have kept.
+
+        ⚠️ PRICED ON THE BUNDLE, NOT THE PICK. Teams went short by paying with BOTH later
+        picks in one trade-up, and each looked safe alone because the other was still held
+        (measured, 2026-11-03: a per-pick premium changed nothing)."""
+        from constants import TRADE_PICK_SCARCITY_PREMIUM, TRADE_PICK_RESTOCK_ENABLED
+        if not TRADE_PICK_RESTOCK_ENABLED or not self._windowHasPicks:
+            return 0.0
+        held = self._windowPickIds(buyer)
+        if not held or not held <= {p['id'] for p in pieces if p['kind'] == 'pick'}:
+            return 0.0
+        mine = {a['id']: a['value'] for a in buyerAssets if a['kind'] == 'pick'}
+        for p in pieces:
+            if p['kind'] == 'pick' and 'buyerValue' in p:
+                mine[p['id']] = p['buyerValue']
+        cheapest = min((mine.get(pid, 0.0) for pid in held), default=0.0)
+        return cheapest * TRADE_PICK_SCARCITY_PREMIUM
+
+    def _restockListing(self, team, taken: set):
+        """A short team that is not contending puts a player it does not need on the
+        block for a return that must include a pick (`pick_restock`).
+
+        ⚠️ A VETERAN, NOT ITS BEST PLAYER. A team going nowhere prices a prime player's
+        later seasons high (`laterWeight`), so listing the one that fetches most listed the
+        one nobody could afford: measured, 15 restock listings over 16 seasons and not one
+        clearing bid. What it does not need is a player past his career length, or one in
+        his last two seasons of contract. Never its future (developing), its core, a player
+        acquired this season or one already listed. Among the rest, the best rated, since
+        that is who a buyer upgrades with."""
+        from constants import TRADE_PICK_RESTOCK_ENABLED
+        from managers.frontOfficeBrain import ARC_DEVELOPING, ARC_REGRESSING
+        if not TRADE_PICK_RESTOCK_ENABLED or self.isContending(team) or not self.isShortOfPicks(team):
+            return None
+        core = self._coreOf(team)
+        best = None
+        for player in (getattr(team, 'rosterDict', None) or {}).values():
+            if player is None or getattr(player, 'willRetire', False):
+                continue
+            if id(player) in core or id(player) in taken:
+                continue
+            if wasAcquiredThisSeason(player, self.season):
+                continue
+            try:
+                arc = self.brain.classifyArc(player)
+            except Exception:
+                arc = None
+            if arc == ARC_DEVELOPING:
+                continue
+            if arc != ARC_REGRESSING and int(getattr(player, 'termRemaining', 0) or 0) > 2:
+                continue
+            ask, floor = self._priceListing(team, player, 'pick_restock')
+            if ask <= 0:
+                continue
+            rating = float(getattr(player, 'playerRating', 0) or 0)
+            if best is None or rating > float(getattr(best.player, 'playerRating', 0) or 0):
+                best = Listing(team, player, 'pick_restock', ask, floor,
+                               why=self.sellerWhy(team, player, 'pick_restock'))
+        return best
+
+    def _restockPickFor(self, buyer, seller):
+        """The pick a buyer would give a short seller: one in the seller's draft window,
+        the cheapest on the buyer's own scale. Shaped as an `_assemble` mandatory piece."""
+        window = set(self._draftWindowSeasons())
+        best = None
+        for pick in self.picksOwnedBy(buyer):
+            if int(pick['season']) not in window or self._isHeadlinePick(buyer, pick):
+                continue
+            mine = self._pickValueTo(buyer, pick)
+            if best is None or mine < best['buyerValue']:
+                best = {'kind': 'pick', 'id': pick['id'],
+                        'name': f"S{pick['season']} R{pick['round']} pick", 'detail': pick,
+                        'value': self._pickValueTo(seller, pick), 'buyerValue': mine}
+        return best
 
     def _classCeilings(self, team) -> list:
         """This club's believed ceiling for each prospect in the upcoming class, best
@@ -1424,6 +1573,10 @@ class TradeMarket:
             why = (f"{name} is signed for {term} more seasons and the core around them is "
                    f"aging out before that contract ends, so the team would rather have "
                    f"the help while it is still winning.")
+        elif trigger == 'pick_restock':
+            why = (f"The team has no pick in either of the next two drafts and is not "
+                   f"contending, so {name} is available for a return that gets it back "
+                   f"into the draft.")
         elif trigger == 'inquiry':
             why = f"Nobody put {name} on the block. Another team called and asked."
         else:
@@ -1716,6 +1869,16 @@ class TradeMarket:
         # but the whole shape being bought here is a haul, and measured at three pieces the
         # typical bundle reached only 0.78 of the bar, so the cap and not the price was
         # what refused most calls.
+        # ⚠️ A RESTOCK SALE IS FOR A PICK. A short seller listed this player to get back
+        # into the draft, so the payment must carry a pick in its draft window; a buyer
+        # with none to give cannot bid.
+        mandatory = None
+        if listing.trigger == 'pick_restock':
+            restockPick = self._restockPickFor(buyer, listing.team)
+            if restockPick is None:
+                self.assembleFail['noRestockPick'] = self.assembleFail.get('noRestockPick', 0) + 1
+                return None
+            mandatory = [restockPick]
         pieces = self._assemble(buyer, listing.team, bar * urgency,
                                 gross * urgency * appetite,
                                 displaced,
@@ -1724,7 +1887,8 @@ class TradeMarket:
                                 maxPieces=self._maxPiecesFor(listing, player),
                                 # A rising star is paid for with quality, not volume
                                 # (`TRADE_RISING_STAR_RATING`), judged by the SELLER.
-                                qualityOverVolume=self._isRisingStar(listing.team, player))
+                                qualityOverVolume=self._isRisingStar(listing.team, player),
+                                mandatory=mandatory)
         if not pieces:
             return None
 
@@ -2082,6 +2246,7 @@ class TradeMarket:
         # same event — charging both makes a swap look twice as expensive as it is and
         # refuses almost every one of them. When it pays in picks instead, the displaced
         # player is a real additional cost (and a cut fee on top).
+        toBuyer += self._emptiedWindowCost(buyer, pieces, buyerAssets)
         costToBuyer = toBuyer if usedPlayer else toBuyer + displaced
         if costToBuyer >= gross:
             self.assembleFail['tooExpensive'] = self.assembleFail.get('tooExpensive', 0) + 1

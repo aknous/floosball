@@ -91,6 +91,18 @@ async def main(seasons, treasury):
         out = realListings(self, team)
         for l in out:
             shape.setdefault('listedBy', Counter())[l.trigger] += 1
+        # Why a short team does or does not post a restock listing, at the moment it lists.
+        try:
+            if self.hasClarity() and self.isShortOfPicks(team):
+                why = shape.setdefault('restockGate', Counter())
+                if any(l.trigger == 'pick_restock' for l in out):
+                    why['posted'] += 1
+                elif self.isContending(team):
+                    why['contending'] += 1
+                else:
+                    why['no veteran to sell'] += 1
+        except Exception as e:
+            shape.setdefault('restockGate', Counter())[f'probe error: {e!r}'[:80]] += 1
         return out
 
     def spyBid(self, listing, buyer):
@@ -104,6 +116,8 @@ async def main(seasons, treasury):
         why = shape.setdefault('why', Counter())
         for k, v in after.items():
             why[k] += v - before.get(k, 0)
+            if listing.trigger == 'pick_restock' and v - before.get(k, 0):
+                shape.setdefault('restockWhy', Counter())[k] += v - before.get(k, 0)
         if out is not None:
             shape.setdefault('bidBy', Counter())[listing.trigger] += 1
         return out
@@ -205,7 +219,15 @@ async def main(seasons, treasury):
             if obj is not None:
                 described[piece['id']] = describe(obj)
 
+        def _holes(*teams):
+            return [(t.name, sl) for t in teams for sl, p in (t.rosterDict or {}).items() if p is None]
+        _before = _holes(listing.team, winner.team)
         out = realPickSettle(seasonManager, listing, winner, season, *a, **kw)
+        _after = _holes(listing.team, winner.team)
+        if out is not None and not kw.get('dryRun') and any(
+                p['kind'] == 'player' for p in winner.pieces):
+            print(f"  [trade-up with a player] {winner.team.name} -> {listing.team.name}: "
+                  f"holes before {_before}, after {_after}, moves {out.get('moves') if isinstance(out, dict) else None}")
         shape.setdefault('pickWhy', Counter())['SETTLED' if out else 'settle_refused'] += 1
         if out is not None:
             from managers.tradeManager import TradeMarket as _TM
@@ -361,7 +383,7 @@ async def main(seasons, treasury):
         swapPos = None
         return {'toSeller': valueFor(seller), 'toBuyer': valueFor(buyer)}
 
-    def spySettle(seasonManager, listing, winner, season, week=None):
+    def spySettle(seasonManager, listing, winner, season, week=None, *a, **kw):
         before = tradeManager._openSlotFor(winner.team, listing.player) is not None
         preexisting = set(scanMismatch('BEFORE'))
         from managers.tradeManager import TradeMarket
@@ -424,7 +446,7 @@ async def main(seasons, treasury):
             record['back'].append(entry)
 
         pending.clear()
-        out = realSettle(seasonManager, listing, winner, season, week)
+        out = realSettle(seasonManager, listing, winner, season, week, *a, **kw)
         if out is not None:
             # ⚠️ ONLY WHAT THIS SETTLEMENT DID. `pending` is cleared immediately before the
             # call, so a cut or a promotion from an earlier trade in the same weekly pass
@@ -474,10 +496,21 @@ async def main(seasons, treasury):
             shape.setdefault('inventory', []).append(
                 (sum(len(_mkt.picksOwnedBy(t)) for t in tm.teams),
                  sum(len(getattr(t, 'prospects', None) or []) for t in tm.teams)))
+            # The pick cupboard at season start: no pick in either draft after this season's.
+            _window = {season + 1, season + 2}
+            _short = [t.name for t in tm.teams
+                      if not any(int(p['season']) in _window for p in _mkt.picksOwnedBy(t))]
+            shape.setdefault('shortBySeason', []).append(len(_short))
+            if season > 1:
+                for _n in _short:
+                    shape.setdefault('shortSeasons', Counter())[_n] += 1
         except Exception as e:
             print('   inventory probe failed:', e)
+        _startHoles = [(t.name, sl) for t in tm.teams for sl, p in (t.rosterDict or {}).items()
+                       if p is None]
         print(f"  [season {season} start, BEFORE any trade] "
-              f"rostered-and-in-pool: {len(both)}, wrong-team-ref: {len(wrong)}")
+              f"rostered-and-in-pool: {len(both)}, wrong-team-ref: {len(wrong)}, "
+              f"holes: {_startHoles}")
         if both[:2]:
             print(f"      e.g. {both[:2]}")
         if wrong[:2]:
@@ -485,6 +518,18 @@ async def main(seasons, treasury):
         await sm.runSeasonSimulation()
         await sm.handleOffseason()
         sm.currentSeason.seasonNumber = season + 1
+
+    sb = shape.get('shortBySeason', [])
+    ss = shape.get('shortSeasons', Counter())
+    print(f"\n  ── the pick cupboard (season start, no pick in either draft after this season's) ──")
+    # ⚠️ SEASON 1 IS NOT A READING: picks are seeded by the first trade pass, after this probe.
+    print(f"    short teams by season (season 1 unseeded, ignore it): {sb}")
+    print(f"    seasons 2+: {sum(sb[1:])} team-seasons short, teams ever short: {len(ss)}, "
+          f"most seasons short by one team: {max(ss.values()) if ss else 0}")
+    if shape.get('restockGate'):
+        print(f"    short teams at listing time: {dict(shape['restockGate'])}")
+    if shape.get('restockWhy'):
+        print(f"    restock bids that failed, by reason: {dict(shape['restockWhy'])}")
 
     n = shape['trades']
     print(f"\n  {n} trade(s) over {seasons} season(s)")
@@ -688,10 +733,15 @@ def _seedEverything(seed: int) -> None:
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--seasons', type=int, default=2)
+    ap.add_argument('--no-restock', action='store_true',
+                    help='switch off the pick-cupboard premium and restock listing')
     ap.add_argument('--treasury', type=int, default=1900)
     ap.add_argument('--seed', type=int, default=20260916,
                     help='fixed by default so arms are comparable; vary it to sample')
     args = ap.parse_args()
+    if args.no_restock:
+        import constants
+        constants.TRADE_PICK_RESTOCK_ENABLED = False
     _seedEverything(args.seed)
     try:
         asyncio.run(main(args.seasons, args.treasury))

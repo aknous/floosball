@@ -4175,6 +4175,18 @@ TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 # gap with.
 TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
 
+# ⚠️ NOBODY USED TO WATCH THE CUPBOARD (owner, 2026-11-03: "there should be some decisions to
+# rebuild pick supply"). A team is SHORT when it holds no pick in any of the next
+# TRADE_PICK_SHORT_DRAFTS drafts (the drafts still to be held, so after the draft has run the
+# window starts next season). A short team values picks in that window at
+# 1 + TRADE_PICK_SCARCITY_PREMIUM, both its own (it stops paying with its last picks) and the
+# ones it is offered, and a short team that is not contending lists a player it does not need
+# for a return that must include one (`pick_restock`). The premium is an explicit front-office
+# convention, not a derivation: a team with no draft access for two seasons wants it back.
+TRADE_PICK_SHORT_DRAFTS = 2
+TRADE_PICK_SCARCITY_PREMIUM = 0.5
+TRADE_PICK_RESTOCK_ENABLED = True   # read lazily, so a harness can switch it off
+
 # ⚠️ A FUTURE PICK IS DISCOUNTED BY SLOT, NOT FLAT, and the measurement says why. Variance
 # by slot over 6,000 simulated classes, as a fraction of the surplus that slot delivers:
 #   pick      1     3     5    16    24     32

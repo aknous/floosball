@@ -133,3 +133,109 @@ def test_the_buyer_prices_later_seasons_at_its_projection():
     assert abs(m._buyerFutureRating(buyer, norman, 81.0) - (88 + 2 * FO_CEILING_CREDIT + 2)) < 1e-6
     # A prime player's later seasons price exactly as this one, as before.
     assert abs(m._buyerFutureRating(buyer, prime, 86.0) - 86.0) < 1e-6
+
+
+# ------------------------------------------------------------ 7. the pick cupboard
+
+def _cupboard(picksByTeam, window=(SEASON + 1, SEASON + 2), week=None, teams=None):
+    teams = teams or [FakeTeam(1, 'Short', 6, 22), FakeTeam(2, 'Stocked', 20, 8)]
+    m = TradeMarket(MarketPlayerManager([]), FakeTeamManager(teams), StubBrain(), SEASON, week)
+    m._draftWindow = list(window)
+    m._windowHasPicks = True
+    m.picksOwnedBy = lambda team: [dict(p) for p in picksByTeam.get(team.id, [])]
+    return m, teams
+
+
+def _pick(pid, season, slot=16, owner=1):
+    return {'id': pid, 'season': season, 'round': 1, 'slot': slot,
+            'originalTeamId': owner, 'classSize': 32}
+
+
+def test_short_means_no_pick_in_the_next_two_drafts():
+    m, (short, stocked) = _cupboard({1: [_pick(1, SEASON)], 2: [_pick(2, SEASON + 1, owner=2)]})
+    assert m.isShortOfPicks(short), "this season's pick is about to be spent"
+    assert not m.isShortOfPicks(stocked)
+
+
+def test_a_short_team_prices_a_window_pick_at_the_premium():
+    window, later = _pick(1, SEASON + 1, owner=2), _pick(2, SEASON, owner=2)
+    m, (short, stocked) = _cupboard({2: [window, later, _pick(4, SEASON + 2, owner=2)]})
+    premium = 1 + constants.TRADE_PICK_SCARCITY_PREMIUM
+    assert abs(m._pickValueTo(short, window) / m._pickValueTo(stocked, window)
+               - premium * m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9
+    assert abs(m._pickValueTo(short, later) / m._pickValueTo(stocked, later)
+               - m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9, "only a window pick"
+    constants.TRADE_PICK_RESTOCK_ENABLED = False
+    try:
+        assert abs(m._pickValueTo(short, window) / m._pickValueTo(stocked, window)
+                   - m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9
+    finally:
+        constants.TRADE_PICK_RESTOCK_ENABLED = True
+
+
+def test_a_short_team_going_nowhere_lists_a_player_for_a_pick():
+    m, (short, stocked) = _cupboard({2: [_pick(5, SEASON + 1, owner=2)]})
+    vet = FakePlayer(30, 82, Position.RB, termRemaining=2)
+    vet.team = short
+    short.rosterDict['rb'] = vet
+    m._coreOf = lambda team: set()
+    m.brain.classifyArc = lambda p: 'prime'
+    listing = m._restockListing(short, set())
+    assert listing is not None and listing.trigger == 'pick_restock' and listing.player is vet
+    # A contender or a stocked team does not.
+    assert m._restockListing(stocked, set()) is None
+    # Nor does it sell its future.
+    m.brain.classifyArc = lambda p: 'developing'
+    assert m._restockListing(short, set()) is None
+
+
+def test_the_restock_pick_is_the_buyers_cheapest_window_pick():
+    near, far, out = _pick(7, SEASON + 1, slot=30, owner=2), _pick(8, SEASON + 2, slot=3, owner=2), \
+        _pick(9, SEASON, slot=31, owner=2)
+    m, (short, buyer) = _cupboard({2: [near, far, out]})
+    piece = m._restockPickFor(buyer, short)
+    assert piece['id'] == 7, "cheapest on the buyer's scale, inside the seller's window"
+    assert abs(piece['value'] - m._pickValueTo(short, near)) < 1e-9
+    m2, (short2, bare) = _cupboard({2: [out]})
+    assert m2._restockPickFor(bare, short2) is None
+
+
+def test_no_pick_rows_means_nobody_is_short():
+    m, (short, stocked) = _cupboard({})
+    m._windowHasPicks = False
+    assert not m.isShortOfPicks(short) and not m.isShortOfPicks(stocked)
+
+
+def test_a_bundle_that_empties_the_window_pays_the_premium():
+    """Teams went short paying with BOTH later picks in one trade-up; each pick alone
+    looked safe. The premium is charged on the bundle that hands over every window pick."""
+    a, b = _pick(1, SEASON + 1, slot=10), _pick(2, SEASON + 2, slot=20)
+    m, (buyer, _) = _cupboard({1: [a, b]})
+    assets = [{'kind': 'pick', 'id': 1, 'value': 10.0}, {'kind': 'pick', 'id': 2, 'value': 6.0}]
+    one = [dict(assets[0])]
+    both = [dict(x) for x in assets]
+    assert m._emptiedWindowCost(buyer, one, assets) == 0.0, "one pick left: not short"
+    assert abs(m._emptiedWindowCost(buyer, both, assets)
+               - 6.0 * constants.TRADE_PICK_SCARCITY_PREMIUM) < 1e-9
+    # Its own picks are not marked up one at a time.
+    assert abs(m._pickValueTo(buyer, a)
+               - trading.pickValue(10, 1, weight=trading.laterWeight(m.nowWeight(buyer)))) < 1e-9
+
+
+def test_the_window_is_the_two_drafts_after_this_seasons():
+    m = TradeMarket(MarketPlayerManager([]), FakeTeamManager([FakeTeam(1, 'A')]), StubBrain(),
+                    SEASON, None)
+    assert m._draftWindowSeasons() == [SEASON + 1, SEASON + 2]
+
+
+def test_restock_lists_a_veteran_not_a_long_contract():
+    m, (short, _) = _cupboard({2: [_pick(5, SEASON + 1, owner=2)]})
+    m._coreOf = lambda team: set()
+    long = FakePlayer(31, 88, Position.QB, termRemaining=4)
+    old = FakePlayer(32, 80, Position.WR, termRemaining=3)
+    for slot, p in (('qb', long), ('wr1', old)):
+        p.team = short
+        short.rosterDict[slot] = p
+    m.brain.classifyArc = lambda p: 'regressing' if p is old else 'prime'
+    listing = m._restockListing(short, set())
+    assert listing is not None and listing.player is old
