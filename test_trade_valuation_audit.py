@@ -279,3 +279,21 @@ def test_restock_lists_a_veteran_not_a_long_contract():
     m.brain.classifyArc = lambda p: 'regressing' if p is old else 'prime'
     listing = m._restockListing(short, set())
     assert listing is not None and listing.player is old
+
+
+def test_the_offseason_reads_as_the_season_that_just_ended():
+    """Owner, 2026-11-04: in the offseason a walk-year player has the coming season left,
+    so the copy must not say the contract is up or that he leaves at season end."""
+    def why(week, trigger):
+        m, (team, _) = _cupboard({}, week=week)
+        p = FakePlayer(50, 80, Position.WR, termRemaining=1)
+        p.team = team
+        kept = FakePlayer(51, 85, Position.QB, termRemaining=1)
+        m._resignPriority = lambda t: [kept]
+        return m.sellerWhy(team, p, trigger)
+    off = why(None, 'expiring_surplus')
+    assert 'one season left' in off and 'after next season' in off
+    assert 'contract is up' not in off and 'season end' not in off
+    assert 'contract is up' in why(20, 'expiring_surplus')
+    assert 'the one season left' in why(None, 'expiring_keeper')
+    assert 'the weeks left' in why(20, 'expiring_keeper')

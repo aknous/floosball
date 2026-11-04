@@ -1560,16 +1560,31 @@ class TradeMarket:
                      if getattr(p, 'id', None) != getattr(player, 'id', None)]
             keptBy = (' and '.join(names) if len(names) < 3
                       else ', '.join(names[:-1]) + ' and ' + names[-1])
-            why = (f"{name}'s contract is up and the team is not renewing it. It can keep "
-                   f"only {int(RESIGN_LIMIT_PER_OFFSEASON)} of its expiring players this "
-                   + (f"offseason and has chosen {keptBy} instead, so {name} leaves for "
-                      f"nothing at season end." if names else
-                      f"offseason and {name} did not make the cut, leaving for nothing at "
-                      f"season end.")
-                   + " Anything beats that.")
+            # ⚠️ THE OFFSEASON BELONGS TO THE SEASON THAT JUST ENDED (owner, 2026-11-04).
+            # By the time a pass runs there, contracts have ticked down and a walk-year
+            # player has the coming season left, so "the contract is up" and "at season
+            # end" would point at the season already played.
+            limit = int(RESIGN_LIMIT_PER_OFFSEASON)
+            if self.week is None:
+                why = (f"{name} has one season left and the team does not plan to renew. It "
+                       f"can keep only {limit} of its expiring players each offseason "
+                       + (f"and plans to keep {keptBy}, so {name} would leave for nothing "
+                          f"after next season." if names else
+                          f"and {name} is not one of them, so would leave for nothing after "
+                          f"next season.")
+                       + " Anything beats that.")
+            else:
+                why = (f"{name}'s contract is up and the team is not renewing it. It can "
+                       f"keep only {limit} of its expiring players this "
+                       + (f"offseason and has chosen {keptBy} instead, so {name} leaves "
+                          f"for nothing at season end." if names else
+                          f"offseason and {name} did not make the cut, leaving for nothing "
+                          f"at season end.")
+                       + " Anything beats that.")
         elif trigger == 'expiring_keeper':
+            left = "the one season left" if self.week is None else "the weeks left"
             why = (f"Could keep {name}, so the price is the contract that would follow "
-                   f"rather than the weeks left. Available only to a return that beats "
+                   f"rather than {left}. Available only to a return that beats "
                    f"re-signing them.")
         elif trigger == 'blocked_prospect':
             prospect = next((p for p in (getattr(team, 'prospects', None) or [])
