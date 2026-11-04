@@ -7689,11 +7689,14 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"Could not broadcast rookie_draft_start: {e}")
 
+        leagueTeams = list(getattr(
+            self.serviceContainer.getService('team_manager'), 'teams', None) or [])
+        resignIntent = self.walkYearResignIntent(
+            brain, leagueTeams, getattr(self.currentSeason, 'freeAgencyOrder', None) or [])
         pickGen = self.playerManager.rookieDraftPickGenerator(
             rookies, draftOrder, leagueHighlights, brain=brain,
             season=self.currentSeason.seasonNumber,
-            leagueTeams=list(getattr(
-                self.serviceContainer.getService('team_manager'), 'teams', None) or []))
+            leagueTeams=leagueTeams, resignIntent=resignIntent)
         try:
             for entry in pickGen:
                 kind = entry.get('type')
@@ -7780,6 +7783,8 @@ class SeasonManager:
             # nothing left that will ever place them.
             for _ in pickGen:
                 pass
+        # The re-sign intent describes this draft only.
+        self.playerManager._walkYearResignIntent = {}
 
         if (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()
                 and not getattr(self.timingManager, '_isFastCatchingUp', False)):
@@ -9236,6 +9241,36 @@ class SeasonManager:
                 s.close()
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
+
+    def walkYearResignIntent(self, brain, teams, faOrder) -> dict:
+        """`{playerId: True if the GM intends to re-sign him}` for every player whose
+        contract runs one more season, read at the rookie draft, so the draft knows
+        whether a walk-year superstar is staying (owner, 2026-11-04;
+        `playerManager.superstarLockedPositions`).
+
+        The same decision next offseason's step 3 makes (`_resignDecision`): until
+        salaries start the per-offseason re-sign limit and the GM's ranking decide it,
+        and after that the limit is lifted and the team's budget decides it
+        (`_affordableResigns`). A projection a year early: the free-agent pool, draft
+        order and finances are today's.
+
+        ⚠️ NO EXPECTED DRAFTEES (`slotOwners=[]`). They come from this draft, which is
+        what is asking, so counting them would be circular: the team would plan to let
+        the star walk for a rookie it only drafts because the star is walking."""
+        from constants import RESIGN_LIMIT_PER_OFFSEASON
+        limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
+        out = {}
+        for team in teams or []:
+            try:
+                expiring, forcedWalk, kept, _d, _a = self._resignDecision(
+                    team, brain, list(faOrder or []), [], limit)
+            except Exception as e:
+                logger.debug(f"re-sign intent unavailable for {getattr(team, 'name', team)}: {e}")
+                continue
+            keptIds = {id(p) for p in kept}
+            for p in expiring + forcedWalk:
+                out[getattr(p, 'id', None)] = id(p) in keptIds
+        return out
 
     def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True):
         """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,

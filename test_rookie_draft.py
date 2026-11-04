@@ -338,6 +338,26 @@ def test_a_star_who_is_leaving_or_fading_does_not_lock_the_position():
     print("PASS a leaving, fading or 4-star starter leaves the position open")
 
 
+def test_a_walk_year_star_the_team_will_re_sign_still_locks_the_position():
+    """Owner, 2026-11-04: a star with one season left locks the position when the team
+    intends to re-sign him next offseason (the re-sign limit decides that until
+    salaries start, the budget after), and leaves it open when it does not."""
+    for keep, expected in ((True, 'Ninety WR'), (False, 'Ninety Nine QB')):
+        star = _star(term=1, name='Walk Year Star')
+        rookies = [FakePlayer(1, 80, Position.QB, 'Ninety Nine QB'),
+                   FakePlayer(2, 75, Position.WR, 'Ninety WR')]
+        ceilings = {'Ninety Nine QB': 99, 'Ninety WR': 90}
+        clubs = _teams(1)
+        clubs[0].rosterDict = {'qb': star}
+        h = Harness(rookies)
+        events = list(h.rookieDraftPickGenerator(
+            rookies, clubs, brain=StubBrain(lambda p, team: ceilings[p.name]),
+            resignIntent={star.id: keep}))
+        first = next(e for e in events if e['type'] == 'pick')
+        assert first['playerName'] == expected, (keep, first)
+    print("PASS a walk-year star locks the position only if he will be re-signed")
+
+
 def test_one_superstar_receiver_does_not_lock_the_position():
     """WR has two slots: a rookie can still take the weaker one."""
     rookies = [FakePlayer(1, 80, Position.WR, 'Ninety Nine WR'),
@@ -446,3 +466,36 @@ def test_with_no_need_left_the_pick_is_the_least_blocked_rookie():
                                chooserRoster={'qb': starterQb, 'rb': starterRb}, teams=6)
     assert picks[5]['playerName'] == 'Close RB', picks[5]
     print("PASS a pure-need pick with no need left takes the least-blocked rookie")
+
+
+def test_re_sign_intent_follows_the_limit_then_the_budget():
+    """The intent is next offseason's step-3 decision: the per-offseason limit applies
+    until salaries start, then it is lifted (the budget filter inside `_resignDecision`
+    decides). It never counts this draft's rookies as the replacement."""
+    from managers.seasonManager import SeasonManager
+    from constants import RESIGN_LIMIT_PER_OFFSEASON
+    calls = []
+
+    class P:
+        def __init__(self, pid):
+            self.id = pid
+
+    kept, walked = P(1), P(2)
+
+    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True):
+        calls.append((slotOwners, limit))
+        return [kept, walked], [], [kept], 0, 0
+
+    sm = object.__new__(SeasonManager)
+    orig = (SeasonManager._resignDecision, SeasonManager._resignLimitOn)
+    try:
+        SeasonManager._resignDecision = fakeDecision
+        for limitOn, expectedLimit in ((True, RESIGN_LIMIT_PER_OFFSEASON), (False, 99)):
+            SeasonManager._resignLimitOn = staticmethod(lambda on=limitOn: on)
+            calls.clear()
+            out = sm.walkYearResignIntent(None, [object()], [])
+            assert out == {1: True, 2: False}, out
+            assert calls == [([], expectedLimit)], calls
+    finally:
+        SeasonManager._resignDecision, SeasonManager._resignLimitOn = orig[0], staticmethod(orig[1])
+    print("PASS the re-sign intent uses the limit, then the budget, and no draftees")

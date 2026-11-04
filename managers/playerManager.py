@@ -4601,9 +4601,11 @@ class PlayerManager:
         """Positions (Position enums) the draft skips for this team: every starting slot
         there holds a superstar the team has no reason to replace (owner, 2026-11-04).
         A superstar is rated at least `ROOKIE_DRAFT_SUPERSTAR_RATING` (the 5-star line),
-        not past his longevity (`classifyArc` regressing), not retiring, and with more
-        than one season left, so a walk-year star leaves the position open, as it does
-        in the need bar. WR has two slots, so it locks only when both hold one."""
+        not past his longevity (`classifyArc` regressing), not retiring, and either with
+        more than one season left or one the GM intends to re-sign next offseason
+        (`_walkYearResignIntent`, from `SeasonManager.walkYearResignIntent`: the
+        re-sign limit decides it until salaries start, the team's budget after). WR has
+        two slots, so it locks only when both hold one."""
         from constants import ROOKIE_DRAFT_SUPERSTAR_RATING
         from managers.frontOfficeBrain import ARC_REGRESSING
         Position = FloosPlayer.Position
@@ -4616,7 +4618,12 @@ class PlayerManager:
                 if p is None or getattr(p, 'willRetire', False):
                     return False
                 if (getattr(p, 'termRemaining', 0) or 0) <= 1:
-                    return False
+                    # One season left: the position stays locked only if the GM intends
+                    # to re-sign him next offseason (`walkYearResignIntent`, set for
+                    # the draft). With no intent read, he counts as leaving.
+                    intent = getattr(self, '_walkYearResignIntent', None) or {}
+                    if not intent.get(getattr(p, 'id', None), False):
+                        return False
                 if float(getattr(p, 'playerRating', 0) or 0) < float(ROOKIE_DRAFT_SUPERSTAR_RATING):
                     return False
                 classify = getattr(brain, 'classifyArc', None)
@@ -4958,7 +4965,8 @@ class PlayerManager:
 
     def rookieDraftPickGenerator(self, rookies: List, draftOrder: List,
                                  leagueHighlights: list = None, brain=None,
-                                 season: int = None, leagueTeams: List = None):
+                                 season: int = None, leagueTeams: List = None,
+                                 resignIntent: dict = None):
         """The rookie draft — yields one event at a time for live broadcasting,
         mirroring `freeAgencyPickGenerator`.
 
@@ -4993,6 +5001,9 @@ class PlayerManager:
             from managers.frontOfficeBrain import FrontOfficeBrain
             brain = FrontOfficeBrain(self)
         self._draftBrain = brain
+        # Who each team intends to re-sign next offseason, read by
+        # `superstarLockedPositions`; the caller clears it once the draft is over.
+        self._walkYearResignIntent = resignIntent or {}
         # A club's own draft position, used to price the future pick it would give up.
         slotByTeamId = {}
         for i, t in enumerate(draftOrder):
