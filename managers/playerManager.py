@@ -4598,6 +4598,11 @@ class PlayerManager:
         return self.rookieCeiling(brain, team, rookie) - self._rookieNeedBar(brain, team, rookie)
 
     def superstarLockedPositions(self, brain, team) -> set:
+        """See `keptStarPositions`: positions held by kept 5-star starters."""
+        from constants import ROOKIE_DRAFT_SUPERSTAR_RATING
+        return self.keptStarPositions(brain, team, ROOKIE_DRAFT_SUPERSTAR_RATING)
+
+    def keptStarPositions(self, brain, team, minRating) -> set:
         """Positions (Position enums) the draft skips for this team: every starting slot
         there holds a superstar the team has no reason to replace (owner, 2026-11-04).
         A superstar is rated at least `ROOKIE_DRAFT_SUPERSTAR_RATING` (the 5-star line),
@@ -4605,8 +4610,9 @@ class PlayerManager:
         more than one season left or one the GM intends to re-sign next offseason
         (`_walkYearResignIntent`, from `SeasonManager.walkYearResignIntent`: the
         re-sign limit decides it until salaries start, the team's budget after). WR has
-        two slots, so it locks only when both hold one."""
-        from constants import ROOKIE_DRAFT_SUPERSTAR_RATING
+        two slots, so it locks only when both hold one. `minRating` is the star line:
+        the 5-star lock (`superstarLockedPositions`) or the 4-star line the clear-need
+        preference reads (`preferClearNeed`)."""
         from managers.frontOfficeBrain import ARC_REGRESSING
         Position = FloosPlayer.Position
         slotsByPos = {Position.QB: ['qb'], Position.RB: ['rb'], Position.WR: ['wr1', 'wr2'],
@@ -4624,7 +4630,7 @@ class PlayerManager:
                     intent = getattr(self, '_walkYearResignIntent', None) or {}
                     if not intent.get(getattr(p, 'id', None), False):
                         return False
-                if float(getattr(p, 'playerRating', 0) or 0) < float(ROOKIE_DRAFT_SUPERSTAR_RATING):
+                if float(getattr(p, 'playerRating', 0) or 0) < float(minRating):
                     return False
                 classify = getattr(brain, 'classifyArc', None)
                 if callable(classify):
@@ -4638,6 +4644,29 @@ class PlayerManager:
                 locked.add(pos)
         return locked
 
+    def preferClearNeed(self, brain, team, pool, pick):
+        """The pick, or a rookie of comparable upside at a position of clear need when
+        the pick would sit behind a star the team is keeping (owner, 2026-11-04; see
+        `ROOKIE_DRAFT_STAR_RATING`). Applied after the normal choice at every slot, so a
+        top pick and a need pick obey the same rule."""
+        if pick is None:
+            return pick
+        from constants import (ROOKIE_DRAFT_STAR_RATING, ROOKIE_DRAFT_CLEAR_NEED_RATING,
+                               ROOKIE_DRAFT_NEED_CEILING_GAP)
+        if pick.position not in self.keptStarPositions(brain, team, ROOKIE_DRAFT_STAR_RATING):
+            return pick
+        floor = self.rookieCeiling(brain, team, pick) - float(ROOKIE_DRAFT_NEED_CEILING_GAP)
+        options = [r for r in pool
+                   if r is not pick and r.position != FloosPlayer.Position.K
+                   and r.position != pick.position
+                   and self.rookieCeiling(brain, team, r) >= floor
+                   and self._rookieNeedBar(brain, team, r) < float(ROOKIE_DRAFT_CLEAR_NEED_RATING)]
+        if not options:
+            return pick
+        return max(options, key=lambda r: (
+            self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
+            -self.countTeamProspectsAtPosition(team, r.position)))
+
     def bpaChoice(self, brain, team, eligible):
         """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
         club's own board, whatever the position or need (owner, 2026-10-01), kickers
@@ -4647,9 +4676,10 @@ class PlayerManager:
         pool = [r for r in eligible if r.position != FloosPlayer.Position.K] or eligible
         if not pool:
             return None
-        return max(pool, key=lambda r: (
+        pick = max(pool, key=lambda r: (
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
+        return self.preferClearNeed(brain, team, pool, pick)
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.
@@ -5096,6 +5126,7 @@ class PlayerManager:
                     self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
                     self.rookieCeiling(brain, team, r),
                     -self.countTeamProspectsAtPosition(team, r.position)))
+                pick = self.preferClearNeed(brain, team, eligible, pick)
             available.remove(pick)
 
             pick.is_prospect = True

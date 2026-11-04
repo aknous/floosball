@@ -99,6 +99,8 @@ class Harness:
     rookieCeiling = PlayerManager.rookieCeiling
     bpaChoice = PlayerManager.bpaChoice
     superstarLockedPositions = PlayerManager.superstarLockedPositions
+    keptStarPositions = PlayerManager.keptStarPositions
+    preferClearNeed = PlayerManager.preferClearNeed
     rookieBoardValue = PlayerManager.rookieBoardValue
     rookieNeedValue = PlayerManager.rookieNeedValue
     _rookieNeedBar = PlayerManager._rookieNeedBar
@@ -356,6 +358,30 @@ def test_a_walk_year_star_the_team_will_re_sign_still_locks_the_position():
         first = next(e for e in events if e['type'] == 'pick')
         assert first['playerName'] == expected, (keep, first)
     print("PASS a walk-year star locks the position only if he will be re-signed")
+
+
+def _clearNeedDraft(needCeiling, starRating=88, needStarter=70):
+    """One pick: the best available is a 95-ceiling QB behind a kept QB rated
+    `starRating`; the team's RB starts at `needStarter`; an RB with `needCeiling`."""
+    rookies = [FakePlayer(1, 80, Position.QB, 'Best QB'),
+               FakePlayer(2, 75, Position.RB, 'Need RB')]
+    ceilings = {'Best QB': 95, 'Need RB': needCeiling}
+    rb = _star(rating=needStarter, position=Position.RB, name='Weak RB')
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'qb': _star(rating=starRating), 'rb': rb}
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    return next(e for e in events if e['type'] == 'pick')['playerName']
+
+
+def test_a_top_pick_takes_comparable_upside_at_a_clear_need():
+    """Owner, 2026-11-04: behind a kept 4-star QB, with a 2-star RB, the #1 pick takes
+    an RB of comparable upside over the best available QB, unless he is far below."""
+    assert _clearNeedDraft(92) == 'Need RB'      # 3 points below: comparable
+    assert _clearNeedDraft(91) == 'Need RB'      # the edge of the gap
+    assert _clearNeedDraft(88) == 'Best QB'      # 7 below: too far
+    assert _clearNeedDraft(92, starRating=80) == 'Best QB'   # the QB is no star
+    assert _clearNeedDraft(92, needStarter=78) == 'Best QB'  # a 3-star RB is no clear need
+    print("PASS a clear need with comparable upside beats the best available")
 
 
 def test_one_superstar_receiver_does_not_lock_the_position():

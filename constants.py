@@ -3106,6 +3106,18 @@ ROOKIE_DRAFT_NEED_FULL_SLOT = 8
 # player rated at least this (the 5-star line) who is not past his longevity, not
 # retiring and has more than one season left (`playerManager.superstarLockedPositions`).
 ROOKIE_DRAFT_SUPERSTAR_RATING = 92
+# ⚠️ A CLEAR NEED BEATS THE BEST PLAYER AVAILABLE WHEN THE UPSIDE IS COMPARABLE (owner,
+# 2026-11-04). When the pick a team would make plays behind a STAR it is keeping (rated
+# at least the first line, the 4-star line, same rules as the superstar lock) and a
+# rookie within `ROOKIE_DRAFT_NEED_CEILING_GAP` ceiling points of him plays a position of
+# CLEAR NEED (what he must beat there, `_rookieNeedBar`, is under the second line, the
+# 3-star line, i.e. a starter of 2 stars or below, an open or departing slot, and no
+# better prospect in the pipeline), the team takes the best of those instead. The gap
+# is half a star tier, the "roughly matches" gap the promotion rules use
+# (`FO_PROSPECT_LAST_WINDOW_TODAY_GAP`). Kickers never take a pick this way.
+ROOKIE_DRAFT_STAR_RATING = 84
+ROOKIE_DRAFT_CLEAR_NEED_RATING = 76
+ROOKIE_DRAFT_NEED_CEILING_GAP = 4.0
 
 
 def rookieDraftEnabled() -> bool:
