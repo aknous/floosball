@@ -9083,10 +9083,13 @@ def _ratingsByPlayerId() -> dict:
 def _withContractInfo(assets, playersById, pickOutlooks=None) -> list:
     """Trade-vote assets with what a voter needs to judge them (owner, 2026-11-04: fans
     were frustrated by trades that sent away picks, not knowing what those picks were
-    likely to become). A roster player gets seasons left, his career stage (the profile's
-    `computeCareerStage`) and the rating he is expected to carry next season; a prospect
-    his public projected range and the seasons he has left to make the roster; a pick what
-    it is likely to fetch (`_pickOutlooks`). Current values, like the ratings: an open vote
+    likely to become). Every piece carries `expectedRating`, what it can be expected to be,
+    which the card shows as stars (owner, 2026-11-04): a roster player's next-season rating
+    (his projected settling point while still developing), a prospect's projected rating, a
+    pick's `outlook.expected`. Behind the card's Why?: a roster player's seasons left,
+    career stage (the profile's `computeCareerStage`) and next season; a prospect's range
+    and the seasons left to make the roster; what a pick is likely to fetch
+    (`_pickOutlooks`). Current values, like the ratings: an open vote
     is about the players as they are now."""
     pm = floosball_app.playerManager if floosball_app else None
     for a in assets:
@@ -9094,14 +9097,20 @@ def _withContractInfo(assets, playersById, pickOutlooks=None) -> list:
             outlook = (pickOutlooks or {}).get(a.get('id'))
             if outlook:
                 a['outlook'] = outlook
+                if outlook.get('expected') is not None:
+                    a['expectedRating'] = outlook['expected']
             continue
         player = (playersById or {}).get(a.get('id')) if a.get('kind') in ('player', 'prospect') else None
         if player is None:
             continue
+        pos = getattr(getattr(player, 'position', None), 'name', None)
+        if pos:
+            a['position'] = pos
         if a.get('kind') == 'prospect' or getattr(player, 'is_prospect', False):
             proj = _prospectProjection(player)
             if proj:
                 a['projection'] = {"low": proj["low"], "high": proj["high"]}
+                a['expectedRating'] = proj["expected"]
             from constants import PROSPECT_DEVELOPMENT_WINDOW
             left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
             a['windowLeft'] = max(0, left)
@@ -9124,6 +9133,9 @@ def _withContractInfo(assets, playersById, pickOutlooks=None) -> list:
             proj = _prospectProjection(player)
             if proj and proj["high"] > proj["low"]:
                 a['projection'] = {"low": proj["low"], "high": proj["high"]}
+                a['expectedRating'] = proj["expected"]
+        if 'expectedRating' not in a and a.get('nextSeason') is not None:
+            a['expectedRating'] = a['nextSeason']
     return assets
 
 
@@ -9200,6 +9212,15 @@ def _pickOutlooks(session, trades, season: int) -> dict:
         typical = _pickTypical(expected)
         if typical:
             entry["typical"] = typical
+        # ⚠️ ONE MEASURE FOR BOTH: the consensus projection at that slot, the real class's
+        # where it exists, else an average class's (`PICK_CONSENSUS_BY_SLOT`). The typical
+        # outcome reads higher and made every future pick look better than this year's.
+        from constants import PICK_CONSENSUS_BY_SLOT
+        if entry.get("classProspect"):
+            entry["expected"] = entry["classProspect"]["expected"]
+        else:
+            k = min(len(PICK_CONSENSUS_BY_SLOT), max(1, int(round(expected))))
+            entry["expected"] = PICK_CONSENSUS_BY_SLOT[k - 1]
         out[pid] = entry
     return out
 

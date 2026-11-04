@@ -82,6 +82,7 @@ def test_anUpcomingPickShowsItsSlotAndTheProspectThere():
     # The 5th best prospect by consensus: 90, 89, 88, 87, 86.
     assert o['classProspect']['rank'] == 5 and o['classProspect']['expected'] == 86.0
     assert o['typical']['band'] == [4, 8]
+    assert o['expected'] == 86.0, "the class prospect there, not the generic table"
 
 
 def test_aLaterPickIsExpectedNearerTheMiddleAndHasNoClassYet():
@@ -94,6 +95,9 @@ def test_aLaterPickIsExpectedNearerTheMiddleAndHasNoClassYet():
     assert o['draftsOut'] == 1 and 'slot' not in o and 'classProspect' not in o
     assert 16 < o['expectedSlot'] < 30
     assert o['typical']['band'][0] <= o['expectedSlot'] <= o['typical']['band'][1]
+    import constants
+    assert o['expected'] == constants.PICK_CONSENSUS_BY_SLOT[o['expectedSlot'] - 1], \
+        "the same measure an upcoming pick uses, not the typical outcome"
 
 
 def test_aRosterPlayerCarriesHisCareerStageAndNextSeason():
@@ -107,6 +111,7 @@ def test_aRosterPlayerCarriesHisCareerStageAndNextSeason():
         api.floosball_app.playerManager = SimpleNamespace(activePlayers=[])
     assert (a['careerStage'], a['nextSeason'], a['termRemaining'], a['seasonsPlayed']) == \
         ('aging', 77, 2, 9)
+    assert a['expectedRating'] == 77, "a veteran is expected at next season's rating"
     assert 'projection' not in a
 
 
@@ -116,3 +121,4 @@ def test_aProspectCarriesHisWindow():
     a = api._withContractInfo([{'kind': 'prospect', 'id': 8}], {8: prospect})[0]
     assert a['projection'] == {'low': 70.0, 'high': 84.0}
     assert a['windowLeft'] == 1
+    assert a['expectedRating'] == 76.0

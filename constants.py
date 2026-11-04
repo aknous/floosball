@@ -4186,6 +4186,16 @@ TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
 # so it ignores position value and need, and it reads the best rating reached rather than a
 # roster spot. Re-measure whenever prospect generation, development or the class size moves:
 #   .venv/bin/python prospect_redraft_check.py --classes 100 --quick --by-slot --seed 1
+# The public consensus projection of the prospect at each slot (index 0 = pick 1), averaged
+# over generated 48-player classes, for a trade vote's star column on a pick whose class does
+# not exist yet. ⚠️ THE SAME MEASURE AS AN UPCOMING PICK'S STARS (the real class prospect's
+# consensus projection), so a future pick and this year's pick at one slot read alike;
+# PICK_OUTCOME_BY_SLOT's best-rating-reached runs a few points higher and would make every
+# future pick look better than the current draft (owner review, 2026-11-04). Re-measure with:
+#   .venv/bin/python prospect_redraft_check.py --consensus-by-slot --classes 200 --seed 1
+PICK_CONSENSUS_BY_SLOT = (93, 90, 89, 88, 87, 86, 85, 84, 84, 83, 83, 82, 82, 81, 81, 80,
+                          80, 79, 79, 78, 78, 77, 77, 77, 76, 76, 75, 75, 75, 74, 74, 73)
+
 PICK_OUTCOME_BY_SLOT = (
     ((1, 3), 92, 1.00, 0.99),
     ((4, 8), 87, 1.00, 0.85),

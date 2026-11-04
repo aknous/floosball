@@ -154,12 +154,24 @@ def main():
     ap.add_argument('--off', action='store_true', help='the old model: no hidden talent, no luck, one per team')
     ap.add_argument('--quick', action='store_true', help='average environment only')
     ap.add_argument('--seed', type=int, default=None)
+    ap.add_argument('--consensus-by-slot', action='store_true',
+                    help='the consensus projection at each class rank (no development)')
     ap.add_argument('--by-slot', action='store_true',
                     help='what each slot band became (median best rating, 3- and 4-star shares)')
     args = ap.parse_args()
     if args.seed is not None:
         random.seed(args.seed)
         np.random.seed(args.seed)
+    if args.consensus_by_slot:
+        pm = makeManager(args.teams)
+        ranks = [[] for _ in range(args.teams)]
+        for _ in range(args.classes):
+            mids = sorted((p.projectionRange(0)[1] for p in pm._generateRookieClass(1)),
+                          reverse=True)
+            for k in range(args.teams):
+                ranks[k].append(mids[k])
+        print(tuple(round(float(np.mean(r))) for r in ranks))
+        return
     res = run(args)
     keys = list(NFL)
     print(f"{'':28s}" + ''.join(f"{k[:16]:>18s}" for k in keys))
