@@ -13,6 +13,7 @@ top-5 picks fall below 16th, rank correlation 0.56, 6.4 slots moved on average.
 
     .venv/bin/python prospect_redraft_check.py --classes 40
     .venv/bin/python prospect_redraft_check.py --classes 40 --off     # the old model
+    .venv/bin/python prospect_redraft_check.py --classes 100 --quick --by-slot   # what picks become
 
 ⚠️ Boards here rank by rating alone, not position value, so this measures how predictable
 a prospect is, not how a real team drafts. Development runs under one environment per arm
@@ -93,6 +94,24 @@ def redraftStats(classes):
                 rank_corr=np.nanmean(rho), slots_moved=np.mean(moved))
 
 
+# Slot bands for --by-slot: the top three, the rest of the top eight, the middle, the back
+# two eighths. 3 stars is the line the front office re-signs at, 4 stars a rising star.
+SLOT_BANDS = ((1, 3), (4, 8), (9, 16), (17, 24), (25, 32))
+
+
+def slotOutcomes(classes):
+    """What each slot band became: (band, n, median best, share 3+ stars, share 4+ stars)."""
+    out = []
+    for lo, hi in SLOT_BANDS:
+        vals = [c[k - 1] for c in classes for k in range(lo, hi + 1) if k <= len(c)]
+        if not vals:
+            continue
+        out.append(((lo, hi), len(vals), float(np.median(vals)),
+                    float(np.mean([v >= constants.FO_RESIGN_MIN_RATING for v in vals])),
+                    float(np.mean([v >= constants.TRADE_RISING_STAR_RATING for v in vals]))))
+    return out
+
+
 def run(args):
     if args.off:
         constants.PROSPECT_TALENT_SHIFT_ENABLED = False
@@ -120,6 +139,7 @@ def run(args):
                     undrafted = ranked[args.teams:]
                     missed.append(sum(1 for p in undrafted if best[id(p)] > cut))
         results[envName] = {b: redraftStats(v) for b, v in perBoard.items()}
+        results[envName]['_bySlot'] = {b: slotOutcomes(v) for b, v in perBoard.items()}
         results[envName]['_extra'] = dict(
             mean_best=np.mean(finals), undrafted_better_than_32nd=np.mean(missed),
             shift_sd=np.std(shifts))
@@ -134,6 +154,8 @@ def main():
     ap.add_argument('--off', action='store_true', help='the old model: no hidden talent, no luck, one per team')
     ap.add_argument('--quick', action='store_true', help='average environment only')
     ap.add_argument('--seed', type=int, default=None)
+    ap.add_argument('--by-slot', action='store_true',
+                    help='what each slot band became (median best rating, 3- and 4-star shares)')
     args = ap.parse_args()
     if args.seed is not None:
         random.seed(args.seed)
@@ -144,13 +166,19 @@ def main():
     print(f"{'NFL reference':28s}" + ''.join(f"{NFL[k]:>18.2f}" for k in keys))
     for env, rows in res.items():
         for b, st in rows.items():
-            if b == '_extra':
+            if b in ('_extra', '_bySlot'):
                 continue
             print(f"{(env + ' / ' + b):28s}" + ''.join(f"{st[k]:>18.2f}" for k in keys))
         ex = rows['_extra']
         print(f"  {env}: mean best rating {ex['mean_best']:.1f}, undrafted who beat the "
               f"32nd-best drafted {ex['undrafted_better_than_32nd']:.1f}/class, "
               f"talent shift sd {ex['shift_sd']:.1f}")
+        if args.by_slot:
+            for b, bands in rows['_bySlot'].items():
+                print(f"  {env} / {b}: best rating within {args.seasons} seasons, by draft slot")
+                for (lo, hi), n, med, three, four in bands:
+                    print(f"    picks {lo:2d}-{hi:2d}  n={n:4d}  median {med:5.1f}  "
+                          f"3+ stars {three:4.0%}  4+ stars {four:4.0%}")
 
 
 if __name__ == '__main__':

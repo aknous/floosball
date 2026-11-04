@@ -4175,13 +4175,32 @@ TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 # gap with.
 TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
 
+# What a pick in each slot band typically becomes, shown to fans on trade votes (owner,
+# 2026-11-04: fans could not tell what a traded pick was worth). Rows are
+# ((first, last), median best rating, share reaching 3 stars, share reaching 4 stars): the
+# best rating a drafted player reaches within five seasons. MEASURED on the CURRENT prospect
+# model, not the league's own drafts, which ran under the old one (owner): 200 generated
+# 48-player classes, drafted 32 deep off an average scout's board (vision 0.5; the league
+# averages ~0.6) and developed in the league's average environment (coach development 83,
+# Training Facility level 3; prod season 11: 82.8 and 2.9). ⚠️ It drafts on rating alone,
+# so it ignores position value and need, and it reads the best rating reached rather than a
+# roster spot. Re-measure whenever prospect generation, development or the class size moves:
+#   .venv/bin/python prospect_redraft_check.py --classes 100 --quick --by-slot --seed 1
+PICK_OUTCOME_BY_SLOT = (
+    ((1, 3), 92, 1.00, 0.99),
+    ((4, 8), 87, 1.00, 0.85),
+    ((9, 16), 84, 0.98, 0.51),
+    ((17, 24), 80, 0.86, 0.13),
+    ((25, 32), 76, 0.57, 0.03),
+)
+
 # ⚠️ NOBODY USED TO WATCH THE CUPBOARD (owner, 2026-11-03: "there should be some decisions to
 # rebuild pick supply"). A team is SHORT when it holds no pick in any of the next
 # TRADE_PICK_SHORT_DRAFTS drafts (the drafts still to be held, so after the draft has run the
 # window starts next season). A short team values picks in that window at
 # 1 + TRADE_PICK_SCARCITY_PREMIUM, both its own (it stops paying with its last picks) and the
-# ones it is offered, and a short team that is not contending lists a player it does not need
-# for a return that must include one (`pick_restock`). The premium is an explicit front-office
+# ones it is offered, and a short team lists a player it does not need for a return that must
+# include one (`pick_restock`; a contender only in the offseason). The premium is an explicit front-office
 # convention, not a derivation: a team with no draft access for two seasons wants it back.
 TRADE_PICK_SHORT_DRAFTS = 2
 TRADE_PICK_SCARCITY_PREMIUM = 0.5

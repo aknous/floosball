@@ -850,6 +850,17 @@ class TradeMarket:
             self._draftWindow = list(range(first, first + int(TRADE_PICK_SHORT_DRAFTS)))
         return self._draftWindow
 
+    def _hasWindowRows(self) -> bool:
+        """Are there pick rows in the draft window at all?
+
+        ⚠️ READ THROUGH HERE, NEVER `_windowHasPicks` DIRECTLY. The flag is only set when
+        `_draftWindowSeasons` first runs, and every reader tested it BEFORE anything had
+        called that, so it read False and the whole pick cupboard (the premium, the
+        emptied-window cost and the restock listing) never switched on outside the tests,
+        which set the flag by hand (found 2026-11-04)."""
+        self._draftWindowSeasons()
+        return self._windowHasPicks
+
     def _windowPickIds(self, team) -> set:
         """Ids of the picks this team holds in the next TRADE_PICK_SHORT_DRAFTS drafts.
         Empty when the window has no pick rows at all (see `_draftWindowSeasons`), which
@@ -863,14 +874,14 @@ class TradeMarket:
 
     def isShortOfPicks(self, team) -> bool:
         """Holds no pick in any of the next TRADE_PICK_SHORT_DRAFTS drafts."""
-        return self._windowHasPicks and not self._windowPickIds(team)
+        return self._hasWindowRows() and not self._windowPickIds(team)
 
     def _scarcityFor(self, team, pick) -> float:
         """The premium a SHORT team puts on a window pick it is offered: it gets it back
         into the draft. A team's own picks are priced in `_assemble`, which sees the whole
         bundle (`_lastWindowPickPremium`)."""
         from constants import TRADE_PICK_SCARCITY_PREMIUM, TRADE_PICK_RESTOCK_ENABLED
-        if not TRADE_PICK_RESTOCK_ENABLED or not self._windowHasPicks:
+        if not TRADE_PICK_RESTOCK_ENABLED or not self._hasWindowRows():
             return 1.0
         if int(pick.get('season', 0)) not in self._draftWindowSeasons():
             return 1.0
@@ -888,7 +899,7 @@ class TradeMarket:
         picks in one trade-up, and each looked safe alone because the other was still held
         (measured, 2026-11-03: a per-pick premium changed nothing)."""
         from constants import TRADE_PICK_SCARCITY_PREMIUM, TRADE_PICK_RESTOCK_ENABLED
-        if not TRADE_PICK_RESTOCK_ENABLED or not self._windowHasPicks:
+        if not TRADE_PICK_RESTOCK_ENABLED or not self._hasWindowRows():
             return 0.0
         held = self._windowPickIds(buyer)
         if not held or not held <= {p['id'] for p in pieces if p['kind'] == 'pick'}:
@@ -901,8 +912,14 @@ class TradeMarket:
         return cheapest * TRADE_PICK_SCARCITY_PREMIUM
 
     def _restockListing(self, team, taken: set):
-        """A short team that is not contending puts a player it does not need on the
-        block for a return that must include a pick (`pick_restock`).
+        """A short team puts a player it does not need on the block for a return that must
+        include a pick (`pick_restock`).
+
+        ⚠️ A CONTENDER ONLY IN THE OFFSEASON (owner, 2026-11-04). Short teams are nearly
+        always contenders that spent picks moving up (12 of 13 at listing time, measured
+        2026-11-03), so a non-contender-only listing almost never fired. In season a
+        contender selling a starter costs it games; in the offseason the FA draft fills the
+        slot before a game is played.
 
         ⚠️ A VETERAN, NOT ITS BEST PLAYER. A team going nowhere prices a prime player's
         later seasons high (`laterWeight`), so listing the one that fetches most listed the
@@ -913,7 +930,9 @@ class TradeMarket:
         that is who a buyer upgrades with."""
         from constants import TRADE_PICK_RESTOCK_ENABLED
         from managers.frontOfficeBrain import ARC_DEVELOPING, ARC_REGRESSING
-        if not TRADE_PICK_RESTOCK_ENABLED or self.isContending(team) or not self.isShortOfPicks(team):
+        if not TRADE_PICK_RESTOCK_ENABLED or not self.isShortOfPicks(team):
+            return None
+        if self.week is not None and self.isContending(team):
             return None
         core = self._coreOf(team)
         best = None
@@ -1574,9 +1593,10 @@ class TradeMarket:
                    f"aging out before that contract ends, so the team would rather have "
                    f"the help while it is still winning.")
         elif trigger == 'pick_restock':
-            why = (f"The team has no pick in either of the next two drafts and is not "
-                   f"contending, so {name} is available for a return that gets it back "
-                   f"into the draft.")
+            why = (f"The team has no pick in either of the next two drafts, so {name} is "
+                   f"available for a return that gets it back into the draft.")
+            if self.week is None and self.isContending(team):
+                why += " The free agent draft can fill the slot before the season starts."
         elif trigger == 'inquiry':
             why = f"Nobody put {name} on the block. Another team called and asked."
         else:

@@ -95,12 +95,13 @@ async def main(seasons, treasury):
         try:
             if self.hasClarity() and self.isShortOfPicks(team):
                 why = shape.setdefault('restockGate', Counter())
+                phase = 'offseason' if self.week is None else 'in season'
                 if any(l.trigger == 'pick_restock' for l in out):
-                    why['posted'] += 1
-                elif self.isContending(team):
-                    why['contending'] += 1
+                    why[f'{phase}: posted'] += 1
+                elif self.week is not None and self.isContending(team):
+                    why[f'{phase}: contending'] += 1
                 else:
-                    why['no veteran to sell'] += 1
+                    why[f'{phase}: no veteran to sell'] += 1
         except Exception as e:
             shape.setdefault('restockGate', Counter())[f'probe error: {e!r}'[:80]] += 1
         return out
@@ -497,6 +498,10 @@ async def main(seasons, treasury):
                 (sum(len(_mkt.picksOwnedBy(t)) for t in tm.teams),
                  sum(len(getattr(t, 'prospects', None) or []) for t in tm.teams)))
             # The pick cupboard at season start: no pick in either draft after this season's.
+            # ⚠️ SEED THE ROWS FIRST. The pick two drafts out is created by the first trade
+            # pass, so without this a team that traded next year's pick reads short here and
+            # is not by the time anyone trades (idempotent; the pass would seed them anyway).
+            sm._ensureDraftPicks(season)
             _window = {season + 1, season + 2}
             _short = [t.name for t in tm.teams
                       if not any(int(p['season']) in _window for p in _mkt.picksOwnedBy(t))]
@@ -657,6 +662,24 @@ async def main(seasons, treasury):
         print(f"\n    assets by kind: {dict(kinds)}")
         withPieces = sum(1 for r in rows if (r.assets_json or {}).get('bGave'))
         print(f"    trades where the buyer gave something back: {withPieces}/{len(rows)}")
+        # ⚠️ THE CUPBOARD'S REAL COST IS A DRAFT SAT OUT. "Short" at a moment heals itself:
+        # every season creates a new pick two drafts out for each team. What a fan loses is
+        # a draft where the team had no pick, read here off the used pick rows.
+        from database.models import DraftPick
+        used = session.query(DraftPick.season, DraftPick.current_owner_id).filter(
+            DraftPick.used == True).all()                                  # noqa: E712
+        byDraft = {}
+        for dSeason, owner in used:
+            byDraft.setdefault(dSeason, Counter())[owner] += 1
+        teamIds = [t.id for t in tm.teams]
+        satOut = {d: sum(1 for tid in teamIds if c.get(tid, 0) == 0)
+                  for d, c in sorted(byDraft.items())}
+        multi = {d: sum(1 for tid in teamIds if c.get(tid, 0) >= 2)
+                 for d, c in sorted(byDraft.items())}
+        print(f"\n  ── drafts sat out (no pick that draft) ──")
+        print(f"    teams with no pick, by draft: {satOut}")
+        print(f"    teams with two or more picks, by draft: {multi}")
+        print(f"    total team-drafts sat out: {sum(satOut.values())}")
     finally:
         session.close()
 
@@ -689,10 +712,10 @@ async def main(seasons, treasury):
         print(f"    {onTwo[:3]}")
 
     import json
-    with open('/tmp/trade_ledger.json', 'w') as fh:
+    with open(os.environ.get('TRADE_LEDGER', '/tmp/trade_ledger.json'), 'w') as fh:
         json.dump(shape.get('ledger', []), fh, indent=1)
     print(f"\n  wrote {len(shape.get('ledger', []))} detailed trade records to "
-          f"/tmp/trade_ledger.json")
+          f"{os.environ.get('TRADE_LEDGER', '/tmp/trade_ledger.json')}")
 
     print(f"\n  ── who replaced the SOLD player? ──")
     for kind, count in shape['backfillKind'].most_common():

@@ -9080,32 +9080,136 @@ def _ratingsByPlayerId() -> dict:
     return out
 
 
-def _withContractInfo(assets, playersById) -> list:
-    """Trade-vote assets with what a voter needs to judge them: seasons left on a
-    player's contract, and a prospect's public projected range (`_prospectProjection`).
-    Current values, like the ratings: an open vote is about the players as they are now."""
-    if not playersById:
-        return assets
+def _withContractInfo(assets, playersById, pickOutlooks=None) -> list:
+    """Trade-vote assets with what a voter needs to judge them (owner, 2026-11-04: fans
+    were frustrated by trades that sent away picks, not knowing what those picks were
+    likely to become). A roster player gets seasons left, his career stage (the profile's
+    `computeCareerStage`) and the rating he is expected to carry next season; a prospect
+    his public projected range and the seasons he has left to make the roster; a pick what
+    it is likely to fetch (`_pickOutlooks`). Current values, like the ratings: an open vote
+    is about the players as they are now."""
+    pm = floosball_app.playerManager if floosball_app else None
     for a in assets:
-        player = playersById.get(a.get('id')) if a.get('kind') in ('player', 'prospect') else None
+        if a.get('kind') == 'pick':
+            outlook = (pickOutlooks or {}).get(a.get('id'))
+            if outlook:
+                a['outlook'] = outlook
+            continue
+        player = (playersById or {}).get(a.get('id')) if a.get('kind') in ('player', 'prospect') else None
         if player is None:
             continue
         if a.get('kind') == 'prospect' or getattr(player, 'is_prospect', False):
             proj = _prospectProjection(player)
             if proj:
                 a['projection'] = {"low": proj["low"], "high": proj["high"]}
-        else:
-            term = getattr(player, 'termRemaining', None)
-            if term is not None:
-                a['termRemaining'] = int(term)
+            from constants import PROSPECT_DEVELOPMENT_WINDOW
+            left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
+            a['windowLeft'] = max(0, left)
+            continue
+        term = getattr(player, 'termRemaining', None)
+        if term is not None:
+            a['termRemaining'] = int(term)
+        a['seasonsPlayed'] = int(getattr(player, 'seasonsPlayed', 0) or 0)
+        try:
+            if pm is not None:
+                a['careerStage'] = pm.computeCareerStage(player)
+        except Exception:
+            pass
+        try:
+            from constants import DEV_LUCK_NEUTRAL_BIAS
+            a['nextSeason'] = int(player.computeNextSeasonRating(int(round(DEV_LUCK_NEUTRAL_BIAS))))
+        except Exception:
+            pass
+        if a.get('careerStage') == 'developing':
+            proj = _prospectProjection(player)
+            if proj and proj["high"] > proj["low"]:
+                a['projection'] = {"low": proj["low"], "high": proj["high"]}
     return assets
+
+
+def _pickTypical(slot: float):
+    """What a pick around this slot typically becomes (`PICK_OUTCOME_BY_SLOT`), or None."""
+    from constants import PICK_OUTCOME_BY_SLOT
+    k = int(round(slot))
+    for (lo, hi), median, three, four in PICK_OUTCOME_BY_SLOT:
+        if lo <= k <= hi:
+            return {"band": [lo, hi], "medianBest": median,
+                    "threeStarShare": three, "fourStarShare": four}
+    return None
+
+
+def _pickOutlooks(session, trades, season: int) -> dict:
+    """{pickId: what a voter needs to judge the pick} for every pick in these trades.
+
+    {draftSeason, draftsOut, slot, slotFinal, expectedSlot, classProspect, typical}:
+    a pick in the upcoming draft (`draftsOut` 0) carries the original team's slot in the
+    draft order (`_rookieDraftOrder`) and the class prospect at that rank by the public
+    consensus, which is roughly who is there. A later pick carries the slot it is expected
+    to land at (`trading.expectedPickSlot`, the market's own regression of today's
+    standing toward the middle), since its class does not exist yet. Both carry what a pick
+    around that slot typically becomes on the current prospect model (`_pickTypical`).
+    ⚠️ NOT the league's own drafts: those ran under the prospect model before hidden talent
+    and the 48-player class (owner, 2026-11-04)."""
+    import trading
+    from database.models import DraftPick
+    ids = {a.get('id') for t in trades for side in ('aGave', 'bGave')
+           for a in ((t.assets_json or {}).get(side) or [])
+           if a.get('kind') == 'pick' and a.get('id') is not None}
+    if not ids:
+        return {}
+    try:
+        picks = session.query(DraftPick.id, DraftPick.season, DraftPick.original_team_id).filter(
+            DraftPick.id.in_(ids)).all()
+    except Exception:
+        return {}
+    try:
+        order, final, _ = _rookieDraftOrder()
+    except Exception:
+        order, final = [], False
+    n = len(order) or 32
+    pm = floosball_app.playerManager if floosball_app else None
+    klass = None
+    out = {}
+    for pid, pickSeason, orig in picks:
+        draftsOut = int(pickSeason or 0) - int(season or 0)
+        slotNow = (order.index(orig) + 1) if orig in order else None
+        entry = {"draftSeason": pickSeason, "draftsOut": draftsOut}
+        if slotNow is None:
+            out[pid] = entry
+            continue
+        if draftsOut <= 0:
+            entry["slot"] = slotNow
+            entry["slotFinal"] = bool(final)
+            expected = float(slotNow)
+            if klass is None:
+                klass = []
+                for p in (getattr(pm, 'activePlayers', None) or []):
+                    if getattr(p, 'is_upcoming_rookie', False):
+                        proj = _prospectProjection(p)
+                        if proj:
+                            klass.append((proj["expected"], proj, p))
+                klass.sort(key=lambda x: -x[0])
+            if klass:
+                _, proj, p = klass[min(slotNow, len(klass)) - 1]
+                entry["classProspect"] = {
+                    "rank": min(slotNow, len(klass)), "classSize": len(klass),
+                    "expected": proj["expected"], "low": proj["low"], "high": proj["high"]}
+        else:
+            expected = trading.expectedPickSlot(slotNow, draftsOut, n)
+            entry["expectedSlot"] = int(round(expected))
+        typical = _pickTypical(expected)
+        if typical:
+            entry["typical"] = typical
+        out[pid] = entry
+    return out
 
 
 class _TradeVoteRequest(BaseModel):
     approve: Optional[bool] = None      # True yes, False no, None withdraws the vote
 
 
-def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes, playersById=None) -> dict:
+def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes, playersById=None,
+                  pickOutlooks=None) -> dict:
     """One trade proposal for the Transactions page: what each side gives, why, when the
     vote closes, the tally against the rule and the caller's own vote."""
     from managers import tradeVotes
@@ -9126,9 +9230,11 @@ def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes, player
         "resolvedAt": _utcIso(p.resolved_at), "tradeId": p.trade_id,
         "teamA": teamBlob(p.team_a_id), "teamB": teamBlob(p.team_b_id),
         "aGave": _withContractInfo(
-            _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins), playersById),
+            _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins), playersById,
+            pickOutlooks),
         "bGave": _withContractInfo(
-            _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins), playersById),
+            _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins), playersById,
+            pickOutlooks),
         "trigger": lj.get('trigger'), "sellerWhy": lj.get('why'), "buyerWhy": bj.get('why'),
         "tally": {"yes": v.get('yes', 0), "no": v.get('no', 0),
                   "passing": bool(v.get('passed')), "reason": v.get('reason'),
@@ -9184,8 +9290,11 @@ def get_trade_votes(response: Response, user: Optional[_User] = Depends(_getOpti
         pm = floosball_app.playerManager
         playersById = {getattr(pl, 'id', None): pl
                        for pl in (getattr(pm, 'activePlayers', None) or [])}
+        # Only an open vote is about the pick as it stands; a closed one's draft has moved on.
+        pickOutlooks = _pickOutlooks(
+            session, [r for r in rows if r.status == tradeVotes.OPEN], season)
         out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes,
-                             playersById)
+                             playersById, pickOutlooks if r.status == tradeVotes.OPEN else None)
                for r in rows if r.status != tradeVotes.EXPIRED]
         return build_success_response({
             "open": [r for r in out if r["status"] == tradeVotes.OPEN],

@@ -157,6 +157,27 @@ def test_short_means_no_pick_in_the_next_two_drafts():
     assert not m.isShortOfPicks(stocked)
 
 
+def test_the_cupboard_loads_its_window_before_reading_it():
+    """The window flag is set by the first window read. Every reader used to test the flag
+    BEFORE that read, so outside the tests (which set it by hand) nobody was ever short."""
+    teams = [FakeTeam(1, 'Short', 6, 22), FakeTeam(2, 'Stocked', 20, 8)]
+    m = TradeMarket(MarketPlayerManager([]), FakeTeamManager(teams), StubBrain(), SEASON, None)
+    assert m._windowHasPicks is False and m._draftWindow is None
+
+    def load():
+        m._windowHasPicks = True        # what the DB read finds
+        m._draftWindow = [SEASON + 1, SEASON + 2]
+        return m._draftWindow
+    m._draftWindowSeasons = load
+    m.picksOwnedBy = lambda team: [] if team.id == 1 else [_pick(9, SEASON + 1, owner=2)]
+    assert m.isShortOfPicks(teams[0])
+    m2 = TradeMarket(MarketPlayerManager([]), FakeTeamManager(teams), StubBrain(), SEASON, None)
+    m2._draftWindowSeasons = lambda: (setattr(m2, '_windowHasPicks', True),
+                                      [SEASON + 1, SEASON + 2])[1]
+    m2.picksOwnedBy = lambda team: []
+    assert m2._scarcityFor(teams[0], _pick(9, SEASON + 1, owner=2)) > 1.0
+
+
 def test_a_short_team_prices_a_window_pick_at_the_premium():
     window, later = _pick(1, SEASON + 1, owner=2), _pick(2, SEASON, owner=2)
     m, (short, stocked) = _cupboard({2: [window, later, _pick(4, SEASON + 2, owner=2)]})
@@ -182,11 +203,30 @@ def test_a_short_team_going_nowhere_lists_a_player_for_a_pick():
     m.brain.classifyArc = lambda p: 'prime'
     listing = m._restockListing(short, set())
     assert listing is not None and listing.trigger == 'pick_restock' and listing.player is vet
-    # A contender or a stocked team does not.
+    # A stocked team does not.
     assert m._restockListing(stocked, set()) is None
     # Nor does it sell its future.
     m.brain.classifyArc = lambda p: 'developing'
     assert m._restockListing(short, set()) is None
+
+
+def test_a_short_contender_restocks_in_the_offseason_only():
+    """Short teams are nearly always contenders that spent picks moving up. In the
+    offseason the FA draft fills the slot, so a contender sells; in season it does not."""
+    def build(week):
+        m, (_, contender) = _cupboard({1: [_pick(5, SEASON + 1, owner=1)]}, week=week)
+        vet = FakePlayer(40, 82, Position.RB, termRemaining=2)
+        vet.team = contender
+        contender.rosterDict['rb'] = vet
+        m._coreOf = lambda team: set()
+        m.brain.classifyArc = lambda p: 'prime'
+        return m, contender, vet
+    m, contender, vet = build(None)
+    assert m.isContending(contender) and m.isShortOfPicks(contender)
+    listing = m._restockListing(contender, set())
+    assert listing is not None and listing.player is vet
+    m, contender, _ = build(20)
+    assert m.isContending(contender) and m._restockListing(contender, set()) is None
 
 
 def test_the_restock_pick_is_the_buyers_cheapest_window_pick():
