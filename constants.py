@@ -3099,6 +3099,13 @@ ROOKIE_DRAFT_ENABLED = True
 # washes out (prod: Hersh Pruitt #8 behind a 92 TE; SEA's two RBs behind an 84-88).
 ROOKIE_DRAFT_BPA_SLOTS = 2
 ROOKIE_DRAFT_NEED_FULL_SLOT = 8
+# ⚠️ NO PICK GOES TO A POSITION A SUPERSTAR HOLDS, NOT EVEN A TOP PICK (owner,
+# 2026-11-04: a top-3 team with a 5-star starter in his prime "and no plans to replace
+# them" should not draft there). A rookie behind him washes out unless he is traded, and
+# a trade may never come. A position is locked when every starting slot there holds a
+# player rated at least this (the 5-star line) who is not past his longevity, not
+# retiring and has more than one season left (`playerManager.superstarLockedPositions`).
+ROOKIE_DRAFT_SUPERSTAR_RATING = 92
 
 
 def rookieDraftEnabled() -> bool:

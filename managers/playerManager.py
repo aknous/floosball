@@ -4597,6 +4597,40 @@ class PlayerManager:
         17% of picks 9-32 landed behind a 4-star+ starter)."""
         return self.rookieCeiling(brain, team, rookie) - self._rookieNeedBar(brain, team, rookie)
 
+    def superstarLockedPositions(self, brain, team) -> set:
+        """Positions (Position enums) the draft skips for this team: every starting slot
+        there holds a superstar the team has no reason to replace (owner, 2026-11-04).
+        A superstar is rated at least `ROOKIE_DRAFT_SUPERSTAR_RATING` (the 5-star line),
+        not past his longevity (`classifyArc` regressing), not retiring, and with more
+        than one season left, so a walk-year star leaves the position open, as it does
+        in the need bar. WR has two slots, so it locks only when both hold one."""
+        from constants import ROOKIE_DRAFT_SUPERSTAR_RATING
+        from managers.frontOfficeBrain import ARC_REGRESSING
+        Position = FloosPlayer.Position
+        slotsByPos = {Position.QB: ['qb'], Position.RB: ['rb'], Position.WR: ['wr1', 'wr2'],
+                      Position.TE: ['te'], Position.K: ['k']}
+        roster = getattr(team, 'rosterDict', None) or {}
+        locked = set()
+        for pos, slots in slotsByPos.items():
+            def isSuperstar(p):
+                if p is None or getattr(p, 'willRetire', False):
+                    return False
+                if (getattr(p, 'termRemaining', 0) or 0) <= 1:
+                    return False
+                if float(getattr(p, 'playerRating', 0) or 0) < float(ROOKIE_DRAFT_SUPERSTAR_RATING):
+                    return False
+                classify = getattr(brain, 'classifyArc', None)
+                if callable(classify):
+                    try:
+                        if classify(p) == ARC_REGRESSING:
+                            return False
+                    except Exception:
+                        pass
+                return True
+            if all(isSuperstar(roster.get(s)) for s in slots):
+                locked.add(pos)
+        return locked
+
     def bpaChoice(self, brain, team, eligible):
         """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
         club's own board, whatever the position or need (owner, 2026-10-01), kickers
@@ -4636,7 +4670,9 @@ class PlayerManager:
             for owner in list(slotOwners or [])[:int(ROOKIE_DRAFT_BPA_SLOTS)]:
                 if not available:
                     break
-                eligible = [r for r in available if self.hasOpenProspectSlot(owner, r.position)]
+                locked = self.superstarLockedPositions(brain, owner)
+                eligible = [r for r in available if self.hasOpenProspectSlot(owner, r.position)
+                            and r.position not in locked]
                 pick = self.bpaChoice(brain, owner, eligible)
                 if pick is None:
                     continue
@@ -4732,7 +4768,9 @@ class PlayerManager:
             openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
                                              Position.TE, Position.K)
                              if self.hasOpenProspectSlot(team, pos)]
-            eligible = [r for r in available if r.position in openPositions]
+            locked = self.superstarLockedPositions(getattr(self, '_draftBrain', None), team)
+            eligible = [r for r in available
+                        if r.position in openPositions and r.position not in locked]
             if eligible:
                 candidates.append((team, eligible))
         if not candidates:
@@ -4970,7 +5008,12 @@ class PlayerManager:
             openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
                                              Position.TE, Position.K)
                              if self.hasOpenProspectSlot(team, pos)]
-            eligible = [r for r in available if r.position in openPositions]
+            # A position a superstar holds is not drafted at all, even by a top pick
+            # (owner, 2026-11-04). If nothing else is left the slot goes through the
+            # same trade-or-compensate path as a slot nobody can use.
+            locked = self.superstarLockedPositions(brain, team)
+            eligible = [r for r in available
+                        if r.position in openPositions and r.position not in locked]
             if not eligible:
                 reason = 'pipeline_full' if not openPositions else 'no_eligible_rookies'
                 # ⚠️ TRADE THE SLOT RATHER THAN BURN IT. A skipped pick is an asset

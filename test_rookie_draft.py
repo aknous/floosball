@@ -98,6 +98,7 @@ class Harness:
     payForfeitedSlot = PlayerManager.payForfeitedSlot
     rookieCeiling = PlayerManager.rookieCeiling
     bpaChoice = PlayerManager.bpaChoice
+    superstarLockedPositions = PlayerManager.superstarLockedPositions
     rookieBoardValue = PlayerManager.rookieBoardValue
     rookieNeedValue = PlayerManager.rookieNeedValue
     _rookieNeedBar = PlayerManager._rookieNeedBar
@@ -293,6 +294,88 @@ def test_a_walk_year_starter_is_a_hole_coming():
                                chooserRoster={'qb': starter}, teams=6)
     assert picks[5]['playerName'] == 'Better QB', picks[5]
     print("PASS a walk-year starter does not block the QB")
+
+
+def _star(rating=94, term=3, position=Position.QB, name='Star'):
+    p = FakePlayer(900 + rating, rating, position, name)
+    p.termRemaining = term
+    p.willRetire = False
+    return p
+
+
+def test_a_top_pick_skips_a_position_a_superstar_holds():
+    """Owner, 2026-11-04: a top pick does not draft behind a 5-star prime starter with
+    years left. He would wash out unless traded, and a trade may never come. Before this
+    the #1 pick took the 99-ceiling QB behind a 94 QB."""
+    rookies = [FakePlayer(1, 80, Position.QB, 'Ninety Nine QB'),
+               FakePlayer(2, 75, Position.WR, 'Ninety WR')]
+    ceilings = {'Ninety Nine QB': 99, 'Ninety WR': 90}
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'qb': _star()}
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    first = next(e for e in events if e['type'] == 'pick')
+    assert first['playerName'] == 'Ninety WR', first
+    print("PASS the #1 pick passes on the QB behind its 94 QB")
+
+
+def test_a_star_who_is_leaving_or_fading_does_not_lock_the_position():
+    """A walk-year star, a retiring one, one past his longevity, or a 4-star leaves the
+    position open, so the best available is still taken there."""
+    class ArcBrain(StubBrain):
+        def classifyArc(self, player):
+            return 'regressing' if getattr(player, 'name', '') == 'Old Star' else 'prime'
+    retiring = _star(name='Retiring Star'); retiring.willRetire = True
+    for starter in (_star(term=1, name='Walk Year Star'), retiring,
+                    _star(name='Old Star'), _star(rating=88, name='Four Star')):
+        rookies = [FakePlayer(1, 80, Position.QB, 'Ninety Nine QB'),
+                   FakePlayer(2, 75, Position.WR, 'Ninety WR')]
+        ceilings = {'Ninety Nine QB': 99, 'Ninety WR': 90}
+        clubs = _teams(1)
+        clubs[0].rosterDict = {'qb': starter}
+        _, events = _run(rookies, clubs, ArcBrain(lambda p, team: ceilings[p.name]))
+        first = next(e for e in events if e['type'] == 'pick')
+        assert first['playerName'] == 'Ninety Nine QB', (starter.name, first)
+    print("PASS a leaving, fading or 4-star starter leaves the position open")
+
+
+def test_one_superstar_receiver_does_not_lock_the_position():
+    """WR has two slots: a rookie can still take the weaker one."""
+    rookies = [FakePlayer(1, 80, Position.WR, 'Ninety Nine WR'),
+               FakePlayer(2, 75, Position.TE, 'Ninety TE')]
+    ceilings = {'Ninety Nine WR': 99, 'Ninety TE': 90}
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'wr1': _star(position=Position.WR), 'wr2': None}
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Ninety Nine WR'
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'wr1': _star(position=Position.WR, name='A'),
+                           'wr2': _star(rating=93, position=Position.WR, name='B')}
+    rookies = [FakePlayer(1, 80, Position.WR, 'Ninety Nine WR'),
+               FakePlayer(2, 75, Position.TE, 'Ninety TE')]
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Ninety TE'
+    print("PASS WR locks only when both starters are superstars")
+
+
+def test_a_later_pick_skips_a_superstar_position_too():
+    """The rule is not only for the top picks: the need picks skip it as well."""
+    picks = _fillersThenChoice({'Better QB': (Position.QB, 80, 99),
+                                'Needed RB': (Position.RB, 75, 70)},
+                               chooserRoster={'qb': _star()}, teams=6)
+    assert picks[5]['playerName'] == 'Needed RB', picks[5]
+    print("PASS a later pick skips a superstar position")
+
+
+def test_a_slot_with_only_superstar_positions_left_is_not_spent_on_them():
+    """If every rookie left plays a locked position the team does not draft him: the
+    slot goes the way of a slot nobody can use."""
+    rookies = [FakePlayer(1, 80, Position.QB, 'Only QB')]
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'qb': _star()}
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: 90))
+    assert not [e for e in events if e['type'] == 'pick'], events
+    assert any(e['type'] == 'skip' for e in events), events
+    print("PASS the slot is skipped rather than spent behind the star")
 
 
 # ------------------------------------------------ flags and the aftermath
