@@ -4667,7 +4667,7 @@ class PlayerManager:
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
 
-    def bpaChoice(self, brain, team, eligible):
+    def bpaChoice(self, brain, team, eligible, preferNeed: bool = True):
         """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
         club's own board, whatever the position or need (owner, 2026-10-01), kickers
         excluded unless a kicker is all it can take. Ties go to the better player today,
@@ -4679,7 +4679,7 @@ class PlayerManager:
         pick = max(pool, key=lambda r: (
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
-        return self.preferClearNeed(brain, team, pool, pick)
+        return self.preferClearNeed(brain, team, pool, pick) if preferNeed else pick
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.
@@ -5053,8 +5053,10 @@ class PlayerManager:
             # (owner, 2026-11-04). If nothing else is left the slot goes through the
             # same trade-or-compensate path as a slot nobody can use.
             locked = self.superstarLockedPositions(brain, team)
-            eligible = [r for r in available
-                        if r.position in openPositions and r.position not in locked]
+            # The pool before the superstar lock, kept so a pick the two star rules
+            # changed can say what it would have been (logged below).
+            unlocked = [r for r in available if r.position in openPositions]
+            eligible = [r for r in unlocked if r.position not in locked]
             if not eligible:
                 reason = 'pipeline_full' if not openPositions else 'no_eligible_rookies'
                 # ⚠️ TRADE THE SLOT RATHER THAN BURN IT. A skipped pick is an asset
@@ -5110,6 +5112,18 @@ class PlayerManager:
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
+            def boardPick(pool, preferNeed):
+                if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
+                    return self.bpaChoice(brain, team, pool, preferNeed=preferNeed)
+                needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
+                choice = max(pool, key=lambda r: (
+                    (1.0 - needW) * self.rookieBoardValue(brain, team, r)
+                    + needW * self.rookieNeedValue(brain, team, r),
+                    self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
+                    self.rookieCeiling(brain, team, r),
+                    -self.countTeamProspectsAtPosition(team, r.position)))
+                return self.preferClearNeed(brain, team, pool, choice) if preferNeed else choice
+
             if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
                 pick = self.bpaChoice(brain, team, eligible)
             else:
@@ -5127,6 +5141,21 @@ class PlayerManager:
                     self.rookieCeiling(brain, team, r),
                     -self.countTeamProspectsAtPosition(team, r.position)))
                 pick = self.preferClearNeed(brain, team, eligible, pick)
+            # Say when the star rules moved the pick (the superstar lock, or comparable
+            # upside at a clear need), and what it would have been without them.
+            try:
+                plain = boardPick(unlocked, preferNeed=False)
+                if plain is not None and plain is not pick:
+                    why = ('superstar lock' if plain.position in locked
+                           else 'clear need')
+                    logger.info(
+                        f"Rookie draft star rule: {team.name} #{slotNumber} took "
+                        f"{pick.name} ({pick.position.name}, ceiling "
+                        f"{self.rookieCeiling(brain, team, pick):.0f}) over {plain.name} "
+                        f"({plain.position.name}, ceiling "
+                        f"{self.rookieCeiling(brain, team, plain):.0f}) [{why}]")
+            except Exception as e:
+                logger.debug(f"star-rule comparison unavailable: {e}")
             available.remove(pick)
 
             pick.is_prospect = True
