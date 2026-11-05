@@ -4246,13 +4246,12 @@ PICK_OUTCOME_BY_SLOT = (
 # ⚠️ NOBODY USED TO WATCH THE CUPBOARD (owner, 2026-11-03: "there should be some decisions to
 # rebuild pick supply"). A team is SHORT when it holds no pick in any of the next
 # TRADE_PICK_SHORT_DRAFTS drafts (the drafts still to be held, so after the draft has run the
-# window starts next season). A short team values picks in that window at
-# 1 + TRADE_PICK_SCARCITY_PREMIUM, both its own (it stops paying with its last picks) and the
-# ones it is offered, and a short team lists a player it does not need for a return that must
-# include one (`pick_restock`; a contender only in the offseason). The premium is an explicit front-office
-# convention, not a derivation: a team with no draft access for two seasons wants it back.
+# window starts next season). A short team lists a player it does not need for a return
+# that must include one (`pick_restock`; a contender only in the offseason).
+# ⚠️ THE PREMIUM A SHORT TEAM PUT ON A PICK IT WAS OFFERED (`TRADE_PICK_SCARCITY_PREMIUM`,
+# 1.5x) IS REMOVED (owner, 2026-11-04): once no trade may take a team's last window pick
+# (below), it could only act on a cupboard emptied before that rule.
 TRADE_PICK_SHORT_DRAFTS = 2
-TRADE_PICK_SCARCITY_PREMIUM = 0.5
 TRADE_PICK_RESTOCK_ENABLED = True   # read lazily, so a harness can switch it off
 # ⚠️ AND NO TRADE MAY TAKE A TEAM'S LAST PICK IN THOSE DRAFTS (owner, 2026-11-04): a
 # bundle skips it (`TradeMarket._assemble`), a restock payment and the draft-day slot sale

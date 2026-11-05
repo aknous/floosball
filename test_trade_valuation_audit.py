@@ -171,27 +171,16 @@ def test_the_cupboard_loads_its_window_before_reading_it():
     m._draftWindowSeasons = load
     m.picksOwnedBy = lambda team: [] if team.id == 1 else [_pick(9, SEASON + 1, owner=2)]
     assert m.isShortOfPicks(teams[0])
-    m2 = TradeMarket(MarketPlayerManager([]), FakeTeamManager(teams), StubBrain(), SEASON, None)
-    m2._draftWindowSeasons = lambda: (setattr(m2, '_windowHasPicks', True),
-                                      [SEASON + 1, SEASON + 2])[1]
-    m2.picksOwnedBy = lambda team: []
-    assert m2._scarcityFor(teams[0], _pick(9, SEASON + 1, owner=2)) > 1.0
 
 
-def test_a_short_team_prices_a_window_pick_at_the_premium():
-    window, later = _pick(1, SEASON + 1, owner=2), _pick(2, SEASON, owner=2)
-    m, (short, stocked) = _cupboard({2: [window, later, _pick(4, SEASON + 2, owner=2)]})
-    premium = 1 + constants.TRADE_PICK_SCARCITY_PREMIUM
+def test_a_short_team_puts_no_premium_on_an_offered_pick():
+    """Owner, 2026-11-04: the shortage premium is gone. A short team values a window pick
+    exactly as a stocked one would, apart from its own contention weight."""
+    window = _pick(1, SEASON + 1, owner=2)
+    m, (short, stocked) = _cupboard({2: [window, _pick(4, SEASON + 2, owner=2)]})
+    assert m.isShortOfPicks(short)
     assert abs(m._pickValueTo(short, window) / m._pickValueTo(stocked, window)
-               - premium * m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9
-    assert abs(m._pickValueTo(short, later) / m._pickValueTo(stocked, later)
-               - m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9, "only a window pick"
-    constants.TRADE_PICK_RESTOCK_ENABLED = False
-    try:
-        assert abs(m._pickValueTo(short, window) / m._pickValueTo(stocked, window)
-                   - m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9
-    finally:
-        constants.TRADE_PICK_RESTOCK_ENABLED = True
+               - m.nowWeight(stocked) / m.nowWeight(short)) < 1e-9
 
 
 def test_a_short_team_going_nowhere_lists_a_player_for_a_pick():

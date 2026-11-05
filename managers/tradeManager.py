@@ -810,7 +810,7 @@ class TradeMarket:
         prospect this club would expect to get there on its own board (`_classBoard`).
         A future draft's class does not exist yet, so it keeps the generic yield.
         """
-        weight = trading.laterWeight(self.nowWeight(team)) * self._scarcityFor(team, pick)
+        weight = trading.laterWeight(self.nowWeight(team))
         out = int(pick['season']) - int(self.season)
         if out == 0:
             board = self._classBoard(team)
@@ -839,7 +839,7 @@ class TradeMarket:
                     window = list(range(first, first + int(TRADE_PICK_SHORT_DRAFTS)))
                     # ⚠️ NO ROWS IS NOT EVERYONE SHORT. Without pick rows in the window
                     # (not seeded yet, or an unreadable table) every team would read as
-                    # short and price every pick at the premium.
+                    # short and post a restock listing.
                     self._windowHasPicks = session.query(DraftPick.id).filter(
                         DraftPick.season.in_(window),
                         DraftPick.used == False).first() is not None   # noqa: E712
@@ -855,7 +855,7 @@ class TradeMarket:
 
         ⚠️ READ THROUGH HERE, NEVER `_windowHasPicks` DIRECTLY. The flag is only set when
         `_draftWindowSeasons` first runs, and every reader tested it BEFORE anything had
-        called that, so it read False and the whole pick cupboard (the premium, the
+        called that, so it read False and the whole pick cupboard (then a premium, an
         emptied-window cost and the restock listing) never switched on outside the tests,
         which set the flag by hand (found 2026-11-04)."""
         self._draftWindowSeasons()
@@ -875,20 +875,6 @@ class TradeMarket:
     def isShortOfPicks(self, team) -> bool:
         """Holds no pick in any of the next TRADE_PICK_SHORT_DRAFTS drafts."""
         return self._hasWindowRows() and not self._windowPickIds(team)
-
-    def _scarcityFor(self, team, pick) -> float:
-        """The premium a SHORT team puts on a window pick it is offered: it gets it back
-        into the draft. A team's own picks are priced in `_assemble`, which sees the whole
-        bundle (`_lastWindowPickPremium`)."""
-        from constants import TRADE_PICK_SCARCITY_PREMIUM, TRADE_PICK_RESTOCK_ENABLED
-        if not TRADE_PICK_RESTOCK_ENABLED or not self._hasWindowRows():
-            return 1.0
-        if int(pick.get('season', 0)) not in self._draftWindowSeasons():
-            return 1.0
-        held = self._windowPickIds(team)
-        if pick.get('id') in held:
-            return 1.0
-        return 1.0 + TRADE_PICK_SCARCITY_PREMIUM if not held else 1.0
 
     def _restockListing(self, team, taken: set):
         """A short team puts a player it does not need on the block for a return that must
