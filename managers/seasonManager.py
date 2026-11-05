@@ -7783,8 +7783,10 @@ class SeasonManager:
             # nothing left that will ever place them.
             for _ in pickGen:
                 pass
-        # The re-sign intent describes this draft only.
-        self.playerManager._walkYearResignIntent = {}
+        finally:
+            # The re-sign intent describes this draft only, and must not outlive it even
+            # when the draft raises (it would steer later `expectedDraftees` reads).
+            self.playerManager._walkYearResignIntent = {}
 
         if (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()
                 and not getattr(self.timingManager, '_isFastCatchingUp', False)):
@@ -8415,7 +8417,12 @@ class SeasonManager:
             if SENTIMENT_ENABLED:
                 from database.connection import get_session
                 from database.repositories.sentiment_repository import buildSentimentMap
-                sentimentMap = buildSentimentMap(get_session())
+                # The session is only read here; close it (it used to be left open).
+                _ss = get_session()
+                try:
+                    sentimentMap = buildSentimentMap(_ss)
+                finally:
+                    _ss.close()
         except Exception as e:
             logger.warning(f"GM brain: sentiment unavailable, running neutral: {e}")
         performanceMap = {}
@@ -8474,7 +8481,12 @@ class SeasonManager:
             if SENTIMENT_ENABLED:
                 from database.connection import get_session
                 from database.repositories.sentiment_repository import buildSentimentMap
-                sentimentMap = buildSentimentMap(get_session())
+                # The session is only read here; close it (it used to be left open).
+                _ss = get_session()
+                try:
+                    sentimentMap = buildSentimentMap(_ss)
+                finally:
+                    _ss.close()
         except Exception as e:
             logger.debug(f"desk GM brain: sentiment unavailable: {e}")
         try:

@@ -1381,13 +1381,16 @@ async def get_player(player_id: int, response: Response):
         player_dict['projectionLow'] = projection.get('low')
         player_dict['projectionHigh'] = projection.get('high')
         player_dict['projectionDetail'] = _projectionDetail(player)
-        # Prospects only (owner, 2026-11-04); None for everyone else.
-        try:
-            import scouting_report
-            player_dict['scoutingReport'] = scouting_report.scoutingReport(
-                player, scouting_report.buildPeerTables(floosball_app.playerManager.activePlayers))
-        except Exception:
-            player_dict['scoutingReport'] = None
+        # Prospects only (owner, 2026-11-04); None for everyone else, without building
+        # the peer tables.
+        player_dict['scoutingReport'] = None
+        if getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False):
+            try:
+                import scouting_report
+                player_dict['scoutingReport'] = scouting_report.scoutingReport(
+                    player, scouting_report.buildPeerTables(floosball_app.playerManager.activePlayers))
+            except Exception:
+                pass
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
@@ -9561,7 +9564,9 @@ def get_draft_class(response: Response,
     # read of what each prospect is worth, with no team attached. A mock draft read as a
     # team's pick. The rank is the list order.
     try:
-        ranked = floosball_app.playerManager.prospectRanking(sm._foBrainForDesk())
+        # Only the public consensus read, so no GM brain (building the desk brain here
+        # also opened a database session it never closed).
+        ranked = floosball_app.playerManager.prospectRanking()
     except Exception as e:
         logger.warning(f"prospect ranking unavailable: {e}")
         ranked = sorted((p for p in floosball_app.playerManager.activePlayers

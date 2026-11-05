@@ -4727,12 +4727,13 @@ class PlayerManager:
             -self.countTeamProspectsAtPosition(team, r.position)))
         return self.preferClearNeed(brain, team, eligible, choice, intent) if preferNeed else choice
 
-    def prospectRanking(self, brain) -> list:
+    def prospectRanking(self, brain=None) -> list:
         """The upcoming class ranked like a published prospect list: best first by the
         PUBLIC read of what each prospect is worth (`rookieBoardValue` on the consensus
         ceiling, vision 0, no scouting error), with no team or need attached (owner,
         2026-11-04: a ranking, not a mock draft, which read as a team's pick). Position
-        weighs in, so kickers fall. Ties go to the higher public ceiling. Read-only."""
+        weighs in, so kickers fall. Ties go to the higher public ceiling. Read-only.
+        Only the consensus read is used, so no team's brain is needed."""
         consensus = _ConsensusBrain(brain)
         rookies = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
         return sorted(rookies, key=lambda r: (
