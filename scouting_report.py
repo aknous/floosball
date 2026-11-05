@@ -50,6 +50,10 @@ PHRASES = {
 }
 
 ELITE, STRONG, WEAK = 0.90, 0.75, 0.25
+# Which side of the ball a prospect projects to help most (owner, 2026-11-04): a side is the
+# lean when its projected rating beats the other by at least half a star tier (the "roughly
+# matches" gap the promotion rules use); closer than that, two-way. Kickers have no lean.
+LEAN_GAP = 4.0
 # Up to two strengths on offense and one each on defense and mental; up to one weakness a side.
 STRENGTHS_PER_SIDE = {'offense': 2, 'defense': 1, 'mental': 1}
 
@@ -103,7 +107,8 @@ def _share(values, value) -> float:
 
 
 def scoutingReport(player, tables) -> dict:
-    """`{summary, strengths, weaknesses, growth}` for a prospect, or None for anyone else.
+    """`{summary, lean, strengths, weaknesses, growth}` for a prospect, or None for anyone
+    else. `lean` is 'offense', 'defense' or 'two_way' (None for a kicker).
     Strengths and weaknesses are `{trait, label, phrase, tier, side}`; tier is 'elite' or
     'strong' (weaknesses 'weak'), side 'offense', 'defense' or 'mental'."""
     if not (getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False)):
@@ -164,8 +169,14 @@ def scoutingReport(player, tables) -> dict:
     if best < 4:
         growth = None   # under half a star tier is not room worth naming
 
+    lean = None
+    if pos != 'K' and detail.get('offense') and detail.get('defense'):
+        gap = float(detail['offense'][1]) - float(detail['defense'][1])
+        lean = 'offense' if gap >= LEAN_GAP else 'defense' if gap <= -LEAN_GAP else 'two_way'
+
     return {
         'summary': _summary(player, pos, strengths),
+        'lean': lean,
         'strengths': [entry(*g) for g in strengths],
         'weaknesses': [entry(*g, weak=True) for g in weaknesses],
         'growth': growth,

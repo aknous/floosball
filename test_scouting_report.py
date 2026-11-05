@@ -86,3 +86,19 @@ def test_a_strength_is_judged_against_the_players_own_position():
     bottom = sr.scoutingReport(qb, strong)
     assert any(t['trait'] == 'armStrength' for t in top['strengths'])
     assert any(t['trait'] == 'armStrength' for t in bottom['weaknesses'])
+
+
+def test_the_lean_follows_the_projected_sides():
+    """Owner, 2026-11-04: say whether a prospect projects to help most on offense, on
+    defense, or both. Kickers have no defense and no lean."""
+    starters, prospects = _league()
+    tables = sr.buildPeerTables(starters)
+    for p in prospects:
+        rep = sr.scoutingReport(p, tables)
+        if p.position.name == 'K':
+            assert rep['lean'] is None
+            continue
+        d = p.projectionDetail(0.0)
+        gap = d['offense'][1] - d['defense'][1]
+        want = 'offense' if gap >= sr.LEAN_GAP else 'defense' if gap <= -sr.LEAN_GAP else 'two_way'
+        assert rep['lean'] == want, (p.name, gap, rep['lean'])
