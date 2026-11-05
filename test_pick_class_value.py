@@ -136,7 +136,7 @@ def test_quality_value_halves_each_further_piece():
 
 def _assembleWith(assets, bar, quality):
     m, teams = _market({})
-    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None: [dict(a) for a in assets]
+    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None, **kw: [dict(a) for a in assets]
     return m._assemble(teams[0], teams[1], bar, gross=1000.0, displaced=0.0,
                        maxPieces=5, qualityOverVolume=quality)
 
@@ -203,7 +203,7 @@ def test_the_star_is_always_in_the_package():
     """The required star is counted first and never dropped as redundant, even when he
     alone clears the bar."""
     m, teams = _market({})
-    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None: [
+    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None, **kw: [
         {'kind': 'pick', 'id': 9, 'name': 'pick', 'value': 4.0}]
     star = {'kind': 'player', 'id': 1, 'name': 'Star', 'value': 40.0, 'buyerValue': 30.0}
     got = m._assemble(teams[0], teams[1], 25.0, gross=1000.0, displaced=0.0, maxPieces=5,

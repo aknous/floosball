@@ -243,7 +243,7 @@ def test_a_bundle_never_takes_a_teams_last_window_pick():
     m, (buyer, seller) = _cupboard({1: [a, b, now]})
     assets = [{'kind': 'pick', 'id': 1, 'value': 10.0, 'detail': a},
               {'kind': 'pick', 'id': 2, 'value': 6.0, 'detail': b}]
-    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None: [dict(x) for x in assets]
+    m._tradeableAssets = lambda team, valuingTeam=None, swapPosition=None, **kw: [dict(x) for x in assets]
     # One window pick clears the bar: fine.
     got = m._assemble(buyer, seller, bar=5.0, gross=100.0, displaced=0.0)
     assert [p['id'] for p in got] == [2]
@@ -302,7 +302,7 @@ def test_an_incoming_prospect_is_priced_above_what_the_receiver_has_there():
         p.prospect_seasons = 1
     ceilings = {id(k1): 82.0, id(k2): 76.0}
     m._believedCeiling = lambda team, p: ceilings[id(p)]
-    m._needBar = lambda team, p: 72.0          # the receiver's kicker
+    m._needBar = lambda team, p, leaving=None: 72.0          # the receiver's kicker
     w = trading.laterWeight(m.nowWeight(receiver))
     posW = m._positionWeight(k1)
     got = {a['id']: a for a in m._tradeableAssets(holder, valuingTeam=receiver)

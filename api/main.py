@@ -1237,12 +1237,29 @@ def _prospectProjection(player):
     the truth carries hidden talent only good scouts can see. ⚠️ The 2026-09-27 rule's real
     point stands: ONE projection on every page, never a per-club band.
     """
+    if not _stillRising(player):
+        return None
     try:
         low, mid, high = player.projectionRange(0.0)
         return {"expected": round(float(mid), 1), "low": round(float(low), 1),
                 "high": round(float(high), 1)}
     except Exception:
         return None
+
+
+def _stillRising(player) -> bool:
+    """Whether a player gets a projection at all: only while still rising (fixed
+    2026-11-05). A projection is where a developing player is heading. Aging lowers a
+    veteran's attributes but never his true skill, so projecting him toward it showed 94 of
+    98 veterans with 8+ seasons (season-11 snapshot) heading back UP, a 77 offense projected
+    to 88. Prospects always rise. Fails open, to the projection."""
+    if getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False):
+        return True
+    try:
+        from player_development import PlayerDevelopment, CareerPhase
+        return PlayerDevelopment.careerContext(player, 0).phase == CareerPhase.RISING
+    except Exception:
+        return True
 
 
 
@@ -1260,7 +1277,10 @@ def _projectionDetail(player):
     """The PUBLIC projected range of offense, defense and each attribute the profile shows
     (`Player.projectionDetail(0)`), shaped like the overall's `{expected, low, high}`
     (owner, 2026-11-04). Attributes are keyed `att1`.. as the profile reads them, defensive
-    ones by their own key. None on failure, and the page then shows today's values only."""
+    ones by their own key. None on failure or for a player no longer rising
+    (`_stillRising`), and the page then shows today's values only."""
+    if not _stillRising(player):
+        return None
     try:
         d = player.projectionDetail(0.0)
         if not d:
@@ -9194,11 +9214,20 @@ def _withContractInfo(assets, playersById, pickOutlooks=None) -> list:
                 a['careerStage'] = pm.computeCareerStage(player)
         except Exception:
             pass
-        try:
-            from constants import DEV_LUCK_NEUTRAL_BIAS
-            a['nextSeason'] = int(player.computeNextSeasonRating(int(round(DEV_LUCK_NEUTRAL_BIAS))))
-        except Exception:
-            pass
+        # A rising player's next season reads his public projection: the sim's own
+        # development aims at his TRUE skill, hidden talent included, which fans must not
+        # see until it is revealed (fixed 2026-11-05). Past his peak the aging model is
+        # public, so it reads that.
+        if _stillRising(player):
+            pub = _prospectProjection(player)
+            if pub:
+                a['nextSeason'] = int(round(max(pub["expected"], float(getattr(player, 'playerRating', 0) or 0))))
+        else:
+            try:
+                from constants import DEV_LUCK_NEUTRAL_BIAS
+                a['nextSeason'] = int(player.computeNextSeasonRating(int(round(DEV_LUCK_NEUTRAL_BIAS))))
+            except Exception:
+                pass
         if a.get('careerStage') == 'developing':
             proj = _prospectProjection(player)
             if proj and proj["high"] > proj["low"]:

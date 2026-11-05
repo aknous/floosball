@@ -324,7 +324,7 @@ def test_a_bundle_reads_as_a_sentence():
     clear a bar by four times is not negotiating."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
-    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None:
+    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None, **kw:
                                _assets([2.0, 3.0, 9.0, 12.0]))
     pieces = market._assemble(buyer, seller, bar=4.0, gross=30.0, displaced=0.0)
     assert 0 < len(pieces) <= constants.TRADE_MAX_PIECES
@@ -344,7 +344,7 @@ def test_the_bundle_is_valued_on_BOTH_sides():
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
 
     # The seller prizes these picks; the buyer barely minds losing them.
-    def assets(team, valuingTeam=None, swapPosition=None):
+    def assets(team, valuingTeam=None, swapPosition=None, **kw):
         high = valuingTeam is seller
         return _assets([10.0, 10.0] if high else [1.0, 1.0])
 
@@ -361,7 +361,7 @@ def test_a_buyer_refuses_a_bundle_that_costs_more_than_the_upgrade():
     pieces costs the buyer more than it gains."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
-    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None:
+    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None, **kw:
                                _assets([50.0, 50.0]))
     assert market._assemble(buyer, seller, bar=40.0, gross=5.0, displaced=0.0) == []
     assert market._assemble(buyer, seller, bar=40.0, gross=500.0, displaced=0.0) != []
@@ -536,7 +536,7 @@ def test_the_displaced_player_is_counted_ONCE_in_a_swap():
     market = _market([seller, buyer])
 
     # The only thing the buyer can offer is the very man it would have to cut, worth 6.
-    def assets(team, valuingTeam=None, swapPosition=None):
+    def assets(team, valuingTeam=None, swapPosition=None, **kw):
         if swapPosition is None:
             return []
         return [{'kind': 'player', 'id': 30, 'name': 'Incumbent',
@@ -553,7 +553,7 @@ def test_the_displaced_player_is_counted_ONCE_in_a_swap():
 
     # ⚠️ The mirror: paying in PICKS really does cost both the picks and the displaced
     # man, so an identically-priced picks bundle must be refused at the same numbers.
-    def picksOnly(team, valuingTeam=None, swapPosition=None):
+    def picksOnly(team, valuingTeam=None, swapPosition=None, **kw):
         return [{'kind': 'pick', 'id': 7, 'name': 'a pick', 'detail': {}, 'value': 6.0}]
 
     market._tradeableAssets = picksOnly
@@ -778,7 +778,7 @@ def test_deadline_urgency_raises_the_OFFER_not_just_the_ceiling():
     seller, buyer = FakeTeam(1, 'Seller', wins=2, losses=12), FakeTeam(2, 'Buyer', wins=13, losses=1)
     teams = [seller, buyer]
 
-    def assets(team, valuingTeam=None, swapPosition=None):
+    def assets(team, valuingTeam=None, swapPosition=None, **kw):
         return [{'kind': 'pick', 'id': 1, 'name': 'a pick', 'detail': {}, 'value': 10.0}]
 
     reached = {}

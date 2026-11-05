@@ -4586,19 +4586,20 @@ class PlayerManager:
                                      rookieTerm=trading.rookieTermForSkill(ceiling),
                                      positionWeight=posW)
 
-    def _rookieNeedBar(self, brain, team, rookie) -> float:
+    def _rookieNeedBar(self, brain, team, rookie, leaving=None) -> float:
         """What a rookie must beat to fill a need at his position: the higher of the
         team's weaker starter there (a walk-year or retiring starter counts as nobody)
-        and the best ceiling already in its pipeline there, never below replacement."""
+        and the best ceiling already in its pipeline there, never below replacement.
+        `leaving` (a player a trade is taking away) counts as nobody too."""
         from constants import REPLACEMENT_RATING
         posValue = getattr(getattr(rookie, 'position', None), 'value', None)
         slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
         starters = []
         for slot in slots:
             p = (getattr(team, 'rosterDict', None) or {}).get(slot)
-            leaving = p is None or getattr(p, 'willRetire', False) or \
+            gone = p is None or p is leaving or getattr(p, 'willRetire', False) or \
                 (getattr(p, 'termRemaining', 99) or 99) <= 1
-            starters.append(float(REPLACEMENT_RATING) if leaving
+            starters.append(float(REPLACEMENT_RATING) if gone
                             else float(getattr(p, 'playerRating', 0) or 0))
         bar = min(starters) if starters else float(REPLACEMENT_RATING)
         for prospect in getattr(team, 'prospects', None) or []:

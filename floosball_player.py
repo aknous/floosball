@@ -592,36 +592,45 @@ class Player:
         high = self.computeExpectedRating(unseen - spread)
         return min(low, mid), mid, max(high, mid)
 
+    def _ratingTwin(self):
+        """A private copy to project ratings on: the player with his own copy of the
+        attributes, so recomputing a rating never touches the live player.
+
+        ⚠️ THE PROJECTIONS USED TO WRITE PROJECTED VALUES ONTO THE LIVE PLAYER AND RESTORE
+        THEM (fixed 2026-11-05). API endpoints read projections from request threads while
+        the sim (draft, trades, saves, games) runs on the event loop, so a thread switch
+        between the write and the restore let the sim read or save a projected value, or
+        let two projections restore each other's temporary values and leave one behind."""
+        twin = copy.copy(self)
+        twin.attributes = copy.copy(self.attributes)
+        return twin
+
     def _projectedState(self, unseen: float) -> dict:
         """Offense, defense and every attribute with the physical skills developed to their
         true skill less `unseen` points: the state `computeExpectedRating` reads the overall
         from. Leaves the player untouched."""
         attrs = getattr(self, 'attributes', None)
-        saved = {}
-        try:
-            for base, tru in _TRUESKILL_ATTR_PAIRS:
-                cur = getattr(attrs, base, None)
-                truVal = getattr(attrs, tru, None)
-                if truVal and unseen:
-                    truVal = int(round(np.clip(truVal - unseen, 60, 100)))
-                if cur is not None and truVal and truVal > cur:
-                    saved[base] = cur
-                    setattr(attrs, base, truVal)
-            if saved:
-                self.updateRating()
-            return {
-                'offense': float(getattr(self, 'offensiveRating', 0) or 0),
-                'defense': float(getattr(self, 'defensiveRating', 0) or 0),
-                'attributes': {base: float(getattr(attrs, base, 0) or 0)
-                               for base, _t in _TRUESKILL_ATTR_PAIRS},
-                'defensive': {k: float(v) for k, v in
-                              (attrs.getDefensiveAttributes(self.position) or {}).items()},
-            }
-        finally:
-            for base, val in saved.items():
-                setattr(attrs, base, val)
-            if saved:
-                self.updateRating()
+        twin = self._ratingTwin()
+        raised = False
+        for base, tru in _TRUESKILL_ATTR_PAIRS:
+            cur = getattr(attrs, base, None)
+            truVal = getattr(attrs, tru, None)
+            if truVal and unseen:
+                truVal = int(round(np.clip(truVal - unseen, 60, 100)))
+            if cur is not None and truVal and truVal > cur:
+                setattr(twin.attributes, base, truVal)
+                raised = True
+        if raised:
+            twin.updateRating()
+        ta = twin.attributes
+        return {
+            'offense': float(getattr(twin, 'offensiveRating', 0) or 0),
+            'defense': float(getattr(twin, 'defensiveRating', 0) or 0),
+            'attributes': {base: float(getattr(ta, base, 0) or 0)
+                           for base, _t in _TRUESKILL_ATTR_PAIRS},
+            'defensive': {k: float(v) for k, v in
+                          (ta.getDefensiveAttributes(self.position) or {}).items()},
+        }
 
     def projectionDetail(self, vision: float = 0.0):
         """The projected range of offense, defense and each attribute, the way
@@ -673,25 +682,20 @@ class Player:
             ('hands', 'potentialHands'), ('armStrength', 'potentialArmStrength'),
             ('accuracy', 'potentialAccuracy'), ('legStrength', 'potentialLegStrength'),
         ]
-        saved = {}
-        try:
-            for base, pot in pairs:
-                cur = getattr(attrs, base, None)
-                potVal = getattr(attrs, pot, None)
-                if potVal and unseen:
-                    potVal = int(round(np.clip(potVal - unseen, 60, 100)))
-                if cur is not None and potVal and potVal > cur:
-                    saved[base] = cur
-                    setattr(attrs, base, potVal)
-            if not saved:
-                return int(round(getattr(self, 'playerRating', 0) or 0))
-            self.updateRating()
+        twin = self._ratingTwin()
+        raised = False
+        for base, pot in pairs:
+            cur = getattr(attrs, base, None)
+            potVal = getattr(attrs, pot, None)
+            if potVal and unseen:
+                potVal = int(round(np.clip(potVal - unseen, 60, 100)))
+            if cur is not None and potVal and potVal > cur:
+                setattr(twin.attributes, base, potVal)
+                raised = True
+        if not raised:
             return int(round(getattr(self, 'playerRating', 0) or 0))
-        finally:
-            for base, val in saved.items():
-                setattr(attrs, base, val)
-            if saved:
-                self.updateRating()  # restore live ratings
+        twin.updateRating()
+        return int(round(getattr(twin, 'playerRating', 0) or 0))
 
     def computeExpectedRating(self, unseen: float = 0.0):
         """Projected 'expected' rating: what this player's overall rating would be
@@ -708,25 +712,20 @@ class Player:
             return int(round(getattr(self, 'playerRating', 0) or 0))
         # (live attr, trueSkill attr) pairs — the same physical set that develops.
         pairs = [(a, t) for (a, t, _p) in _TRUESKILL_ATTR_TRIPLES]
-        saved = {}
-        try:
-            for base, tru in pairs:
-                cur = getattr(attrs, base, None)
-                truVal = getattr(attrs, tru, None)
-                if truVal and unseen:
-                    truVal = int(round(np.clip(truVal - unseen, 60, 100)))
-                if cur is not None and truVal and truVal > cur:
-                    saved[base] = cur
-                    setattr(attrs, base, truVal)
-            if not saved:
-                return int(round(getattr(self, 'playerRating', 0) or 0))
-            self.updateRating()
+        twin = self._ratingTwin()
+        raised = False
+        for base, tru in pairs:
+            cur = getattr(attrs, base, None)
+            truVal = getattr(attrs, tru, None)
+            if truVal and unseen:
+                truVal = int(round(np.clip(truVal - unseen, 60, 100)))
+            if cur is not None and truVal and truVal > cur:
+                setattr(twin.attributes, base, truVal)
+                raised = True
+        if not raised:
             return int(round(getattr(self, 'playerRating', 0) or 0))
-        finally:
-            for base, val in saved.items():
-                setattr(attrs, base, val)
-            if saved:
-                self.updateRating()  # restore live ratings
+        twin.updateRating()
+        return int(round(getattr(twin, 'playerRating', 0) or 0))
 
     def projectedRatingPastPeak(self, devBias: int = 0):
         """The rating this player is expected to carry next season if he is at or past
@@ -747,19 +746,13 @@ class Player:
         if attrs is None:
             return current
         expected = PlayerDevelopment.expectedAttributes(self, devBias)
-        saved = {name: getattr(attrs, name) for name in expected}
-        try:
-            for name, value in expected.items():
-                setattr(attrs, name, value)
-            if not saved:
-                return current
-            self.updateRating()
-            return int(round(getattr(self, 'playerRating', 0) or 0))
-        finally:
-            for name, value in saved.items():
-                setattr(attrs, name, value)
-            if saved:
-                self.updateRating()  # restore live ratings
+        if not expected:
+            return current
+        twin = self._ratingTwin()
+        for name, value in expected.items():
+            setattr(twin.attributes, name, value)
+        twin.updateRating()
+        return int(round(getattr(twin, 'playerRating', 0) or 0))
 
     def addPassTd(self, yards, isRegularSeason):
         self.stat_tracker.add_pass_td(yards, isRegularSeason)

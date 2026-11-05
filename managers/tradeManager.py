@@ -1887,7 +1887,7 @@ class TradeMarket:
                                 # A rising star is paid for with quality, not volume
                                 # (`TRADE_RISING_STAR_RATING`), judged by the SELLER.
                                 qualityOverVolume=self._isRisingStar(listing.team, player),
-                                mandatory=mandatory)
+                                mandatory=mandatory, leaving=player)
         if not pieces:
             return None
 
@@ -2141,7 +2141,7 @@ class TradeMarket:
 
     def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
                   swapPosition=None, maxPieces=None, excludeIds=None,
-                  qualityOverVolume: bool = False, mandatory=None) -> list:
+                  qualityOverVolume: bool = False, mandatory=None, leaving=None) -> list:
         """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
@@ -2159,8 +2159,12 @@ class TradeMarket:
         value. Both halves are needed: raising only the ceiling changes nothing, because
         the bundle is sized to the bar.
         """
+        # `leaving`: the player the seller is giving up. A prospect it receives at his
+        # position is measured against the seller WITHOUT him (fixed 2026-11-05): measured
+        # against the man leaving, the replacement looked worth almost nothing exactly
+        # where he matters most.
         sellerAssets = {(a['kind'], a['id']): a for a in self._tradeableAssets(
-            buyer, valuingTeam=seller, swapPosition=swapPosition)}
+            buyer, valuingTeam=seller, swapPosition=swapPosition, leaving=leaving)}
         sellerValue = {k: a['value'] for k, a in sellerAssets.items()}
         buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer,
                                             swapPosition=swapPosition)
@@ -2270,7 +2274,7 @@ class TradeMarket:
         return [{k: v for k, v in p.items() if k != '_need'}
                 for p in self._countProspectsOnce(pieces)]
 
-    def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None) -> list:
+    def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None, leaving=None) -> list:
         """This club's picks, pipeline prospects, and — at `swapPosition` — a starter.
 
         ⚠️ A ROSTER PLAYER AT THE LISTING'S OWN POSITION IS THE ONE TRADE THAT NEEDS NO
@@ -2339,7 +2343,7 @@ class TradeMarket:
             # own need bar (`playerManager._rookieNeedBar`), as a trade bid prices the
             # upgrade over the man displaced. The holder's own cost is unchanged.
             if valuer is not team:
-                bar = self._needBar(valuer, prospect)
+                bar = self._needBar(valuer, prospect, leaving)
                 asset['value'] = trading.prospectValue(
                     REPLACEMENT_RATING + max(0.0, ceiling - bar), seasons, weight=weight,
                     positionWeight=posW)
@@ -2374,12 +2378,15 @@ class TradeMarket:
                 })
         return out
 
-    def _needBar(self, team, prospect) -> float:
+    def _needBar(self, team, prospect, leaving=None) -> float:
         """What a prospect has to beat at his position on this team (the draft's
-        `_rookieNeedBar`), or replacement where the player manager has no such read."""
+        `_rookieNeedBar`), with `leaving` (a player this trade takes away) counted as
+        gone, or replacement where the player manager has no such read."""
         fn = getattr(self.playerManager, '_rookieNeedBar', None)
         if fn is not None:
             try:
+                if leaving is not None:
+                    return float(fn(self.brain, team, prospect, leaving=leaving))
                 return float(fn(self.brain, team, prospect))
             except Exception:
                 pass
