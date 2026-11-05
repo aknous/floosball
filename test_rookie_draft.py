@@ -98,6 +98,8 @@ class Harness:
     payForfeitedSlot = PlayerManager.payForfeitedSlot
     rookieCeiling = PlayerManager.rookieCeiling
     bpaChoice = PlayerManager.bpaChoice
+    chooseRookiePick = PlayerManager.chooseRookiePick
+    mockRookieDraft = PlayerManager.mockRookieDraft
     superstarLockedPositions = PlayerManager.superstarLockedPositions
     keptStarPositions = PlayerManager.keptStarPositions
     preferClearNeed = PlayerManager.preferClearNeed
@@ -525,3 +527,22 @@ def test_re_sign_intent_follows_the_limit_then_the_budget():
     finally:
         SeasonManager._resignDecision, SeasonManager._resignLimitOn = orig[0], staticmethod(orig[1])
     print("PASS the re-sign intent uses the limit, then the budget, and no draftees")
+
+
+def test_the_mock_draft_reads_the_public_consensus_not_a_teams_scouting():
+    """Owner, 2026-11-04: the mock draft board picks off the public projection. A team's
+    own read sees hidden talent; a mock built on it would give that away. Here the team's
+    scouting rates B far above A, the public read (no projection: the rating) the reverse."""
+    a = FakePlayer(1, 85, Position.QB, 'Public Favorite')
+    b = FakePlayer(2, 70, Position.QB, 'Scouts Secret')
+    scouted = {'Public Favorite': 80, 'Scouts Secret': 99}
+    clubs = _teams(1)
+    brain = StubBrain(lambda p, team: scouted[p.name])
+    h = Harness([a, b])
+    mock = h.mockRookieDraft(brain, clubs)
+    assert [r.name for _s, _t, r in mock] == ['Public Favorite'], mock
+    assert a.is_upcoming_rookie and b.is_upcoming_rookie, "the mock changed the class"
+    # The real draft, on the team's own read, takes the other one.
+    events = list(Harness([a, b]).rookieDraftPickGenerator([a, b], _teams(1), brain=brain))
+    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Scouts Secret'
+    print("PASS the mock reads the public consensus, not the team's scouting")

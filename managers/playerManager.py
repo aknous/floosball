@@ -188,6 +188,23 @@ def isCutProtected(player, season, ignoreProspectContract: bool = False) -> bool
     return wasPromotedThisOffseason(player, season)
 
 
+
+class _ConsensusBrain:
+    """A GM brain whose read of every prospect is the public consensus ceiling (vision 0,
+    no scouting error), for the mock draft board. Everything else is the real brain's."""
+
+    def __init__(self, brain):
+        self._brain = brain
+
+    def __getattr__(self, name):
+        return getattr(self._brain, name)
+
+    def _ceilingRating(self, player, team=None) -> int:
+        try:
+            return int(round(player.projectionFor(0.0)[1]))
+        except Exception:
+            return int(getattr(player, 'playerRating', 0) or 0)
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -4597,12 +4614,12 @@ class PlayerManager:
         17% of picks 9-32 landed behind a 4-star+ starter)."""
         return self.rookieCeiling(brain, team, rookie) - self._rookieNeedBar(brain, team, rookie)
 
-    def superstarLockedPositions(self, brain, team) -> set:
+    def superstarLockedPositions(self, brain, team, intent: dict = None) -> set:
         """See `keptStarPositions`: positions held by kept 5-star starters."""
         from constants import ROOKIE_DRAFT_SUPERSTAR_RATING
-        return self.keptStarPositions(brain, team, ROOKIE_DRAFT_SUPERSTAR_RATING)
+        return self.keptStarPositions(brain, team, ROOKIE_DRAFT_SUPERSTAR_RATING, intent)
 
-    def keptStarPositions(self, brain, team, minRating) -> set:
+    def keptStarPositions(self, brain, team, minRating, intent: dict = None) -> set:
         """Positions (Position enums) the draft skips for this team: every starting slot
         there holds a superstar the team has no reason to replace (owner, 2026-11-04).
         A superstar is rated at least `ROOKIE_DRAFT_SUPERSTAR_RATING` (the 5-star line),
@@ -4627,8 +4644,9 @@ class PlayerManager:
                     # One season left: the position stays locked only if the GM intends
                     # to re-sign him next offseason (`walkYearResignIntent`, set for
                     # the draft). With no intent read, he counts as leaving.
-                    intent = getattr(self, '_walkYearResignIntent', None) or {}
-                    if not intent.get(getattr(p, 'id', None), False):
+                    known = intent if intent is not None else (
+                        getattr(self, '_walkYearResignIntent', None) or {})
+                    if not known.get(getattr(p, 'id', None), False):
                         return False
                 if float(getattr(p, 'playerRating', 0) or 0) < float(minRating):
                     return False
@@ -4644,7 +4662,7 @@ class PlayerManager:
                 locked.add(pos)
         return locked
 
-    def preferClearNeed(self, brain, team, pool, pick):
+    def preferClearNeed(self, brain, team, pool, pick, intent: dict = None):
         """The pick, or a rookie of comparable upside at a position of clear need when
         the pick would sit behind a star the team is keeping (owner, 2026-11-04; see
         `ROOKIE_DRAFT_STAR_RATING`). Applied after the normal choice at every slot, so a
@@ -4653,7 +4671,7 @@ class PlayerManager:
             return pick
         from constants import (ROOKIE_DRAFT_STAR_RATING, ROOKIE_DRAFT_CLEAR_NEED_RATING,
                                ROOKIE_DRAFT_NEED_CEILING_GAP)
-        if pick.position not in self.keptStarPositions(brain, team, ROOKIE_DRAFT_STAR_RATING):
+        if pick.position not in self.keptStarPositions(brain, team, ROOKIE_DRAFT_STAR_RATING, intent):
             return pick
         floor = self.rookieCeiling(brain, team, pick) - float(ROOKIE_DRAFT_NEED_CEILING_GAP)
         options = [r for r in pool
@@ -4667,7 +4685,7 @@ class PlayerManager:
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
 
-    def bpaChoice(self, brain, team, eligible, preferNeed: bool = True):
+    def bpaChoice(self, brain, team, eligible, preferNeed: bool = True, intent: dict = None):
         """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
         club's own board, whatever the position or need (owner, 2026-10-01), kickers
         excluded unless a kicker is all it can take. Ties go to the better player today,
@@ -4679,7 +4697,59 @@ class PlayerManager:
         pick = max(pool, key=lambda r: (
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
-        return self.preferClearNeed(brain, team, pool, pick) if preferNeed else pick
+        return self.preferClearNeed(brain, team, pool, pick, intent) if preferNeed else pick
+
+    def chooseRookiePick(self, brain, team, eligible, slotNumber: int, draftLength: int,
+                         preferNeed: bool = True, intent: dict = None):
+        """The pick a team makes at this slot from `eligible`: the best prospect available
+        at the top `ROOKIE_DRAFT_BPA_SLOTS`, then asset value shading into need, then the
+        clear-need preference. ONE definition for the draft and the mock draft board
+        (`mockRookieDraft`), so the board cannot drift from what the draft does."""
+        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        if not eligible:
+            return None
+        if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
+            return self.bpaChoice(brain, team, eligible, preferNeed=preferNeed, intent=intent)
+        # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
+        # `prospectValue` readings, one above replacement and one above what this
+        # club already has, so they blend on one scale. Tie-break (a pure-need
+        # pick where nobody left fills a need scores 0 for everyone) toward the
+        # rookie least blocked at his position, then the higher ceiling, then a
+        # position this club is thin at.
+        needW = self.rookieNeedWeight(slotNumber, draftLength)
+        choice = max(eligible, key=lambda r: (
+            (1.0 - needW) * self.rookieBoardValue(brain, team, r)
+            + needW * self.rookieNeedValue(brain, team, r),
+            self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
+            self.rookieCeiling(brain, team, r),
+            -self.countTeamProspectsAtPosition(team, r.position)))
+        return self.preferClearNeed(brain, team, eligible, choice, intent) if preferNeed else choice
+
+    def mockRookieDraft(self, brain, owners: list, intent: dict = None) -> list:
+        """The rookie draft as the public would mock it: `[(slot, owningTeam, rookie)]`.
+
+        Runs `chooseRookiePick` down `owners` (the slot order, as owning teams) over the
+        upcoming class, but every team reads every prospect at the PUBLIC CONSENSUS
+        ceiling (vision 0, no scouting error; owner, 2026-11-04). Each team's own read sees
+        some hidden talent, and a mock built on it would give that away. Read-only: no
+        rookie or team is changed. A slot with nobody it can take is left out.
+        """
+        consensus = _ConsensusBrain(brain)
+        available = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
+        out = []
+        n = len(owners or [])
+        for slot, team in enumerate(owners or [], start=1):
+            if not available:
+                break
+            locked = self.superstarLockedPositions(consensus, team, intent)
+            eligible = [r for r in available if self.hasOpenProspectSlot(team, r.position)
+                        and r.position not in locked]
+            pick = self.chooseRookiePick(consensus, team, eligible, slot, n, intent=intent)
+            if pick is None:
+                continue
+            available.remove(pick)
+            out.append((slot, team, pick))
+        return out
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.
@@ -5112,39 +5182,12 @@ class PlayerManager:
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
-            def boardPick(pool, preferNeed):
-                if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
-                    return self.bpaChoice(brain, team, pool, preferNeed=preferNeed)
-                needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
-                choice = max(pool, key=lambda r: (
-                    (1.0 - needW) * self.rookieBoardValue(brain, team, r)
-                    + needW * self.rookieNeedValue(brain, team, r),
-                    self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
-                    self.rookieCeiling(brain, team, r),
-                    -self.countTeamProspectsAtPosition(team, r.position)))
-                return self.preferClearNeed(brain, team, pool, choice) if preferNeed else choice
-
-            if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
-                pick = self.bpaChoice(brain, team, eligible)
-            else:
-                # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
-                # `prospectValue` readings, one above replacement and one above what this
-                # club already has, so they blend on one scale. Tie-break (a pure-need
-                # pick where nobody left fills a need scores 0 for everyone) toward the
-                # rookie least blocked at his position, then the higher ceiling, then a
-                # position this club is thin at.
-                needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
-                pick = max(eligible, key=lambda r: (
-                    (1.0 - needW) * self.rookieBoardValue(brain, team, r)
-                    + needW * self.rookieNeedValue(brain, team, r),
-                    self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
-                    self.rookieCeiling(brain, team, r),
-                    -self.countTeamProspectsAtPosition(team, r.position)))
-                pick = self.preferClearNeed(brain, team, eligible, pick)
+            pick = self.chooseRookiePick(brain, team, eligible, slotNumber, len(draftOrder))
             # Say when the star rules moved the pick (the superstar lock, or comparable
             # upside at a clear need), and what it would have been without them.
             try:
-                plain = boardPick(unlocked, preferNeed=False)
+                plain = self.chooseRookiePick(brain, team, unlocked, slotNumber,
+                                              len(draftOrder), preferNeed=False)
                 if plain is not None and plain is not pick:
                     why = ('superstar lock' if plain.position in locked
                            else 'clear need')

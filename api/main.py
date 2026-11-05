@@ -9488,6 +9488,7 @@ def get_draft_class(response: Response,
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
 
+    mock = _mockDraftPicks(season)
     entries = []
     for p in floosball_app.playerManager.activePlayers:
         if not getattr(p, 'is_upcoming_rookie', False):
@@ -9499,17 +9500,75 @@ def get_draft_class(response: Response,
             "rating": round(getattr(p, 'playerRating', 0), 1),
             "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
             "projection": _prospectProjection(p),
+            # Where the public mock draft has this prospect going: {pick, team}, or None
+            # for a prospect the mock leaves on the board (or with no mock running).
+            "mockPick": mock.get(getattr(p, 'id', None)) if mock else None,
         })
-    # Ordered by what he is today; the projection sits beside it.
-    entries.sort(key=lambda e: -e["rating"])
+    # ⚠️ A MOCK DRAFT BOARD (owner, 2026-11-04): ordered by projected pick, then the rest
+    # by the public projection. Without a mock (the draft has started), by projection.
+    entries.sort(key=lambda e: (
+        e["mockPick"]["pick"] if e["mockPick"] else 999,
+        -((e["projection"] or {}).get("expected") or e["rating"])))
     response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=60")
     return build_success_response({
         "season": season,
         "week": week,
         "viewingTeamId": getattr(club, 'id', None) if club else None,
         "classSize": len(entries),
+        "mockDraft": bool(mock),
         "prospects": entries,
     })
+
+
+_mockCache = {'key': None, 'at': 0.0, 'picks': {}}
+
+
+def _mockDraftPicks(season: int) -> dict:
+    """`{playerId: {pick, team}}` from the public mock draft (`playerManager.mockRookieDraft`)
+    down the current draft order, with picks already traded going to their owners.
+
+    Cached for a minute per (season, week, offseason phase): it walks 32 picks over the
+    class. Empty once this season's real draft has made a pick, since the mock would
+    renumber a draft already under way, and on any failure (the board then falls back to
+    ranking by projection)."""
+    import time
+    sm = floosball_app.seasonManager if floosball_app else None
+    tm = floosball_app.teamManager if floosball_app else None
+    key = (season, getattr(getattr(sm, 'currentSeason', None), 'currentWeek', None),
+           getattr(sm, '_offseasonFlowPhase', None))
+    if _mockCache['key'] == key and time.monotonic() - _mockCache['at'] < 60:
+        return _mockCache['picks']
+    picks = {}
+    try:
+        from database.connection import get_session
+        from database.models import SeasonRecapEvent
+        session = get_session()
+        try:
+            started = session.query(SeasonRecapEvent.id).filter(
+                SeasonRecapEvent.season == season,
+                SeasonRecapEvent.event_type == 'rookie_pick').first() is not None
+        finally:
+            session.close()
+        if not started and sm is not None and tm is not None:
+            ids, _final, _from = _rookieDraftOrder()
+            byId = {t.id: t for t in (getattr(tm, 'teams', None) or [])}
+            order = [byId[i] for i in ids if i in byId]
+            owners = [owner for _o, owner in sm._rookieDraftSlots(order)]
+            # The GM's own re-sign decision, projected: whether a walk-year star is staying.
+            intent = sm.projectedResigns() or {}
+            for slot, team, rookie in floosball_app.playerManager.mockRookieDraft(
+                    sm._foBrainForDesk(), owners, intent=intent):
+                picks[getattr(rookie, 'id', None)] = {
+                    "pick": slot,
+                    "team": {"id": team.id, "name": team.name,
+                             "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                             "color": getattr(team, 'color', None)},
+                }
+    except Exception as e:
+        logger.warning(f"mock draft unavailable: {e}")
+        picks = {}
+    _mockCache.update(key=key, at=time.monotonic(), picks=picks)
+    return picks
 
 
 @app.get("/api/teams/{team_id}/prospects")
