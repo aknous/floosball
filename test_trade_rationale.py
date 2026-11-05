@@ -53,14 +53,15 @@ def test_the_seller_names_the_PROSPECT_it_is_unblocking():
     print(f"PASS  {why}")
 
 
-def test_the_seller_names_the_ATTITUDE_dragging_the_room():
+def test_the_seller_names_the_player_hurting_the_room():
     teams = _teams()
     club = teams[-1]
     sour = FakePlayer(702, 80, Position.TE, termRemaining=3, attitude=41)
     sour.name = 'Sour Man'
     club.rosterDict['te'] = sour
     why = _market(teams).sellerWhy(club, sour, 'locker_room')
-    assert 'Sour Man' in why and '41' in why, why
+    # No attitude score: fans read reasons, not numbers (owner, 2026-11-04).
+    assert 'Sour Man' in why and 'locker room' in why and '41' not in why, why
     print(f"PASS  {why}")
 
 
@@ -77,8 +78,8 @@ def test_the_seller_says_it_CHOSE_OTHERS_not_that_a_limit_was_hit():
     surplus = order[-1]                      # last in line, so genuinely leaving
     why = m.sellerWhy(club, surplus, 'expiring_surplus')
 
-    assert 'not renewing' in why, why
-    assert 'leaves for nothing' in why
+    assert 'expected to leave in free agency' in why, why
+    assert 'expected to leave in free agency' in why
     assert 'limit' not in why, "the sentence still explains itself by naming the rule"
     for kept in order[:2]:
         assert getattr(kept, 'name', '') in why, f"{kept.name} was kept but not named"
@@ -113,7 +114,7 @@ def test_the_BUYER_says_which_hole_it_is_filling():
     seller.rosterDict['qb'] = target
     m = _market(teams)
     why = m.buyerWhy(buyer, Listing(seller, target, 'expiring_surplus', 1.0, 1.0))
-    assert 'QB' in why and 'hole' in why, why
+    assert 'QB' in why and 'weakest position' in why, why
     print(f"PASS  {why}")
 
 
@@ -160,8 +161,9 @@ def test_a_TRADE_UP_explains_both_sides_of_the_slot():
     across two string literals, so asserting on the rendered wording fails against source
     that is perfectly correct — the first version of this test did exactly that."""
     src = inspect.getsource(TradeMarket.pickInquiriesFor)
-    assert 'does not need the very best' in src, "the seller does not say why it drops"
-    assert 'Paid to drop from' in src
+    assert 'expects to fill its need with the later pick' in src, \
+        "the seller does not say why it drops"
+    assert 'Moving down from' in src
     src2 = inspect.getsource(TradeMarket.bidForPick)
     assert 'Moving up to' in src2, "the buyer does not say it is moving up"
 

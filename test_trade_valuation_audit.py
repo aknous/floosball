@@ -286,10 +286,9 @@ def test_the_offseason_reads_as_the_season_that_just_ended():
         return m.sellerWhy(team, p, trigger)
     off = why(None, 'expiring_surplus')
     assert 'one season left' in off and 'after next season' in off
-    assert 'contract is up' not in off and 'season end' not in off
-    assert 'contract is up' in why(20, 'expiring_surplus')
-    assert 'the one season left' in why(None, 'expiring_keeper')
-    assert 'the weeks left' in why(20, 'expiring_keeper')
+    assert 'ends this season' not in off and 'season end' not in off
+    assert 'ends this season' in why(20, 'expiring_surplus')
+    assert 'could re-sign' in why(None, 'expiring_keeper')
 
 
 
