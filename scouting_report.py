@@ -49,6 +49,48 @@ PHRASES = {
     'attitude': ('Attitude', 'Good in the locker room', 'Difficult in the locker room', None),
 }
 
+# A prospect's style on each side of the ball (owner, 2026-11-04), named for the skill that
+# stands out most against the starters at the position. A combination is checked first:
+# (name, traits, share every one of them must reach). Nothing named when no skill reaches
+# ARCHETYPE_MIN: a prospect without a standout has no style to name yet.
+OFFENSE_ARCHETYPES = {
+    'QB': {'combos': [('Dual Threat', ('agility', 'armStrength'), 0.75),
+                      ('Dual Threat', ('agility', 'accuracy'), 0.75)],
+           'single': {'armStrength': 'Gunslinger', 'accuracy': 'Pocket Passer',
+                      'agility': 'Scrambler'}},
+    'RB': {'combos': [('All-Purpose Back', ('speed', 'power', 'agility'), 0.6)],
+           'single': {'speed': 'Speed Back', 'power': 'Power Back', 'agility': 'Elusive Back'}},
+    'WR': {'combos': [],
+           'single': {'speed': 'Deep Threat', 'hands': 'Possession Receiver',
+                      'reach': 'Jump-Ball Receiver'}},
+    'TE': {'combos': [],
+           'single': {'hands': 'Receiving Tight End', 'power': 'Blocking Tight End',
+                      'agility': 'Move Tight End'}},
+    'K': {'combos': [], 'single': {'legStrength': 'Big Leg', 'accuracy': 'Precision Kicker'}},
+}
+DEFENSE_ARCHETYPES = {
+    'QB': {'combos': [], 'single': {'coverage': 'Ball Hawk', 'playReading': 'Center Fielder',
+                                    'tackling': 'Enforcer'}},
+    'RB': {'combos': [], 'single': {'runDefense': 'Run Stopper', 'blitzing': 'Blitzer',
+                                    'tackling': 'Tackling Machine'}},
+    'WR': {'combos': [], 'single': {'coverage': 'Lockdown Corner', 'tackling': 'Physical Corner'}},
+    'TE': {'combos': [], 'single': {'passRush': 'Pass Rusher', 'runDefense': 'Run Stuffer'}},
+}
+ARCHETYPE_MIN = 0.4
+
+
+def _archetype(table, shares):
+    """The style name for one side: a qualifying combination, else the single skill with
+    the highest share, if it reaches ARCHETYPE_MIN."""
+    if not table:
+        return None
+    for name, traits, need in table['combos']:
+        if all(shares.get(t, 0.0) >= need for t in traits):
+            return name
+    best = max(table['single'], key=lambda t: shares.get(t, -1.0))
+    return table['single'][best] if shares.get(best, -1.0) >= ARCHETYPE_MIN else None
+
+
 ELITE, STRONG, WEAK = 0.90, 0.75, 0.25
 # Which side of the ball a prospect projects to help most (owner, 2026-11-04): a side is the
 # lean when its projected rating beats the other by at least half a star tier (the "roughly
@@ -107,8 +149,10 @@ def _share(values, value) -> float:
 
 
 def scoutingReport(player, tables) -> dict:
-    """`{summary, lean, strengths, weaknesses, growth}` for a prospect, or None for anyone
-    else. `lean` is 'offense', 'defense' or 'two_way' (None for a kicker).
+    """`{stars, archetypes, lean, strengths, weaknesses, growth}` for a prospect, or None for
+    anyone else. `stars` is the projected star range `[low, high]` for the overall, offense
+    and defense (defense None for a kicker); `archetypes` names the offensive and defensive
+    style from the skills that stand out; `lean` is 'offense', 'defense' or 'two_way'.
     Strengths and weaknesses are `{trait, label, phrase, tier, side}`; tier is 'elite' or
     'strong' (weaknesses 'weak'), side 'offense', 'defense' or 'mental'."""
     if not (getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False)):
@@ -174,8 +218,21 @@ def scoutingReport(player, tables) -> dict:
         gap = float(detail['offense'][1]) - float(detail['defense'][1])
         lean = 'offense' if gap >= LEAN_GAP else 'defense' if gap <= -LEAN_GAP else 'two_way'
 
+    shares = {t: share for _side, t, share in graded}
+    try:
+        low, _m, high = player.projectionRange(0.0)
+    except Exception:
+        low = high = float(getattr(player, 'playerRating', 0) or 0)
+    starRange = lambda t: [_stars(t[0]), _stars(t[2])] if t else None
+    hasDefense = pos != 'K' and bool(detail.get('defense'))
+
     return {
-        'summary': _summary(player, pos, strengths, detail),
+        'stars': {'overall': [_stars(low), _stars(high)],
+                  'offense': starRange(detail.get('offense')),
+                  'defense': starRange(detail.get('defense')) if hasDefense else None},
+        'archetypes': {'offense': _archetype(OFFENSE_ARCHETYPES.get(pos), shares),
+                       'defense': (_archetype(DEFENSE_ARCHETYPES.get(pos), shares)
+                                   if hasDefense else None)},
         'lean': lean,
         'strengths': [entry(*g) for g in strengths],
         'weaknesses': [entry(*g, weak=True) for g in weaknesses],
@@ -189,42 +246,3 @@ def _stars(rating: float) -> int:
         if rating >= line:
             return stars
     return 1
-
-
-DEFENSIVE_NOUN = {'QB': 'safety', 'RB': 'linebacker', 'WR': 'cornerback', 'TE': 'defensive end'}
-
-
-def _starRange(low: float, high: float) -> str:
-    a, b = _stars(low), _stars(high)
-    return f"{a}-star" if a == b else f"{a} to {b}-star"
-
-
-def _summary(player, pos, strengths, detail=None) -> str:
-    """"Projects as a 4 to 5-star safety and a 3 to 5-star quarterback, with a big arm and
-    good accuracy." Each side of the ball gets its own star range (owner, 2026-11-04: the
-    overall's range averaged the two and billed a safety's projection as a quarterback's),
-    the stronger projected side first; a kicker has one."""
-    noun = POSITION_NOUN.get(pos, 'player')
-    detail = detail or {}
-    off, dfn = detail.get('offense'), detail.get('defense')
-    if off and dfn and pos in DEFENSIVE_NOUN:
-        sides = [(off[1], _starRange(off[0], off[2]), noun),
-                 (dfn[1], _starRange(dfn[0], dfn[2]), DEFENSIVE_NOUN[pos])]
-        # The clearly stronger side first, by the same gap as the lean; a two-way prospect
-        # keeps the position he is billed as in front.
-        if sides[1][0] - sides[0][0] >= LEAN_GAP:
-            sides.reverse()
-        lead = f"a {sides[0][1]} {sides[0][2]} and a {sides[1][1]} {sides[1][2]}"
-    else:
-        try:
-            low, _mid, high = player.projectionRange(0.0)
-        except Exception:
-            low = high = float(getattr(player, 'playerRating', 0) or 0)
-        if off:
-            low, high = off[0], off[2]
-        lead = f"a {_starRange(low, high)} {noun}"
-    # The skills named are the position's: they are what the player is billed as.
-    skills = POSITION_SKILLS.get(pos, ())
-    withs = [PHRASES[t][3] for _side, t, _s in strengths if t in skills][:2]
-    tail = f", with {' and '.join(withs)}" if withs else ""
-    return f"Projects as {lead}{tail}."
