@@ -592,6 +592,69 @@ class Player:
         high = self.computeExpectedRating(unseen - spread)
         return min(low, mid), mid, max(high, mid)
 
+    def _projectedState(self, unseen: float) -> dict:
+        """Offense, defense and every attribute with the physical skills developed to their
+        true skill less `unseen` points: the state `computeExpectedRating` reads the overall
+        from. Leaves the player untouched."""
+        attrs = getattr(self, 'attributes', None)
+        saved = {}
+        try:
+            for base, tru in _TRUESKILL_ATTR_PAIRS:
+                cur = getattr(attrs, base, None)
+                truVal = getattr(attrs, tru, None)
+                if truVal and unseen:
+                    truVal = int(round(np.clip(truVal - unseen, 60, 100)))
+                if cur is not None and truVal and truVal > cur:
+                    saved[base] = cur
+                    setattr(attrs, base, truVal)
+            if saved:
+                self.updateRating()
+            return {
+                'offense': float(getattr(self, 'offensiveRating', 0) or 0),
+                'defense': float(getattr(self, 'defensiveRating', 0) or 0),
+                'attributes': {base: float(getattr(attrs, base, 0) or 0)
+                               for base, _t in _TRUESKILL_ATTR_PAIRS},
+                'defensive': {k: float(v) for k, v in
+                              (attrs.getDefensiveAttributes(self.position) or {}).items()},
+            }
+        finally:
+            for base, val in saved.items():
+                setattr(attrs, base, val)
+            if saved:
+                self.updateRating()
+
+    def projectionDetail(self, vision: float = 0.0):
+        """The projected range of offense, defense and each attribute, the way
+        `projectionRange` gives the overall's (owner, 2026-11-04: a prospect's offense,
+        defense and attributes looked exact beside an approximate overall). Each value is
+        `(low, mid, high)`, from the same three states as the overall's range: the hidden
+        talent this viewer cannot see, taken at the middle and at either end of
+        PROSPECT_RANGE_SPREAD. One number once a player's talent is known. None without
+        attributes."""
+        from constants import PROSPECT_RANGE_SPREAD
+        if getattr(self, 'attributes', None) is None:
+            return None
+        v = max(0.0, min(1.0, float(vision or 0.0)))
+        unseen = self.unrevealedShift() * (1.0 - v)
+        spread = float(PROSPECT_RANGE_SPREAD) * (1.0 - self.talentRevealed()) * (1.0 - v)
+        mid = self._projectedState(unseen)
+        if spread <= 0:
+            lo = hi = mid
+        else:
+            lo = self._projectedState(unseen + spread)
+            hi = self._projectedState(unseen - spread)
+
+        def trio(a, m, b):
+            return (min(a, m), m, max(b, m))
+        return {
+            'offense': trio(lo['offense'], mid['offense'], hi['offense']),
+            'defense': trio(lo['defense'], mid['defense'], hi['defense']),
+            'attributes': {k: trio(lo['attributes'][k], mid['attributes'][k], hi['attributes'][k])
+                           for k in mid['attributes']},
+            'defensive': {k: trio(lo['defensive'].get(k, m), m, hi['defensive'].get(k, m))
+                          for k, m in mid['defensive'].items()},
+        }
+
     def computeCeilingRating(self, unseen: float = 0.0):
         """Projected ceiling rating: what this player's rating would be with every
         physical skill attribute developed to its potential. Only the physical

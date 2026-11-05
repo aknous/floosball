@@ -1246,6 +1246,38 @@ def _prospectProjection(player):
 
 
 
+# The attributes the profile shows as att1..att3, per position (`buildPlayerWithAttributes`).
+_PROFILE_ATTRS = {
+    'QB': ('armStrength', 'accuracy', 'agility'),
+    'RB': ('speed', 'power', 'agility'),
+    'WR': ('speed', 'hands', 'reach'),
+    'TE': ('hands', 'power', 'agility'),
+    'K': ('legStrength', 'accuracy'),
+}
+
+
+def _projectionDetail(player):
+    """The PUBLIC projected range of offense, defense and each attribute the profile shows
+    (`Player.projectionDetail(0)`), shaped like the overall's `{expected, low, high}`
+    (owner, 2026-11-04). Attributes are keyed `att1`.. as the profile reads them, defensive
+    ones by their own key. None on failure, and the page then shows today's values only."""
+    try:
+        d = player.projectionDetail(0.0)
+        if not d:
+            return None
+        rng = lambda t: {"low": round(t[0]), "expected": round(t[1]), "high": round(t[2])}
+        pos = player.position.name if hasattr(player.position, 'name') else str(player.position)
+        return {
+            "offense": rng(d['offense']),
+            "defense": rng(d['defense']),
+            "attributes": {f"att{i}": rng(d['attributes'][a])
+                           for i, a in enumerate(_PROFILE_ATTRS.get(pos, ()), start=1)
+                           if a in d['attributes']},
+            "defensive": {k: rng(t) for k, t in d['defensive'].items()},
+        }
+    except Exception:
+        return None
+
 def _draftInfo(player):
     """Who drafted this player and when, for the profile (owner, 2026-11-02).
 
@@ -1328,6 +1360,7 @@ async def get_player(player_id: int, response: Response):
         player_dict['expected'] = projection.get('expected')
         player_dict['projectionLow'] = projection.get('low')
         player_dict['projectionHigh'] = projection.get('high')
+        player_dict['projectionDetail'] = _projectionDetail(player)
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
