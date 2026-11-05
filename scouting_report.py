@@ -49,48 +49,6 @@ PHRASES = {
     'attitude': ('Attitude', 'Good in the locker room', 'Difficult in the locker room', None),
 }
 
-# A prospect's style on each side of the ball (owner, 2026-11-04), named for the skill that
-# stands out most against the starters at the position. A combination is checked first:
-# (name, traits, share every one of them must reach). Nothing named when no skill reaches
-# ARCHETYPE_MIN: a prospect without a standout has no style to name yet.
-OFFENSE_ARCHETYPES = {
-    'QB': {'combos': [('Dual Threat', ('agility', 'armStrength'), 0.75),
-                      ('Dual Threat', ('agility', 'accuracy'), 0.75)],
-           'single': {'armStrength': 'Gunslinger', 'accuracy': 'Pocket Passer',
-                      'agility': 'Scrambler'}},
-    'RB': {'combos': [('All-Purpose Back', ('speed', 'power', 'agility'), 0.6)],
-           'single': {'speed': 'Speed Back', 'power': 'Power Back', 'agility': 'Elusive Back'}},
-    'WR': {'combos': [],
-           'single': {'speed': 'Deep Threat', 'hands': 'Possession Receiver',
-                      'reach': 'Jump-Ball Receiver'}},
-    'TE': {'combos': [],
-           'single': {'hands': 'Receiving Tight End', 'power': 'Blocking Tight End',
-                      'agility': 'Move Tight End'}},
-    'K': {'combos': [], 'single': {'legStrength': 'Big Leg', 'accuracy': 'Precision Kicker'}},
-}
-DEFENSE_ARCHETYPES = {
-    'QB': {'combos': [], 'single': {'coverage': 'Ball Hawk', 'playReading': 'Center Fielder',
-                                    'tackling': 'Enforcer'}},
-    'RB': {'combos': [], 'single': {'runDefense': 'Run Stopper', 'blitzing': 'Blitzer',
-                                    'tackling': 'Tackling Machine'}},
-    'WR': {'combos': [], 'single': {'coverage': 'Lockdown Corner', 'tackling': 'Physical Corner'}},
-    'TE': {'combos': [], 'single': {'passRush': 'Pass Rusher', 'runDefense': 'Run Stuffer'}},
-}
-ARCHETYPE_MIN = 0.4
-
-
-def _archetype(table, shares):
-    """The style name for one side: a qualifying combination, else the single skill with
-    the highest share, if it reaches ARCHETYPE_MIN."""
-    if not table:
-        return None
-    for name, traits, need in table['combos']:
-        if all(shares.get(t, 0.0) >= need for t in traits):
-            return name
-    best = max(table['single'], key=lambda t: shares.get(t, -1.0))
-    return table['single'][best] if shares.get(best, -1.0) >= ARCHETYPE_MIN else None
-
-
 ELITE, STRONG, WEAK = 0.90, 0.75, 0.25
 # Which side of the ball a prospect projects to help most (owner, 2026-11-04): a side is the
 # lean when its projected rating beats the other by at least half a star tier (the "roughly
@@ -149,10 +107,9 @@ def _share(values, value) -> float:
 
 
 def scoutingReport(player, tables) -> dict:
-    """`{stars, archetypes, lean, strengths, weaknesses, growth}` for a prospect, or None for
-    anyone else. `stars` is the projected star range `[low, high]` for the overall, offense
-    and defense (defense None for a kicker); `archetypes` names the offensive and defensive
-    style from the skills that stand out; `lean` is 'offense', 'defense' or 'two_way'.
+    """`{stars, lean, strengths, weaknesses, growth}` for a prospect, or None for anyone
+    else. `stars` is the projected star range `[low, high]` for the overall, offense and
+    defense (defense None for a kicker); `lean` is 'offense', 'defense' or 'two_way'.
     Strengths and weaknesses are `{trait, label, phrase, tier, side}`; tier is 'elite' or
     'strong' (weaknesses 'weak'), side 'offense', 'defense' or 'mental'."""
     if not (getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False)):
@@ -218,7 +175,6 @@ def scoutingReport(player, tables) -> dict:
         gap = float(detail['offense'][1]) - float(detail['defense'][1])
         lean = 'offense' if gap >= LEAN_GAP else 'defense' if gap <= -LEAN_GAP else 'two_way'
 
-    shares = {t: share for _side, t, share in graded}
     try:
         low, _m, high = player.projectionRange(0.0)
     except Exception:
@@ -230,9 +186,6 @@ def scoutingReport(player, tables) -> dict:
         'stars': {'overall': [_stars(low), _stars(high)],
                   'offense': starRange(detail.get('offense')),
                   'defense': starRange(detail.get('defense')) if hasDefense else None},
-        'archetypes': {'offense': _archetype(OFFENSE_ARCHETYPES.get(pos), shares),
-                       'defense': (_archetype(DEFENSE_ARCHETYPES.get(pos), shares)
-                                   if hasDefense else None)},
         'lean': lean,
         'strengths': [entry(*g) for g in strengths],
         'weaknesses': [entry(*g, weak=True) for g in weaknesses],

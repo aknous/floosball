@@ -58,8 +58,7 @@ def test_no_numbers_and_the_same_report_every_time():
     for p in prospects:
         rep = sr.scoutingReport(p, tables)
         text = ' '.join([t['phrase'] for t in rep['strengths'] + rep['weaknesses']]
-                        + [rep['growth'] or '', rep['archetypes']['offense'] or '',
-                           rep['archetypes']['defense'] or ''])
+                        + [rep['growth'] or ''])
         # Star counts are words in a range ("a 3 to 4-star"); no rating number appears.
         assert not re.search(r'\d{2}', text), text
         assert sr.scoutingReport(p, tables) == rep
@@ -105,9 +104,9 @@ def test_the_lean_follows_the_projected_sides():
         assert rep['lean'] == want, (p.name, gap, rep['lean'])
 
 
-def test_stars_and_archetypes_per_side():
-    """Owner, 2026-11-04: projected stars for overall, offense and defense, and a style name
-    per side from the skills that stand out. Kickers have no defense."""
+def test_stars_per_side():
+    """Owner, 2026-11-04: projected stars for overall, offense and defense. Kickers have no
+    defense."""
     starters, prospects = _league()
     tables = sr.buildPeerTables(starters)
     for p in prospects:
@@ -116,11 +115,7 @@ def test_stars_and_archetypes_per_side():
             lo, hi = rep['stars'][side]
             assert 1 <= lo <= hi <= 5, (side, lo, hi)
         if p.position.name == 'K':
-            assert rep['stars']['defense'] is None and rep['archetypes']['defense'] is None
+            assert rep['stars']['defense'] is None
         else:
             lo, hi = rep['stars']['defense']
             assert 1 <= lo <= hi <= 5
-    qb = {'armStrength': 0.95, 'accuracy': 0.5, 'agility': 0.3}
-    assert sr._archetype(sr.OFFENSE_ARCHETYPES['QB'], qb) == 'Gunslinger'
-    assert sr._archetype(sr.OFFENSE_ARCHETYPES['QB'], {**qb, 'agility': 0.8}) == 'Dual Threat'
-    assert sr._archetype(sr.OFFENSE_ARCHETYPES['QB'], {k: 0.2 for k in qb}) is None
