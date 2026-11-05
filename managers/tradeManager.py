@@ -65,6 +65,8 @@ TRIGGER_URGENCY = {
     'expiring_surplus': 0,
     'locker_room': 1,
     'blocked_prospect': 2,
+    # A short team going nowhere sells to get back into the draft: chosen, not forced.
+    'pick_restock': 2.5,
     'horizon_mismatch': 3,
     # ⚠️ LAST, because the club is happy either way — it would simply re-sign him. He is
     # on the block at a price, not because anything is forcing the issue.
@@ -156,6 +158,9 @@ class TradeMarket:
         self.draftOrder = list(draftOrder) if draftOrder else None
         self._contention = {}
         self._leagueMean = 0.0
+        # Offseason only: each club's expected strength next season (`trading.priorContention`).
+        self._prior = {}
+        self._priorMean = 0.0
         # Cached per pass: the sweep asks for it once per listing and once per bid.
         self._cannotKeepCache = {}
         self._coreCache = {}
@@ -173,6 +178,9 @@ class TradeMarket:
         self.pickFail = {}
         self._classCache = None
         self._classBoardCache = {}
+        self._draftWindow = None
+        self._windowHasPicks = False
+        self._shortCache = {}
         self._computeContention()
 
     # ------------------------------------------------------------ context
@@ -210,6 +218,12 @@ class TradeMarket:
                 (wins + 0.5 * ties) / played) if played else 0.5
         values = list(self._contention.values())
         self._leagueMean = (sum(values) / len(values)) if values else 0.0
+        if self.week is None:
+            for team in getattr(self.teamManager, 'teams', None) or []:
+                self._prior[getattr(team, 'id', None)] = trading.priorContention(
+                    getattr(team, 'elo', None))
+            priors = list(self._prior.values())
+            self._priorMean = (sum(priors) / len(priors)) if priors else 0.0
 
     def teamWindow(self, team) -> str:
         """Where this club sits in its contention cycle: opening / open / closing / closed.
@@ -291,8 +305,18 @@ class TradeMarket:
         # contender pays up because next season is worse — its alternative to winning now is
         # not winning later, it is not winning at all. A club whose window has not opened
         # does the reverse and accumulates.
-        base = trading.nowWeight(self._contention.get(getattr(team, 'id', None), 0.5),
-                                 self._leagueMean, self.week)
+        # ⚠️ THE OFFSEASON PRICES ON NEXT SEASON'S PRIOR, NOT ON PARITY (2026-11-02). Last
+        # season's record is over and this one has not started, and every club used to read
+        # exactly 1.00, so a 2-22 club and a 20-4 club priced the future identically and
+        # only the window label separated them. The prior is the sim's own: ELO regressed
+        # the way the season reset regresses it. ⚠️ `isContending` and the hump still read
+        # the RECORD: they ask how the season went, this asks how the next one looks.
+        if self.week is None and self._prior:
+            base = trading.priorNowWeight(self._prior.get(getattr(team, 'id', None), 0.5),
+                                          self._priorMean)
+        else:
+            base = trading.nowWeight(self._contention.get(getattr(team, 'id', None), 0.5),
+                                     self._leagueMean, self.week)
         window = self.teamWindow(team)
         if window == 'closing':
             return base * TRADE_WINDOW_NOW_CLOSING
@@ -422,7 +446,14 @@ class TradeMarket:
         # A walk-year player leaves for NOTHING at season end, which is the whole reason
         # this market exists. He goes first.
         out.sort(key=lambda l: (TRIGGER_URGENCY.get(l.trigger, 99), -l.ask))
-        return out[:TRADE_LISTINGS_PER_TEAM]
+        out = out[:TRADE_LISTINGS_PER_TEAM]
+        # ⚠️ ON TOP OF THE CAP, NOT INSIDE IT. A team posts one listing a pass and a
+        # locker-room or blocked-prospect listing outranked the restock one almost every
+        # time, so it was never posted (measured, 2026-11-03). Only a short team gets it.
+        restock = self._restockListing(team, {id(l.player) for l in out})
+        if restock is not None:
+            out.append(restock)
+        return out
 
     # ------------------------------------------- the blockbuster (offseason)
 
@@ -726,13 +757,10 @@ class TradeMarket:
                 if ask > 0:
                     listing = PickListing(
                         holder, pick, ask, floor,
-                        why=(f"Paid to drop from {self._pickLabel(pick)} to "
-                             f"{self._pickLabel(swapFor)}. "
-                             f"The team does not need the very best player in this draft "
-                             f"to fill the hole it has, so the distance is worth more to "
-                             f"somebody else than to it."
-                             + (" The window is shut, so what it needs is assets, not one "
-                                "more good player."
+                        why=(f"Moving down from {self._pickLabel(pick)} to "
+                             f"{self._pickLabel(swapFor)} for extra pieces. The team "
+                             f"expects to fill its need with the later pick."
+                             + (" It is past its best years and building for the future."
                                 if self.teamWindow(holder) == 'closed' else '')))
                     listing.swapFor = swapFor
                     out.append(listing)
@@ -765,8 +793,9 @@ class TradeMarket:
         out = int(pick['season']) - int(self.season)
         exp = trading.expectedPickSlot(pick['slot'], out)
         if out <= 0:
-            return f"slot {int(pick['slot'])}"
-        return f"a pick expected around {exp:.0f} ({out} draft{'s' if out > 1 else ''} out)"
+            return f"the #{int(pick['slot'])} pick"
+        return (f"a pick expected around #{exp:.0f} "
+                f"({'next draft' if out == 1 else f'{out} drafts out'})")
 
     def _pickValueTo(self, team, pick) -> float:
         """What a pick is worth to THIS club.
@@ -788,6 +817,129 @@ class TradeMarket:
                 return board[min(k, len(board)) - 1] * weight
         return trading.pickValue(pick['slot'], out, weight=weight)
 
+    # ----------------------------------------------------- the pick cupboard
+
+    def _draftWindowSeasons(self) -> list:
+        """The TRADE_PICK_SHORT_DRAFTS drafts after this season's.
+
+        ⚠️ THIS SEASON'S PICK DOES NOT COUNT, in any pass: it is spent at the coming draft
+        (or already has been). Counting it let a team trade away both later picks while it
+        still held this year's, and it was short the day after the draft (measured,
+        2026-11-03: a premium on the window that included it changed nothing)."""
+        if self._draftWindow is None:
+            from constants import TRADE_PICK_SHORT_DRAFTS
+            first = int(self.season) + 1
+            try:
+                from database.connection import get_session
+                from database.models import DraftPick
+                session = get_session()
+                try:
+                    window = list(range(first, first + int(TRADE_PICK_SHORT_DRAFTS)))
+                    # ⚠️ NO ROWS IS NOT EVERYONE SHORT. Without pick rows in the window
+                    # (not seeded yet, or an unreadable table) every team would read as
+                    # short and post a restock listing.
+                    self._windowHasPicks = session.query(DraftPick.id).filter(
+                        DraftPick.season.in_(window),
+                        DraftPick.used == False).first() is not None   # noqa: E712
+                finally:
+                    session.close()
+            except Exception:
+                self._windowHasPicks = False
+            self._draftWindow = list(range(first, first + int(TRADE_PICK_SHORT_DRAFTS)))
+        return self._draftWindow
+
+    def _hasWindowRows(self) -> bool:
+        """Are there pick rows in the draft window at all?
+
+        ⚠️ READ THROUGH HERE, NEVER `_windowHasPicks` DIRECTLY. The flag is only set when
+        `_draftWindowSeasons` first runs, and every reader tested it BEFORE anything had
+        called that, so it read False and the whole pick cupboard (then a premium, an
+        emptied-window cost and the restock listing) never switched on outside the tests,
+        which set the flag by hand (found 2026-11-04)."""
+        self._draftWindowSeasons()
+        return self._windowHasPicks
+
+    def _windowPickIds(self, team) -> set:
+        """Ids of the picks this team holds in the next TRADE_PICK_SHORT_DRAFTS drafts.
+        Empty when the window has no pick rows at all (see `_draftWindowSeasons`), which
+        `isShortOfPicks` reads as not short."""
+        key = getattr(team, 'id', None)
+        if key not in self._shortCache:
+            window = set(self._draftWindowSeasons())
+            self._shortCache[key] = {p['id'] for p in self.picksOwnedBy(team)
+                                     if int(p['season']) in window}
+        return self._shortCache[key]
+
+    def isShortOfPicks(self, team) -> bool:
+        """Holds no pick in any of the next TRADE_PICK_SHORT_DRAFTS drafts."""
+        return self._hasWindowRows() and not self._windowPickIds(team)
+
+    def _restockListing(self, team, taken: set):
+        """A short team puts a player it does not need on the block for a return that must
+        include a pick (`pick_restock`).
+
+        ⚠️ A CONTENDER ONLY IN THE OFFSEASON (owner, 2026-11-04). Short teams are nearly
+        always contenders that spent picks moving up (12 of 13 at listing time, measured
+        2026-11-03), so a non-contender-only listing almost never fired. In season a
+        contender selling a starter costs it games; in the offseason the FA draft fills the
+        slot before a game is played.
+
+        ⚠️ A VETERAN, NOT ITS BEST PLAYER. A team going nowhere prices a prime player's
+        later seasons high (`laterWeight`), so listing the one that fetches most listed the
+        one nobody could afford: measured, 15 restock listings over 16 seasons and not one
+        clearing bid. What it does not need is a player past his career length, or one in
+        his last two seasons of contract. Never its future (developing), its core, a player
+        acquired this season or one already listed. Among the rest, the best rated, since
+        that is who a buyer upgrades with."""
+        from constants import TRADE_PICK_RESTOCK_ENABLED
+        from managers.frontOfficeBrain import ARC_DEVELOPING, ARC_REGRESSING
+        if not TRADE_PICK_RESTOCK_ENABLED or not self.isShortOfPicks(team):
+            return None
+        if self.week is not None and self.isContending(team):
+            return None
+        core = self._coreOf(team)
+        best = None
+        for player in (getattr(team, 'rosterDict', None) or {}).values():
+            if player is None or getattr(player, 'willRetire', False):
+                continue
+            if id(player) in core or id(player) in taken:
+                continue
+            if wasAcquiredThisSeason(player, self.season):
+                continue
+            try:
+                arc = self.brain.classifyArc(player)
+            except Exception:
+                arc = None
+            if arc == ARC_DEVELOPING:
+                continue
+            if arc != ARC_REGRESSING and int(getattr(player, 'termRemaining', 0) or 0) > 2:
+                continue
+            ask, floor = self._priceListing(team, player, 'pick_restock')
+            if ask <= 0:
+                continue
+            rating = float(getattr(player, 'playerRating', 0) or 0)
+            if best is None or rating > float(getattr(best.player, 'playerRating', 0) or 0):
+                best = Listing(team, player, 'pick_restock', ask, floor,
+                               why=self.sellerWhy(team, player, 'pick_restock'))
+        return best
+
+    def _restockPickFor(self, buyer, seller):
+        """The pick a buyer would give a short seller: one in the seller's draft window,
+        the cheapest on the buyer's own scale. Shaped as an `_assemble` mandatory piece."""
+        window = set(self._draftWindowSeasons())
+        if len(self._windowPickIds(buyer)) < 2:
+            return None             # never its last pick in the window
+        best = None
+        for pick in self.picksOwnedBy(buyer):
+            if int(pick['season']) not in window or self._isHeadlinePick(buyer, pick):
+                continue
+            mine = self._pickValueTo(buyer, pick)
+            if best is None or mine < best['buyerValue']:
+                best = {'kind': 'pick', 'id': pick['id'],
+                        'name': f"S{pick['season']} R{pick['round']} pick", 'detail': pick,
+                        'value': self._pickValueTo(seller, pick), 'buyerValue': mine}
+        return best
+
     def _classCeilings(self, team) -> list:
         """This club's believed ceiling for each prospect in the upcoming class, best
         first (`playerManager.rookieCeiling`)."""
@@ -805,13 +957,17 @@ class TradeMarket:
         return self._classBoardCache[key]
 
     def _isHeadlinePick(self, holder, pick) -> bool:
-        """A top slot in the upcoming draft where the prospect the holder expects there
-        projects as a 5-star. See `TRADE_HEADLINE_PICK_*`: it keys on the player, so in a
-        weak class the same slot trades like any other pick."""
-        from constants import TRADE_HEADLINE_PICK_SLOTS, TRADE_HEADLINE_PICK_CEILING
+        """A top slot in the upcoming draft: one of the top
+        `TRADE_HEADLINE_PICK_ALWAYS_SLOTS` in any class, or a slot up to
+        `TRADE_HEADLINE_PICK_SLOTS` where the prospect the holder expects there projects as
+        a 5-star. See `TRADE_HEADLINE_PICK_*`."""
+        from constants import (TRADE_HEADLINE_PICK_SLOTS, TRADE_HEADLINE_PICK_CEILING,
+                               TRADE_HEADLINE_PICK_ALWAYS_SLOTS)
         if int(pick.get('season', 0)) != int(self.season):
             return False
         slot = int(pick.get('slot') or 99)
+        if slot <= int(TRADE_HEADLINE_PICK_ALWAYS_SLOTS):
+            return True
         if slot > int(TRADE_HEADLINE_PICK_SLOTS):
             return False
         ceilings = self._classCeilings(holder)
@@ -963,13 +1119,13 @@ class TradeMarket:
         }
         pieces = [swapPiece] + extras
         why = (f"Moving up to {self._pickLabel(listing.pick)} from "
-               f"{self._pickLabel(swapFor)}. The jump is worth more to this team "
-               f"than the distance it gives up, and it keeps a pick either way.")
+               f"{self._pickLabel(swapFor)}. The team expects a better player at the "
+               f"higher pick.")
         window = self.teamWindow(buyer)
         if window == 'opening':
-            why += " It is building, and this is the kind of asset it is building with."
+            why += " It is rebuilding."
         elif window == 'closing':
-            why += " The window is closing, so the player has to arrive now."
+            why += " Its top players are getting older, so it is trying to win now."
         return Bid(buyer, pieces, sum(p['value'] for p in pieces), why=why)
 
     def _noteInquiry(self, reason: str) -> None:
@@ -1045,9 +1201,9 @@ class TradeMarket:
         return base + self.needTilt(team) * (dfn - off) / 2.0
 
     def _futureRatingFor(self, team, player) -> float:
-        """THIS club's read of the player's rating in the seasons after this one, blended
-        from today's `ratingFor` by its scouting vision (the blend `perceivedValue` uses,
-        without the per-player scout error).
+        """THIS club's read of the player's rating in the seasons after this one: its
+        projection as it sees it (`brain.seenForward`, the read `perceivedValue` uses,
+        without the per-player scout error), carried onto the need-tilted `ratingFor`.
 
         ⚠️ A DEVELOPING PLAYER IS PRICED AT WHAT HE BECOMES, NOT AT NEXT SEASON'S STEP
         (owner, 2026-10-02: "these players can still be offered in trades, but the GM should
@@ -1067,11 +1223,31 @@ class TradeMarket:
         coach = getattr(team, 'coach', None)
         try:
             current = float(getattr(player, 'playerRating', 0) or 0)
-            vision = float(self.brain.scoutingVision(coach, team))
-            forward = self._projectedRatingFor(team, player)
+            forward = self.brain.seenForward(player, self._projectedRatingFor(team, player),
+                                             coach, team)
         except Exception:
             return present
-        return present + (forward - current) * vision
+        return present + (forward - current)
+
+    def _buyerFutureRating(self, buyer, player, believed: float):
+        """The buyer's read of an incoming player's later seasons: its own projection of
+        him (`_futureRatingFor`), carrying the same scouting error and production read as
+        its `believed` rating for this season.
+
+        ⚠️ THE BUYER PRICED EVERY SEASON AT ONE RATING while the seller projected the later
+        ones (2026-11-03), so on a truly rising player the seller's ask ran ~5 value points
+        (median) over anything a buyer could see, and rising players rarely moved. The
+        offset is `believed` less the buyer's noise-free read of this season
+        (`brain.seasonRating`), so a prime player's later seasons price exactly as before
+        and only the projected growth or decline is added. None when it cannot be read,
+        which prices every season at `believed`, as it used to."""
+        try:
+            coach = getattr(buyer, 'coach', None)
+            thisSeason = self.ratingFor(buyer, player,
+                                        float(self.brain.seasonRating(player, coach, buyer)))
+            return self._futureRatingFor(buyer, player) + (float(believed) - thisSeason)
+        except Exception:
+            return None
 
     def _projectedRatingFor(self, team, player) -> float:
         """Where this club expects the player to end up, BEFORE its scouting blend: a
@@ -1093,9 +1269,8 @@ class TradeMarket:
         """A developing player this club projects to the 4-star line
         (`TRADE_RISING_STAR_RATING`). Bought with quality, not volume (see the constant).
 
-        ⚠️ The PROJECTION, not the scouting-blended read the price uses: a good scout
-        reads Norman Slithers' later seasons at 83 (vision 0.6 of the way to 88), and a
-        blended test would put a player expected to reach 88 a point under the line."""
+        ⚠️ The PROJECTION, not the need-tilted read the price uses, so the line is about
+        the player rather than about this buyer's offense/defense balance."""
         from constants import TRADE_RISING_STAR_RATING
         from managers.frontOfficeBrain import ARC_DEVELOPING
         try:
@@ -1354,28 +1529,38 @@ class TradeMarket:
                      if getattr(p, 'id', None) != getattr(player, 'id', None)]
             keptBy = (' and '.join(names) if len(names) < 3
                       else ', '.join(names[:-1]) + ' and ' + names[-1])
-            why = (f"{name}'s contract is up and the team is not renewing it. It can keep "
-                   f"only {int(RESIGN_LIMIT_PER_OFFSEASON)} of its expiring players this "
-                   + (f"offseason and has chosen {keptBy} instead, so {name} leaves for "
-                      f"nothing at season end." if names else
-                      f"offseason and {name} did not make the cut, leaving for nothing at "
-                      f"season end.")
-                   + " Anything beats that.")
+            # ⚠️ THE OFFSEASON BELONGS TO THE SEASON THAT JUST ENDED (owner, 2026-11-04).
+            # By the time a pass runs there, contracts have ticked down and a walk-year
+            # player has the coming season left, so "the contract is up" and "at season
+            # end" would point at the season already played.
+            limit = int(RESIGN_LIMIT_PER_OFFSEASON)
+            if self.week is None:
+                why = (f"{name} has one season left. The team can re-sign only {limit} "
+                       f"players each offseason "
+                       + (f"and plans to keep {keptBy}, so {name} is expected to leave in "
+                          f"free agency after next season." if names else
+                          f"and {name} is not one of them, so is expected to leave in free "
+                          f"agency after next season."))
+            else:
+                why = (f"{name}'s contract ends this season. The team can re-sign only "
+                       f"{limit} players this "
+                       + (f"offseason and plans to keep {keptBy}, so {name} is expected to "
+                          f"leave in free agency." if names else
+                          f"offseason and {name} is not one of them, so is expected to leave "
+                          f"in free agency."))
         elif trigger == 'expiring_keeper':
-            why = (f"Could keep {name}, so the price is the contract that would follow "
-                   f"rather than the weeks left. Available only to a return that beats "
-                   f"re-signing them.")
+            why = (f"The team could re-sign {name}, so it is asking for more than a player "
+                   f"it would otherwise keep.")
         elif trigger == 'blocked_prospect':
             prospect = next((p for p in (getattr(team, 'prospects', None) or [])
                              if getattr(getattr(p, 'position', None), 'name', '') == pos),
                             None)
             who = getattr(prospect, 'name', 'a prospect')
-            why = (f"{who} is ready at {pos} and stuck behind {name}. Moving them opens "
-                   f"the slot rather than letting the pipeline rot.")
+            why = (f"{who} is ready to start at {pos} and is behind {name}. Trading {name} "
+                   f"opens the spot for {who}.")
         elif trigger == 'locker_room':
             att = self._attitudeOf(player)
-            why = (f"{name}'s attitude ({int(att)}) drags the room down every week they "
-                   f"stay." if att else f"{name} is a locker-room problem.")
+            why = f"{name}'s attitude has been hurting the locker room."
         elif trigger == 'horizon_mismatch':
             # ⚠️ THE TWO STRINGS HERE USED TO BE THE WRONG WAY ROUND. The trigger only
             # fires for a contender holding 3+ years, and the contending branch called
@@ -1383,21 +1568,26 @@ class TradeMarket:
             # that put them on the block. Fans reasonably read it as nonsense. There is
             # only one case now, so it is stated plainly, with the years named.
             term = int(getattr(player, 'termRemaining', 0) or 0)
-            why = (f"{name} is signed for {term} more seasons and the core around them is "
-                   f"aging out before that contract ends, so the team would rather have "
-                   f"the help while it is still winning.")
+            why = (f"{name} is signed for {term} more seasons, and the team's top players "
+                   f"are getting older. It is looking for help it can use now.")
+        elif trigger == 'pick_restock':
+            why = (f"The team has no pick in either of the next two drafts and wants one "
+                   f"back in return for {name}.")
+            if self.week is None and self.isContending(team):
+                why += f" It can fill {name}'s spot in the free agent draft."
         elif trigger == 'inquiry':
-            why = f"Nobody put {name} on the block. Another team called and asked."
+            why = f"Another team asked about {name}."
         else:
             why = f"{name} is available."
 
+        # The team's place in its cycle, stated as a fact rather than a verdict (owner,
+        # 2026-11-04: the reasons read as editorial).
         if window == 'closed':
-            why += (" The window is shut and the core is fading, so there is nothing here "
-                    "to build around.")
+            why += " The team is past its best years and building for the future."
         elif window == 'opening':
-            why += " The team is still building, so the return matters more than the player."
+            why += " The team is rebuilding."
         elif window == 'closing':
-            why += " Selling from a side that is still winning, which is the hard call."
+            why += " The team is still winning, but its top players are getting older."
         return why
 
     def buyerWhy(self, buyer, listing) -> str:
@@ -1417,24 +1607,24 @@ class TradeMarket:
             gaps = [getattr(getattr(p, 'position', None), 'name', '')
                     for _s, p in self._positionalGaps(buyer)]
             rank = (gaps.index(pos) + 1) if pos in gaps else None
-            bits.append(f"{pos} is this team's "
-                        f"{'biggest' if rank == 1 else 'number ' + str(rank)} hole against "
-                        f"the rest of the league" if rank else
-                        f"{pos} is one of this team's holes")
+            bits.append(f"{pos} is this team's weakest position compared to the rest of "
+                        f"the league" if rank == 1 else
+                        f"{pos} is one of this team's weaker positions compared to the rest "
+                        f"of the league")
 
         tilt = self.needTilt(buyer)
         if abs(tilt) > 0.25:
             side = 'defense' if tilt > 0 else 'offense'
-            bits.append(f"it is short on {side} relative to the league, and they help there")
+            bits.append(f"The team is weak on {side} compared to the league, and "
+                        f"{getattr(player, 'name', 'this player')} helps there")
 
         window = self.teamWindow(buyer)
         if window == 'closing':
-            bits.append("the window is closing, and its alternative to winning now is not "
-                        "winning later, it is not winning")
+            bits.append("Its top players are getting older, so it is trying to win now")
         elif window == 'open':
-            bits.append("the window is open and the core is intact")
+            bits.append("It is trying to win now")
         elif window == 'opening':
-            bits.append("it is still building, so this has to be worth more than the assets")
+            bits.append("It is rebuilding")
 
         # ⚠️ THE CUT IS DELIBERATELY NOT NAMED HERE. This is written when the BID is made
         # and settlement may still take a different path — a same-position swap needs no cut
@@ -1442,9 +1632,9 @@ class TradeMarket:
         # aftermath strip, which records what actually happened. Two sources for one fact is
         # the failure this codebase keeps repeating.
         if not bits:
-            return "An upgrade the team could afford."
-        return bits[0][0].upper() + bits[0][1:] + (
-            ('; ' + '; '.join(bits[1:]) + '.') if len(bits) > 1 else '.')
+            return "An upgrade the team can afford."
+        # One plain sentence per reason; semicolon chains read as a run-on.
+        return ' '.join(b[0].upper() + b[1:] + '.' for b in bits)
 
     def _priceListing(self, team, player, trigger=None):
         # ⚠️ NOT A RENTAL IF THE CLUB CAN RE-SIGN HIM. `retentionTerm` is the single rule,
@@ -1574,7 +1764,8 @@ class TradeMarket:
         # one with room gets the contract that follows, and only then can a keeper clear.
         buyerTerm = (int(getattr(player, 'termRemaining', 0) or 0)
                      + self.retentionTerm(buyer, player, incoming=True))
-        gross = trading.playerValue(believed, buyerTerm, self.week, buyerWeight, posW)
+        gross = trading.playerValue(believed, buyerTerm, self.week, buyerWeight, posW,
+                                    futureRating=self._buyerFutureRating(buyer, player, believed))
         if gross <= 0:
             return None
 
@@ -1677,6 +1868,16 @@ class TradeMarket:
         # but the whole shape being bought here is a haul, and measured at three pieces the
         # typical bundle reached only 0.78 of the bar, so the cap and not the price was
         # what refused most calls.
+        # ⚠️ A RESTOCK SALE IS FOR A PICK. A short seller listed this player to get back
+        # into the draft, so the payment must carry a pick in its draft window; a buyer
+        # with none to give cannot bid.
+        mandatory = None
+        if listing.trigger == 'pick_restock':
+            restockPick = self._restockPickFor(buyer, listing.team)
+            if restockPick is None:
+                self.assembleFail['noRestockPick'] = self.assembleFail.get('noRestockPick', 0) + 1
+                return None
+            mandatory = [restockPick]
         pieces = self._assemble(buyer, listing.team, bar * urgency,
                                 gross * urgency * appetite,
                                 displaced,
@@ -1685,7 +1886,8 @@ class TradeMarket:
                                 maxPieces=self._maxPiecesFor(listing, player),
                                 # A rising star is paid for with quality, not volume
                                 # (`TRADE_RISING_STAR_RATING`), judged by the SELLER.
-                                qualityOverVolume=self._isRisingStar(listing.team, player))
+                                qualityOverVolume=self._isRisingStar(listing.team, player),
+                                mandatory=mandatory, leaving=player)
         if not pieces:
             return None
 
@@ -1939,7 +2141,7 @@ class TradeMarket:
 
     def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
                   swapPosition=None, maxPieces=None, excludeIds=None,
-                  qualityOverVolume: bool = False, mandatory=None) -> list:
+                  qualityOverVolume: bool = False, mandatory=None, leaving=None) -> list:
         """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
@@ -1957,8 +2159,13 @@ class TradeMarket:
         value. Both halves are needed: raising only the ceiling changes nothing, because
         the bundle is sized to the bar.
         """
-        sellerValue = {(a['kind'], a['id']): a['value'] for a in self._tradeableAssets(
-            buyer, valuingTeam=seller, swapPosition=swapPosition)}
+        # `leaving`: the player the seller is giving up. A prospect it receives at his
+        # position is measured against the seller WITHOUT him (fixed 2026-11-05): measured
+        # against the man leaving, the replacement looked worth almost nothing exactly
+        # where he matters most.
+        sellerAssets = {(a['kind'], a['id']): a for a in self._tradeableAssets(
+            buyer, valuingTeam=seller, swapPosition=swapPosition, leaving=leaving)}
+        sellerValue = {k: a['value'] for k, a in sellerAssets.items()}
         buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer,
                                             swapPosition=swapPosition)
         # Cheapest FOR THE BUYER first, so it parts with what it minds least.
@@ -1979,6 +2186,7 @@ class TradeMarket:
         from constants import TRADE_PICK_STACKING_DECAY_ENABLED
 
         def seen(ps):
+            ps = self._countProspectsOnce(ps)
             # What the SELLER counts the payment as. For a headline pick or a rising star,
             # quality, not volume (`_qualityValue`) over everything. Otherwise players and
             # prospects count in full and PICKS do not stack: best pick first, each further
@@ -1991,11 +2199,21 @@ class TradeMarket:
                         + self._qualityValue(picks))
             return sum(p['value'] for p in ps)
 
+        # ⚠️ A TEAM NEVER TRADES ITS LAST PICK IN ITS NEXT TWO DRAFTS (owner, 2026-11-04).
+        # Pricing it did not work: the Raccoons emptied their cupboard to move up 16 slots,
+        # and charging the draft sat out at the league's price left trades paying with both
+        # future picks unchanged (27 -> 27 over four seeds), the move-up gain cleared it.
+        windowHeld = set(self._windowPickIds(buyer))
+        windowUsed = {m['id'] for m in pieces if m['kind'] == 'pick'} & windowHeld
         for asset in buyerAssets:
             if seen(pieces) >= bar:
                 break
             if len(pieces) >= (maxPieces or TRADE_MAX_PIECES):
                 break
+            if asset['kind'] == 'pick' and asset['id'] in windowHeld:
+                if not windowHeld - windowUsed - {asset['id']}:
+                    continue        # it would be the last one
+                windowUsed.add(asset['id'])
             if asset['kind'] == 'player':
                 # ⚠️ AT MOST ONE STARTER, and only at the listing's own position. A second
                 # would empty the position the incoming player is meant to fill.
@@ -2007,7 +2225,12 @@ class TradeMarket:
                 if asset['kind'] == 'player':
                     usedPlayer = False
                 continue
-            pieces.append(dict(asset, value=worthToSeller))
+            piece = dict(asset, value=worthToSeller)
+            piece.pop('_need', None)
+            need = sellerAssets.get((asset['kind'], asset['id']), {}).get('_need')
+            if need:
+                piece['_need'] = need
+            pieces.append(piece)
             toSeller += worthToSeller
             toBuyer += asset['value']
         if seen(pieces) < bar:
@@ -2048,9 +2271,10 @@ class TradeMarket:
             self.assembleFail['tooExpensive'] = self.assembleFail.get('tooExpensive', 0) + 1
             return []           # it costs the buyer more than the player is worth to it
         self.assembleFail['built'] = self.assembleFail.get('built', 0) + 1
-        return pieces
+        return [{k: v for k, v in p.items() if k != '_need'}
+                for p in self._countProspectsOnce(pieces)]
 
-    def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None) -> list:
+    def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None, leaving=None) -> list:
         """This club's picks, pipeline prospects, and — at `swapPosition` — a starter.
 
         ⚠️ A ROSTER PLAYER AT THE LISTING'S OWN POSITION IS THE ONE TRADE THAT NEEDS NO
@@ -2096,16 +2320,38 @@ class TradeMarket:
         for prospect in getattr(team, 'prospects', None) or []:
             if wasAcquiredThisSeason(prospect, self.season):
                 continue        # pass-the-parcel, one asset class down
-            ceiling = self._believedCeiling(team, prospect)
-            out.append({
+            # ⚠️ READ BY THE CLUB VALUING HIM, NOT THE ONE HOLDING HIM (2026-11-02). The seller
+            # used to price a prospect it was being offered through the BUYER's scouting,
+            # so a good scout could never spot a dud and a poor one could never be sold
+            # one: scouting decided nothing about a prospect changing hands.
+            ceiling = self._believedCeiling(valuer, prospect)
+            seasons = getattr(prospect, 'prospect_seasons', 0)
+            posW = self._positionWeight(prospect)
+            asset = {
                 'kind': 'prospect',
                 'id': getattr(prospect, 'id', None),
                 'name': getattr(prospect, 'name', '?'),
-                'detail': {'prospectSeasons': getattr(prospect, 'prospect_seasons', 0)},
-                'value': trading.prospectValue(
-                    ceiling, getattr(prospect, 'prospect_seasons', 0), weight=weight,
-                    positionWeight=self._positionWeight(prospect)),
-            })
+                'detail': {'prospectSeasons': seasons},
+                'value': trading.prospectValue(ceiling, seasons, weight=weight,
+                                               positionWeight=posW),
+            }
+            # ⚠️ A TEAM RECEIVING A PROSPECT PRICES WHAT HE ADDS, NOT WHAT HE IS (owner,
+            # 2026-11-04). Counted above replacement, a prospect stuck behind a better
+            # starter or prospect, or a second kicker prospect in one package, was worth as
+            # much as one who fills a hole: the Jetskis took two kicker prospects for one
+            # slot. Measured above what the team already has at his position, the draft's
+            # own need bar (`playerManager._rookieNeedBar`), as a trade bid prices the
+            # upgrade over the man displaced. The holder's own cost is unchanged.
+            if valuer is not team:
+                bar = self._needBar(valuer, prospect, leaving)
+                asset['value'] = trading.prospectValue(
+                    REPLACEMENT_RATING + max(0.0, ceiling - bar), seasons, weight=weight,
+                    positionWeight=posW)
+                asset['_need'] = {'ceiling': ceiling, 'bar': bar, 'seasons': seasons,
+                                  'weight': weight, 'posW': posW,
+                                  'pos': getattr(getattr(prospect, 'position', None),
+                                                 'value', None)}
+            out.append(asset)
         if swapPosition is not None:
             # ⚠️ PRESENT VALUE, so `nowWeight` rather than `laterWeight` — a starter plays
             # this season. That is what makes a contender price an incoming rental high
@@ -2131,6 +2377,38 @@ class TradeMarket:
                         futureRating=self._futureRatingFor(valuer, held)),
                 })
         return out
+
+    def _needBar(self, team, prospect, leaving=None) -> float:
+        """What a prospect has to beat at his position on this team (the draft's
+        `_rookieNeedBar`), with `leaving` (a player this trade takes away) counted as
+        gone, or replacement where the player manager has no such read."""
+        fn = getattr(self.playerManager, '_rookieNeedBar', None)
+        if fn is not None:
+            try:
+                if leaving is not None:
+                    return float(fn(self.brain, team, prospect, leaving=leaving))
+                return float(fn(self.brain, team, prospect))
+            except Exception:
+                pass
+        return float(REPLACEMENT_RATING)
+
+    def _countProspectsOnce(self, pieces) -> list:
+        """The package as the receiving team counts it: a second incoming prospect at one
+        position is measured above the first as well as above what it already has, since
+        only one of them can take the slot."""
+        best, adjusted = {}, {}
+        order = sorted(range(len(pieces)),
+                       key=lambda i: -((pieces[i].get('_need') or {}).get('ceiling') or 0))
+        for i in order:
+            n = pieces[i].get('_need')
+            if not n:
+                continue
+            bar = max(n['bar'], best.get(n['pos'], 0.0))
+            adjusted[i] = trading.prospectValue(
+                REPLACEMENT_RATING + max(0.0, n['ceiling'] - bar), n['seasons'],
+                weight=n['weight'], positionWeight=n['posW'])
+            best[n['pos']] = max(best.get(n['pos'], 0.0), n['ceiling'])
+        return [dict(p, value=adjusted[i]) if i in adjusted else p for i, p in enumerate(pieces)]
 
     def _believedCeiling(self, team, prospect) -> float:
         try:

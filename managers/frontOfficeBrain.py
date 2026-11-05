@@ -264,9 +264,38 @@ class FrontOfficeBrain:
         if yearsPast >= 0:
             return ARC_REGRESSING
 
+        # ⚠️ DEVELOPING MEANS STILL RISING, NOT "BELOW HIS CEILING" (2026-11-02). A player
+        # past his peak season loses attributes every offseason while his potential stays
+        # put, so his headroom GROWS as he ages, and the headroom test alone labeled him
+        # developing. Measured on the season-11 prod snapshot: 62 of 146 "developing"
+        # starters were at or past their peak, 35 of them projected to fall next season,
+        # and every seller priced their later seasons ABOVE today (Frig Lagotis, RB 90 in
+        # season 10, sim projection 87, read at 93.5). The same mislabel made all 11
+        # 'opening' windows. Past his peak and short of longevity, he is in his prime.
+        if self._isPastPeak(player):
+            return ARC_PRIME
         if self._ceilingRating(player) - current >= FO_DEVELOPING_HEADROOM:
             return ARC_DEVELOPING
         return ARC_PRIME
+
+    @staticmethod
+    def _isPastPeak(player) -> bool:
+        """At or past his peak season on the development clock (`PlayerDevelopment`):
+        the point from which the offseason develops him downward. The same line
+        `projectedRatingPastPeak` draws, read without computing the projection."""
+        if getattr(getattr(player, 'attributes', None), 'longevity', None) is not None:
+            try:
+                from player_development import PlayerDevelopment as _PD, CareerPhase
+                return _PD.careerContext(player, 0).phase != CareerPhase.RISING
+            except Exception:
+                pass
+        fn = getattr(player, 'projectedRatingPastPeak', None)
+        if not callable(fn):
+            return False
+        try:
+            return fn(0) is not None
+        except Exception:
+            return False
 
     def _yearsPastLongevity(self, player) -> int:
         """Seasons past the player's personal longevity clock (negative = still
@@ -394,6 +423,28 @@ class FrontOfficeBrain:
         cache[key] = result
         return result
 
+    def agingSeen(self, coach, team=None) -> float:
+        """The share of a past-peak player's projected decline this GM credits: half
+        for everyone (age is public), the rest by scouting vision."""
+        return 0.5 + 0.5 * self.scoutingVision(coach, team)
+
+    def seenForward(self, player, forward: float, coach=None, team=None) -> float:
+        """The forward rating this GM acts on, from `forward` (a projection already read
+        through this team's eyes).
+
+        ⚠️ SCOUTING IS ALREADY INSIDE A GROWTH READ, SO IT IS NOT CHARGED AGAIN (2026-11-02).
+        `projectionFor` takes out the hidden talent this team cannot see and
+        `_ceilingRating` carries its prospect scouting error; blending the result toward
+        today's rating by vision a second time made a vision-0.25 GM credit a quarter of
+        growth the public consensus sees in full. Aging is the sim's public rules at their
+        average, so it is seen as `_agingDrag` sees it: half by everyone, the rest by
+        scouting."""
+        current = float(getattr(player, 'playerRating', 0) or 0)
+        forward = float(forward)
+        if self._isPastPeak(player):
+            return current + (forward - current) * self.agingSeen(coach, team)
+        return forward
+
     def _attrLean(self, coach, attr: str, bonus: float = 0.0) -> float:
         """Normalize a 60-100 coach attribute to 0.0-1.0. A missing coach reads
         as neutral-average rather than incompetent, so an unmanaged team still
@@ -478,10 +529,10 @@ class FrontOfficeBrain:
     def perceivedValue(self, player, coach=None, rng=None, team=None) -> float:
         """What THIS GM believes the player is worth, position-weighted.
 
-        The GM's read is a blend of today's number and the true forward
-        projection, mixed by `scouting`: no vision = the current rating only,
-        full vision = the projection. Whatever vision is missing becomes random
-        error, so a poor scout is wrong in a direction rather than just fuzzy.
+        The GM's read is the forward projection as this team sees it (`seenForward`:
+        hidden talent by scouting vision, aging half public), plus a held scouting error
+        that shrinks as vision rises, so a poor scout is wrong in a direction rather
+        than just fuzzy.
 
         `rng` is injectable so tests can make a valuation deterministic.
         """
@@ -491,7 +542,7 @@ class FrontOfficeBrain:
         forward = self.trueForwardRating(player, coach, team)
 
         vision = self.scoutingVision(coach, team)
-        seen = current + (forward - current) * vision
+        seen = self.seenForward(player, forward, coach, team)
 
         # Error shrinks to zero as vision approaches 1.
         # ⚠️ And it shrinks further for a player this club already has. A GM has watched
@@ -834,7 +885,7 @@ class FrontOfficeBrain:
         if decline <= 0:
             return 0.0
         extraSeasons = max(0, int(FO_STANDING_HORIZON_SEASONS) - 1)
-        seen = 0.5 + 0.5 * self.scoutingVision(coach, team)
+        seen = self.agingSeen(coach, team)
         weight = 2.0 * self._attrLean(coach, 'playerDevelopment')
         return -decline * extraSeasons * seen * weight
 
@@ -917,8 +968,8 @@ class FrontOfficeBrain:
         team's read of his ceiling, f = FO_CEILING_CREDIT x the GM's playerDevelopment
         lean. Each later season realises the same share of what is left, so the extra
         over the horizon H is gap x ((1-f) - (1-f)^H), which never passes the ceiling.
-        Seen through scouting vision like the next-season projection in
-        `perceivedValue`, and position-weighted like the value it adds to.
+        Scouting is already in the ceiling read (`seenForward`), so it is not applied
+        again; position-weighted like the value it adds to.
         A player at or past his peak gets nothing here (his decline is `_agingDrag`)."""
         if not FO_STANDING_ENABLED or player is None:
             return 0.0
@@ -938,7 +989,7 @@ class FrontOfficeBrain:
         extra = gap * ((1.0 - f) - (1.0 - f) ** horizon)
         if extra <= 0:
             return 0.0
-        return extra * self.scoutingVision(coach, team) * positionValue(player, venueBiasFor(team))
+        return extra * positionValue(player, venueBiasFor(team))
 
     def contractTermAdjustment(self, player, seasons: int, coach=None, team=None) -> float:
         """Value points to add to `decisionValue` so it prices a contract of `seasons`
@@ -954,7 +1005,7 @@ class FrontOfficeBrain:
             it: age is public, so half the decline at least, the rest by scouting vision,
             weighed by the GM's playerDevelopment lean.
           - developing: gap x ((1-f) - (1-f)^k), the same compounding share of the gap to
-            his ceiling `_growthBeyondNextSeason` uses, seen through scouting vision.
+            his ceiling `_growthBeyondNextSeason` uses (scouting is in the ceiling read).
         A one-season deal (or a prime player) adjusts by nothing. Position-weighted like
         the value it adds to."""
         if not FO_CONTRACT_VALUE_ENABLED or player is None:
@@ -971,7 +1022,7 @@ class FrontOfficeBrain:
             d = max(0.0, current - float(nextSeason))
             if d <= 0:
                 return 0.0
-            seen = 0.5 + 0.5 * self.scoutingVision(coach, team)
+            seen = self.agingSeen(coach, team)
             weight = 2.0 * self._attrLean(coach, 'playerDevelopment')
             points = -d * (seasons - 1) / 2.0 * seen * weight
         else:
@@ -985,7 +1036,7 @@ class FrontOfficeBrain:
                 return 0.0
             f = _clamp(FO_CEILING_CREDIT * self.developmentLean(coach, team), 0.0, 1.0)
             levels = [gap * ((1.0 - f) - (1.0 - f) ** k) for k in range(1, seasons + 1)]
-            points = sum(levels) / seasons * self.scoutingVision(coach, team)
+            points = sum(levels) / seasons
         return points * positionValue(player, venueBiasFor(team))
 
     def contractValue(self, player, seasons: int, coach=None, team=None) -> float:
@@ -995,17 +1046,16 @@ class FrontOfficeBrain:
                 + self.contractTermAdjustment(player, seasons, coach, team))
 
     def seasonRating(self, player, coach=None, team=None) -> float:
-        """The rating this GM expects from the player in the coming season: today's
-        rating moved toward next season's projection (`trueForwardRating`: growth toward
-        his ceiling, or the sim's aging past his peak) by its scouting vision, without the
-        scouting noise. Used where the question is simply who will be the better player
+        """The rating this GM expects from the player in the coming season: next season's
+        projection (`trueForwardRating`: growth toward his ceiling, or the sim's aging past
+        his peak) as this team sees it (`seenForward`), without the scouting noise. Used where the question is simply who will be the better player
         this season (owner, 2026-10-17), e.g. two prospects for one slot."""
         current = float(getattr(player, 'playerRating', 0) or 0)
         try:
             forward = float(self.trueForwardRating(player, coach, team))
         except Exception:
             return current
-        return current + (forward - current) * self.scoutingVision(coach, team)
+        return self.seenForward(player, forward, coach, team)
 
     def expectedFreeAgent(self, position, team=None, coach=None, pickDepth=0, pool=None):
         """The free agent this team can realistically sign at `position`: the

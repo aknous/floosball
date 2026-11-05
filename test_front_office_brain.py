@@ -119,8 +119,8 @@ def test_developer_credits_ceiling():
 # --------------------------------------------------------- scouting
 
 def test_scouting_gates_the_forward_read():
-    """The headline behavior: a sharp scout sees the arc, a poor one sees
-    today's number. Averaged over many draws so the noise term cancels."""
+    """The headline behavior: a sharp scout sees the whole decline, a poor one half
+    of it (age is public, `agingSeen`). Averaged over many draws so the noise cancels."""
     brain = _brain(yearsPastByName={'Fading': 2})
     rng = random.Random(1234)
 
@@ -132,9 +132,9 @@ def test_scouting_gates_the_forward_read():
     sharpAvg = sum(brain.perceivedValue(fading, sharp, rng=rng) for _ in range(N)) / N
     poorAvg = sum(brain.perceivedValue(fading, poor, rng=rng) for _ in range(N)) / N
 
-    # The sharp GM marks the fading vet DOWN; the poor one pays today's number.
+    # The sharp GM marks the fading vet DOWN the whole way; the poor one half way.
     assert sharpAvg < poorAvg, f"sharp {sharpAvg:.2f} !< poor {poorAvg:.2f}"
-    assert abs(poorAvg - 90 * positionValue(fading)) < 1.0, poorAvg
+    assert abs(poorAvg - 89 * positionValue(fading)) < 1.0, poorAvg
     print(f"PASS scouting gates the read (sharp={sharpAvg:.1f} < poor={poorAvg:.1f})")
 
 

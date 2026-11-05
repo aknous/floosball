@@ -88,10 +88,9 @@ def contentionRamp(week: int = None) -> float:
     identically, there is no gap to trade across, and nothing fires. The market opens as
     the table separates — a deadline without a deadline rule.
 
-    The offseason (`week=None`) returns 0.0 for the same reason it is true there:
-    contention is unknown for a season that has not been played, so every club is back at
-    parity. ⚠️ That removes the buyer/seller asymmetry entirely, which is why the
-    offseason market cannot run on contention and runs on the other three triggers.
+    The offseason (`week=None`) returns 0.0: this season's evidence is over and the next
+    has not started. The market prices the offseason on `priorNowWeight` instead
+    (next season's ELO prior), not on this ramp.
     """
     if week is None:
         return 0.0
@@ -114,6 +113,31 @@ def nowWeight(contention: float, leagueMeanContention: float, week: int = None) 
     raw = (max(0.0, float(contention or 0.0)) / mean) ** TRADE_CONTENTION_EXPONENT
     ramp = contentionRamp(week)
     return 1.0 + (raw - 1.0) * ramp
+
+
+def priorContention(elo) -> float:
+    """A club's expected win rate NEXT season against an average opponent, as the
+    offseason sees it: its ELO regressed the way the season reset regresses it
+    (`ELO_SEASON_REGRESSION`), then the standard ELO odds against 1500.
+
+    ⚠️ THE REGRESSION IS THE UNCERTAINTY, so the offseason weight takes no ramp. It is
+    the same prior the sim opens the season's odds with, so the market and the schedule
+    agree about who is good."""
+    from constants import ELO_SEASON_REGRESSION
+    try:
+        e = float(elo)
+    except (TypeError, ValueError):
+        return 0.5
+    regressed = 1500.0 + (e - 1500.0) * (1.0 - ELO_SEASON_REGRESSION)
+    return 1.0 / (1.0 + 10.0 ** ((1500.0 - regressed) / 400.0))
+
+
+def priorNowWeight(prior: float, leagueMeanPrior: float) -> float:
+    """`nowWeight` in the offseason, off `priorContention` rather than the record."""
+    mean = float(leagueMeanPrior or 0.0)
+    if mean <= 0:
+        return 1.0
+    return (max(0.0, float(prior or 0.0)) / mean) ** TRADE_CONTENTION_EXPONENT
 
 
 def laterWeight(now: float) -> float:
@@ -265,61 +289,27 @@ def expectedPickSlot(slot: int, seasonsOut: int = 0, classSize: int = 32) -> flo
 
 
 def pickSlotSkill(slot: int, classSize: int = 32) -> float:
-    """Expected true skill of the player taken at this slot.
+    """The ceiling a GM expects of the player taken at this slot in a draft whose class
+    does not exist yet: `PICK_CEILING_BY_SLOT`, measured on the current prospect model at
+    the league's average scouting, interpolated for a fractional slot (a future pick's
+    slot is regressed toward the middle by `expectedPickSlot`). A league of another size
+    maps its slot onto the measured 32.
 
-    Fitted to the measured order statistics of `classSize` draws from the live generation
-    constants (4,000 simulated classes):
-
-        pick     1     3     8    12    16    24    32
-        skill  98.6  92.0  85.2  81.6  78.4  71.8  57.2
-
-    ⚠️ THE STEEPNESS IS THE POINT. Pick 1 is a future superstar, pick 16 league-average
-    and pick 32 a token — which is what makes an early pick a real asset and gives the
-    market denominations to settle a gap with.
+    ⚠️ THE SAME QUANTITY AS AN UPCOMING PICK'S PRICE, which is the club's read of the
+    real class at that rank (`TradeMarket._pickValueTo` / `_classBoard`), so a pick does
+    not change value when its class is generated. The formula this replaced was fitted to
+    the old model and priced the back of a future draft at about replacement level.
     """
+    from constants import PICK_CEILING_BY_SLOT
+    table = PICK_CEILING_BY_SLOT
     n = max(1, int(classSize))
-    # ⚠️ Fractional, because `expectedPickSlot` regresses a future pick toward the middle
-    # and rounding that to an integer throws away most of the correction at the top.
     k = _clamp(float(slot or 1), 1.0, float(n))
-    # The order statistic of a normal falls off slowly through the middle and collapses
-    # at the tail; a shifted log in the quantile reproduces the measured curve closely
-    # (max error ~1.5 rating points against the table above).
-    import math
-    q = (k - 0.375) / (n + 0.25)            # Blom plotting position
-    z = -_normalQuantile(q)                 # k=1 is the HIGHEST draw
-    from constants import GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
-    return GEN_TRUESKILL_MEAN + z * GEN_TRUESKILL_STD
-
-
-def _normalQuantile(p: float) -> float:
-    """Inverse standard normal CDF (Acklam's rational approximation, ~1e-9 absolute).
-
-    Written out because the codebase has no scipy, and the order-statistic curve above is
-    the only thing that needs it.
-    """
-    import math
-    p = _clamp(float(p), 1e-12, 1 - 1e-12)
-    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
-         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
-    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
-         6.680131188771972e+01, -1.328068155288572e+01]
-    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
-         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
-    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
-         3.754408661907416e+00]
-    pLow, pHigh = 0.02425, 1 - 0.02425
-    if p < pLow:
-        q = math.sqrt(-2 * math.log(p))
-        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
-               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
-    if p > pHigh:
-        q = math.sqrt(-2 * math.log(1 - p))
-        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
-               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
-    q = p - 0.5
-    r = q * q
-    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / \
-           (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+    if n != len(table):
+        k = 1.0 + (k - 1.0) * (len(table) - 1) / max(1.0, n - 1.0)
+    lo = int(k) - 1
+    hi = min(lo + 1, len(table) - 1)
+    frac = k - int(k)
+    return float(table[lo] + (table[hi] - table[lo]) * frac)
 
 
 def futurePickDiscount(slot: int, classSize: int = 32) -> float:

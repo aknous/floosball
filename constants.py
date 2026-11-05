@@ -3099,6 +3099,25 @@ ROOKIE_DRAFT_ENABLED = True
 # washes out (prod: Hersh Pruitt #8 behind a 92 TE; SEA's two RBs behind an 84-88).
 ROOKIE_DRAFT_BPA_SLOTS = 2
 ROOKIE_DRAFT_NEED_FULL_SLOT = 8
+# ⚠️ NO PICK GOES TO A POSITION A SUPERSTAR HOLDS, NOT EVEN A TOP PICK (owner,
+# 2026-11-04: a top-3 team with a 5-star starter in his prime "and no plans to replace
+# them" should not draft there). A rookie behind him washes out unless he is traded, and
+# a trade may never come. A position is locked when every starting slot there holds a
+# player rated at least this (the 5-star line) who is not past his longevity, not
+# retiring and has more than one season left (`playerManager.superstarLockedPositions`).
+ROOKIE_DRAFT_SUPERSTAR_RATING = 92
+# ⚠️ A CLEAR NEED BEATS THE BEST PLAYER AVAILABLE WHEN THE UPSIDE IS COMPARABLE (owner,
+# 2026-11-04). When the pick a team would make plays behind a STAR it is keeping (rated
+# at least the first line, the 4-star line, same rules as the superstar lock) and a
+# rookie within `ROOKIE_DRAFT_NEED_CEILING_GAP` ceiling points of him plays a position of
+# CLEAR NEED (what he must beat there, `_rookieNeedBar`, is under the second line, the
+# 3-star line, i.e. a starter of 2 stars or below, an open or departing slot, and no
+# better prospect in the pipeline), the team takes the best of those instead. The gap
+# is half a star tier, the "roughly matches" gap the promotion rules use
+# (`FO_PROSPECT_LAST_WINDOW_TODAY_GAP`). Kickers never take a pick this way.
+ROOKIE_DRAFT_STAR_RATING = 84
+ROOKIE_DRAFT_CLEAR_NEED_RATING = 76
+ROOKIE_DRAFT_NEED_CEILING_GAP = 4.0
 
 
 def rookieDraftEnabled() -> bool:
@@ -3582,6 +3601,10 @@ TRADE_CUT_FEE_WEIGHT = 0.25
 # the anchor every surplus-over-replacement number in the front office and the trade
 # market prices against, and it is measured off the pool rather than guessed.
 REPLACEMENT_RATING = 67.0
+# Share of the distance to 1500 a team's ELO gives back at the season reset
+# (`teamManager.updateEloRatings`). The trade market's offseason prior reads the same
+# number (`trading.priorContention`) so the two cannot drift.
+ELO_SEASON_REGRESSION = 0.5
 
 # ============================================================================
 # IN-SEASON AND OFFSEASON TRADING  (docs/TRADING_PLAN.md)
@@ -3964,7 +3987,12 @@ TRADE_WINDOW_ENABLED = True
 # qualified and an aging franchise quarterback — the textbook closing window — read as wide
 # open. The measured median regressing share is 17%, so this sits just above it.
 TRADE_WINDOW_DECLINE_HIGH = 0.22
-TRADE_WINDOW_ASCENT_HIGH = 0.70     # this much still climbing = the window is ahead
+# ⚠️ A MAJORITY STILL RISING (2026-11-02; was 0.70). The old bar was set off a spread measured
+# while `classifyArc` called every past-peak player with headroom "developing"; with the label
+# meaning "still rising" no non-contender on the season-11 prod snapshot reached 0.70 (max
+# 0.68), so the window could never open. 'Opening' is a team most of whose weighted starters
+# are still climbing.
+TRADE_WINDOW_ASCENT_HIGH = 0.50
 
 # ⚠️ IT MOVES `nowWeight`, WHICH IS THE ONE DIAL THE WHOLE MARKET ALREADY TURNS ON. A
 # closing contender pays up because next season is worse — the alternative to winning now is
@@ -4017,6 +4045,12 @@ TRADE_PICK_PREMIUM_TOP_SLOTS = 3
 #      the PRIME arc, with `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract.
 # Future-draft picks are unaffected: their class does not exist yet.
 TRADE_HEADLINE_PICK_SLOTS = 5
+# ⚠️ THE TOP THREE ARE HEADLINE PICKS IN ANY CLASS (owner, 2026-11-04: "a trade for a top 3
+# pick must have a return that guarantees a 4-5 star impact player, not just a bunch of
+# middle picks and average prospects that equal a star player in total value"). This
+# overrides the 2026-10-01 weak-class exception for slots 1-3; slots 4 to
+# TRADE_HEADLINE_PICK_SLOTS stay headline only when the class projects a 5-star there.
+TRADE_HEADLINE_PICK_ALWAYS_SLOTS = 3
 TRADE_HEADLINE_PICK_CEILING = 92
 TRADE_TOP_PICK_PIECE_DECAY = 0.5
 TRADE_TOP_PICK_STAR_RATING = 84
@@ -4165,6 +4199,64 @@ TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 # is what makes an early pick a real asset and gives the market denominations to settle a
 # gap with.
 TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
+
+# What a pick in each slot band typically becomes, shown to fans on trade votes (owner,
+# 2026-11-04: fans could not tell what a traded pick was worth). Rows are
+# ((first, last), median best rating, share reaching 3 stars, share reaching 4 stars): the
+# best rating a drafted player reaches within five seasons. MEASURED on the CURRENT prospect
+# model, not the league's own drafts, which ran under the old one (owner): 200 generated
+# 48-player classes, drafted 32 deep off an average scout's board (vision 0.5; the league
+# averages ~0.6) and developed in the league's average environment (coach development 83,
+# Training Facility level 3; prod season 11: 82.8 and 2.9). ⚠️ It drafts on rating alone,
+# so it ignores position value and need, and it reads the best rating reached rather than a
+# roster spot. Re-measure whenever prospect generation, development or the class size moves:
+#   .venv/bin/python prospect_redraft_check.py --classes 100 --quick --by-slot --seed 1
+# The public consensus projection of the prospect at each slot (index 0 = pick 1), averaged
+# over generated 48-player classes, for a trade vote's star column on a pick whose class does
+# not exist yet. ⚠️ THE SAME MEASURE AS AN UPCOMING PICK'S STARS (the real class prospect's
+# consensus projection), so a future pick and this year's pick at one slot read alike;
+# PICK_OUTCOME_BY_SLOT's best-rating-reached runs a few points higher and would make every
+# future pick look better than the current draft (owner review, 2026-11-04). Re-measure with:
+#   .venv/bin/python prospect_redraft_check.py --consensus-by-slot --classes 200 --seed 1
+PICK_CONSENSUS_BY_SLOT = (93, 90, 89, 88, 87, 86, 85, 84, 84, 83, 83, 82, 82, 81, 81, 80,
+                          80, 79, 79, 78, 78, 77, 77, 77, 76, 76, 75, 75, 75, 74, 74, 73)
+
+# ⚠️ WHAT THE MARKET PRICES A PICK IN A FUTURE DRAFT ON (`trading.pickSlotSkill`, owner
+# 2026-11-04): the ceiling an average GM reads at each class rank (index 0 = pick 1), the
+# same read the draft board and an upcoming pick's price use (`_ceilingRating`: the
+# projection's ceiling at the GM's vision plus its standing scouting error). It replaced
+# an order-statistic formula fitted to the OLD model (32-player classes, no hidden talent),
+# which put pick 24 at 72 and pick 32 at 57 against 80 and 76 here, so the market priced a
+# future late pick at about nothing while the same slot in the upcoming draft was worth a
+# real prospect. Measured at the league's average vision (0.62); 0.45 and 0.85 move it by
+# under a point. Re-measure whenever prospect generation, scouting or the class size moves:
+#   .venv/bin/python prospect_redraft_check.py --ceiling-by-slot 0.62 --classes 200 --seed 1
+PICK_CEILING_BY_SLOT = (95.1, 92.9, 91.5, 90.4, 89.5, 88.8, 88.1, 87.4, 86.8, 86.2, 85.7,
+                        85.2, 84.6, 84.1, 83.7, 83.2, 82.7, 82.3, 81.9, 81.5, 81.0, 80.5,
+                        80.1, 79.7, 79.2, 78.8, 78.4, 78.0, 77.5, 77.1, 76.6, 76.2)
+
+PICK_OUTCOME_BY_SLOT = (
+    ((1, 3), 92, 1.00, 0.99),
+    ((4, 8), 87, 1.00, 0.85),
+    ((9, 16), 84, 0.98, 0.51),
+    ((17, 24), 80, 0.86, 0.13),
+    ((25, 32), 76, 0.57, 0.03),
+)
+
+# ⚠️ NOBODY USED TO WATCH THE CUPBOARD (owner, 2026-11-03: "there should be some decisions to
+# rebuild pick supply"). A team is SHORT when it holds no pick in any of the next
+# TRADE_PICK_SHORT_DRAFTS drafts (the drafts still to be held, so after the draft has run the
+# window starts next season). A short team lists a player it does not need for a return
+# that must include one (`pick_restock`; a contender only in the offseason).
+# ⚠️ THE PREMIUM A SHORT TEAM PUT ON A PICK IT WAS OFFERED (`TRADE_PICK_SCARCITY_PREMIUM`,
+# 1.5x) IS REMOVED (owner, 2026-11-04): once no trade may take a team's last window pick
+# (below), it could only act on a cupboard emptied before that rule.
+TRADE_PICK_SHORT_DRAFTS = 2
+TRADE_PICK_RESTOCK_ENABLED = True   # read lazily, so a harness can switch it off
+# ⚠️ AND NO TRADE MAY TAKE A TEAM'S LAST PICK IN THOSE DRAFTS (owner, 2026-11-04): a
+# bundle skips it (`TradeMarket._assemble`), a restock payment and the draft-day slot sale
+# (`playerManager.findPickBuyer`) need a second one. Pricing the emptied cupboard instead
+# changed nothing measurable, so it was replaced by this rule.
 
 # ⚠️ A FUTURE PICK IS DISCOUNTED BY SLOT, NOT FLAT, and the measurement says why. Variance
 # by slot over 6,000 simulated classes, as a fraction of the surplus that slot delivers:

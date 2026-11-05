@@ -188,6 +188,24 @@ def isCutProtected(player, season, ignoreProspectContract: bool = False) -> bool
     return wasPromotedThisOffseason(player, season)
 
 
+
+class _ConsensusBrain:
+    """A GM brain whose read of every prospect is the public consensus ceiling (vision 0,
+    no scouting error), for the public prospect ranking. Everything else is the real
+    brain's."""
+
+    def __init__(self, brain):
+        self._brain = brain
+
+    def __getattr__(self, name):
+        return getattr(self._brain, name)
+
+    def _ceilingRating(self, player, team=None) -> int:
+        try:
+            return int(round(player.projectionFor(0.0)[1]))
+        except Exception:
+            return int(getattr(player, 'playerRating', 0) or 0)
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -4568,19 +4586,20 @@ class PlayerManager:
                                      rookieTerm=trading.rookieTermForSkill(ceiling),
                                      positionWeight=posW)
 
-    def _rookieNeedBar(self, brain, team, rookie) -> float:
+    def _rookieNeedBar(self, brain, team, rookie, leaving=None) -> float:
         """What a rookie must beat to fill a need at his position: the higher of the
         team's weaker starter there (a walk-year or retiring starter counts as nobody)
-        and the best ceiling already in its pipeline there, never below replacement."""
+        and the best ceiling already in its pipeline there, never below replacement.
+        `leaving` (a player a trade is taking away) counts as nobody too."""
         from constants import REPLACEMENT_RATING
         posValue = getattr(getattr(rookie, 'position', None), 'value', None)
         slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
         starters = []
         for slot in slots:
             p = (getattr(team, 'rosterDict', None) or {}).get(slot)
-            leaving = p is None or getattr(p, 'willRetire', False) or \
+            gone = p is None or p is leaving or getattr(p, 'willRetire', False) or \
                 (getattr(p, 'termRemaining', 99) or 99) <= 1
-            starters.append(float(REPLACEMENT_RATING) if leaving
+            starters.append(float(REPLACEMENT_RATING) if gone
                             else float(getattr(p, 'playerRating', 0) or 0))
         bar = min(starters) if starters else float(REPLACEMENT_RATING)
         for prospect in getattr(team, 'prospects', None) or []:
@@ -4597,7 +4616,78 @@ class PlayerManager:
         17% of picks 9-32 landed behind a 4-star+ starter)."""
         return self.rookieCeiling(brain, team, rookie) - self._rookieNeedBar(brain, team, rookie)
 
-    def bpaChoice(self, brain, team, eligible):
+    def superstarLockedPositions(self, brain, team, intent: dict = None) -> set:
+        """See `keptStarPositions`: positions held by kept 5-star starters."""
+        from constants import ROOKIE_DRAFT_SUPERSTAR_RATING
+        return self.keptStarPositions(brain, team, ROOKIE_DRAFT_SUPERSTAR_RATING, intent)
+
+    def keptStarPositions(self, brain, team, minRating, intent: dict = None) -> set:
+        """Positions (Position enums) the draft skips for this team: every starting slot
+        there holds a superstar the team has no reason to replace (owner, 2026-11-04).
+        A superstar is rated at least `ROOKIE_DRAFT_SUPERSTAR_RATING` (the 5-star line),
+        not past his longevity (`classifyArc` regressing), not retiring, and either with
+        more than one season left or one the GM intends to re-sign next offseason
+        (`_walkYearResignIntent`, from `SeasonManager.walkYearResignIntent`: the
+        re-sign limit decides it until salaries start, the team's budget after). WR has
+        two slots, so it locks only when both hold one. `minRating` is the star line:
+        the 5-star lock (`superstarLockedPositions`) or the 4-star line the clear-need
+        preference reads (`preferClearNeed`)."""
+        from managers.frontOfficeBrain import ARC_REGRESSING
+        Position = FloosPlayer.Position
+        slotsByPos = {Position.QB: ['qb'], Position.RB: ['rb'], Position.WR: ['wr1', 'wr2'],
+                      Position.TE: ['te'], Position.K: ['k']}
+        roster = getattr(team, 'rosterDict', None) or {}
+        locked = set()
+        for pos, slots in slotsByPos.items():
+            def isSuperstar(p):
+                if p is None or getattr(p, 'willRetire', False):
+                    return False
+                if (getattr(p, 'termRemaining', 0) or 0) <= 1:
+                    # One season left: the position stays locked only if the GM intends
+                    # to re-sign him next offseason (`walkYearResignIntent`, set for
+                    # the draft). With no intent read, he counts as leaving.
+                    known = intent if intent is not None else (
+                        getattr(self, '_walkYearResignIntent', None) or {})
+                    if not known.get(getattr(p, 'id', None), False):
+                        return False
+                if float(getattr(p, 'playerRating', 0) or 0) < float(minRating):
+                    return False
+                classify = getattr(brain, 'classifyArc', None)
+                if callable(classify):
+                    try:
+                        if classify(p) == ARC_REGRESSING:
+                            return False
+                    except Exception:
+                        pass
+                return True
+            if all(isSuperstar(roster.get(s)) for s in slots):
+                locked.add(pos)
+        return locked
+
+    def preferClearNeed(self, brain, team, pool, pick, intent: dict = None):
+        """The pick, or a rookie of comparable upside at a position of clear need when
+        the pick would sit behind a star the team is keeping (owner, 2026-11-04; see
+        `ROOKIE_DRAFT_STAR_RATING`). Applied after the normal choice at every slot, so a
+        top pick and a need pick obey the same rule."""
+        if pick is None:
+            return pick
+        from constants import (ROOKIE_DRAFT_STAR_RATING, ROOKIE_DRAFT_CLEAR_NEED_RATING,
+                               ROOKIE_DRAFT_NEED_CEILING_GAP)
+        if pick.position not in self.keptStarPositions(brain, team, ROOKIE_DRAFT_STAR_RATING, intent):
+            return pick
+        floor = self.rookieCeiling(brain, team, pick) - float(ROOKIE_DRAFT_NEED_CEILING_GAP)
+        options = [r for r in pool
+                   if r is not pick and r.position != FloosPlayer.Position.K
+                   and r.position != pick.position
+                   and self.rookieCeiling(brain, team, r) >= floor
+                   and self._rookieNeedBar(brain, team, r) < float(ROOKIE_DRAFT_CLEAR_NEED_RATING)]
+        if not options:
+            return pick
+        return max(options, key=lambda r: (
+            self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
+            -self.countTeamProspectsAtPosition(team, r.position)))
+
+    def bpaChoice(self, brain, team, eligible, preferNeed: bool = True, intent: dict = None):
         """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
         club's own board, whatever the position or need (owner, 2026-10-01), kickers
         excluded unless a kicker is all it can take. Ties go to the better player today,
@@ -4606,9 +4696,50 @@ class PlayerManager:
         pool = [r for r in eligible if r.position != FloosPlayer.Position.K] or eligible
         if not pool:
             return None
-        return max(pool, key=lambda r: (
+        pick = max(pool, key=lambda r: (
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
+        return self.preferClearNeed(brain, team, pool, pick, intent) if preferNeed else pick
+
+    def chooseRookiePick(self, brain, team, eligible, slotNumber: int, draftLength: int,
+                         preferNeed: bool = True, intent: dict = None):
+        """The pick a team makes at this slot from `eligible`: the best prospect available
+        at the top `ROOKIE_DRAFT_BPA_SLOTS`, then asset value shading into need, then the
+        clear-need preference. The draft calls it for each pick, and for the pick it would
+        have made without the star rules (the log line that says when they moved one)."""
+        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        if not eligible:
+            return None
+        if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
+            return self.bpaChoice(brain, team, eligible, preferNeed=preferNeed, intent=intent)
+        # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
+        # `prospectValue` readings, one above replacement and one above what this
+        # club already has, so they blend on one scale. Tie-break (a pure-need
+        # pick where nobody left fills a need scores 0 for everyone) toward the
+        # rookie least blocked at his position, then the higher ceiling, then a
+        # position this club is thin at.
+        needW = self.rookieNeedWeight(slotNumber, draftLength)
+        choice = max(eligible, key=lambda r: (
+            (1.0 - needW) * self.rookieBoardValue(brain, team, r)
+            + needW * self.rookieNeedValue(brain, team, r),
+            self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
+            self.rookieCeiling(brain, team, r),
+            -self.countTeamProspectsAtPosition(team, r.position)))
+        return self.preferClearNeed(brain, team, eligible, choice, intent) if preferNeed else choice
+
+    def prospectRanking(self, brain=None) -> list:
+        """The upcoming class ranked like a published prospect list: best first by the
+        PUBLIC read of what each prospect is worth (`rookieBoardValue` on the consensus
+        ceiling, vision 0, no scouting error), with no team or need attached (owner,
+        2026-11-04: a ranking, not a mock draft, which read as a team's pick). Position
+        weighs in, so kickers fall. Ties go to the higher public ceiling. Read-only.
+        Only the consensus read is used, so no team's brain is needed."""
+        consensus = _ConsensusBrain(brain)
+        rookies = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
+        return sorted(rookies, key=lambda r: (
+            -self.rookieBoardValue(consensus, None, r),
+            -self.rookieCeiling(consensus, None, r),
+            -float(getattr(r, 'playerRating', 0) or 0)))
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.
@@ -4636,7 +4767,9 @@ class PlayerManager:
             for owner in list(slotOwners or [])[:int(ROOKIE_DRAFT_BPA_SLOTS)]:
                 if not available:
                     break
-                eligible = [r for r in available if self.hasOpenProspectSlot(owner, r.position)]
+                locked = self.superstarLockedPositions(brain, owner)
+                eligible = [r for r in available if self.hasOpenProspectSlot(owner, r.position)
+                            and r.position not in locked]
                 pick = self.bpaChoice(brain, owner, eligible)
                 if pick is None:
                     continue
@@ -4732,7 +4865,9 @@ class PlayerManager:
             openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
                                              Position.TE, Position.K)
                              if self.hasOpenProspectSlot(team, pos)]
-            eligible = [r for r in available if r.position in openPositions]
+            locked = self.superstarLockedPositions(getattr(self, '_draftBrain', None), team)
+            eligible = [r for r in available
+                        if r.position in openPositions and r.position not in locked]
             if eligible:
                 candidates.append((team, eligible))
         if not candidates:
@@ -4744,6 +4879,14 @@ class PlayerManager:
             owns = {r.original_team_id for r in session.query(DraftPick).filter_by(
                 season=int(season) + 1, round_number=1).all()
                 if r.current_owner_id == r.original_team_id and not r.used}
+            # ⚠️ NEVER A TEAM'S LAST PICK IN ITS NEXT TWO DRAFTS (owner, 2026-11-04): it
+            # pays with next season's pick, so it must hold another in the window.
+            from collections import Counter
+            from constants import TRADE_PICK_SHORT_DRAFTS
+            window = range(int(season) + 1, int(season) + 1 + int(TRADE_PICK_SHORT_DRAFTS))
+            held = Counter(r.current_owner_id for r in session.query(DraftPick).filter(
+                DraftPick.season.in_(list(window)), DraftPick.used == False).all())  # noqa: E712
+            owns = {tid for tid in owns if held.get(tid, 0) >= 2}
         except Exception as e:
             logger.warning(f"Could not read next season's picks: {e}")
             owns = set()
@@ -4912,7 +5055,8 @@ class PlayerManager:
 
     def rookieDraftPickGenerator(self, rookies: List, draftOrder: List,
                                  leagueHighlights: list = None, brain=None,
-                                 season: int = None, leagueTeams: List = None):
+                                 season: int = None, leagueTeams: List = None,
+                                 resignIntent: dict = None):
         """The rookie draft — yields one event at a time for live broadcasting,
         mirroring `freeAgencyPickGenerator`.
 
@@ -4947,6 +5091,9 @@ class PlayerManager:
             from managers.frontOfficeBrain import FrontOfficeBrain
             brain = FrontOfficeBrain(self)
         self._draftBrain = brain
+        # Who each team intends to re-sign next offseason, read by
+        # `superstarLockedPositions`; the caller clears it once the draft is over.
+        self._walkYearResignIntent = resignIntent or {}
         # A club's own draft position, used to price the future pick it would give up.
         slotByTeamId = {}
         for i, t in enumerate(draftOrder):
@@ -4962,7 +5109,14 @@ class PlayerManager:
             openPositions = [pos for pos in (Position.QB, Position.RB, Position.WR,
                                              Position.TE, Position.K)
                              if self.hasOpenProspectSlot(team, pos)]
-            eligible = [r for r in available if r.position in openPositions]
+            # A position a superstar holds is not drafted at all, even by a top pick
+            # (owner, 2026-11-04). If nothing else is left the slot goes through the
+            # same trade-or-compensate path as a slot nobody can use.
+            locked = self.superstarLockedPositions(brain, team)
+            # The pool before the superstar lock, kept so a pick the two star rules
+            # changed can say what it would have been (logged below).
+            unlocked = [r for r in available if r.position in openPositions]
+            eligible = [r for r in unlocked if r.position not in locked]
             if not eligible:
                 reason = 'pipeline_full' if not openPositions else 'no_eligible_rookies'
                 # ⚠️ TRADE THE SLOT RATHER THAN BURN IT. A skipped pick is an asset
@@ -5018,22 +5172,23 @@ class PlayerManager:
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
-            if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
-                pick = self.bpaChoice(brain, team, eligible)
-            else:
-                # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
-                # `prospectValue` readings, one above replacement and one above what this
-                # club already has, so they blend on one scale. Tie-break (a pure-need
-                # pick where nobody left fills a need scores 0 for everyone) toward the
-                # rookie least blocked at his position, then the higher ceiling, then a
-                # position this club is thin at.
-                needW = self.rookieNeedWeight(slotNumber, len(draftOrder))
-                pick = max(eligible, key=lambda r: (
-                    (1.0 - needW) * self.rookieBoardValue(brain, team, r)
-                    + needW * self.rookieNeedValue(brain, team, r),
-                    self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
-                    self.rookieCeiling(brain, team, r),
-                    -self.countTeamProspectsAtPosition(team, r.position)))
+            pick = self.chooseRookiePick(brain, team, eligible, slotNumber, len(draftOrder))
+            # Say when the star rules moved the pick (the superstar lock, or comparable
+            # upside at a clear need), and what it would have been without them.
+            try:
+                plain = self.chooseRookiePick(brain, team, unlocked, slotNumber,
+                                              len(draftOrder), preferNeed=False)
+                if plain is not None and plain is not pick:
+                    why = ('superstar lock' if plain.position in locked
+                           else 'clear need')
+                    logger.info(
+                        f"Rookie draft star rule: {team.name} #{slotNumber} took "
+                        f"{pick.name} ({pick.position.name}, ceiling "
+                        f"{self.rookieCeiling(brain, team, pick):.0f}) over {plain.name} "
+                        f"({plain.position.name}, ceiling "
+                        f"{self.rookieCeiling(brain, team, plain):.0f}) [{why}]")
+            except Exception as e:
+                logger.debug(f"star-rule comparison unavailable: {e}")
             available.remove(pick)
 
             pick.is_prospect = True
@@ -5862,7 +6017,27 @@ class PlayerManager:
         # override that used to sit here (FA ballot position priority) is gone with
         # the binding-vote system — `_gmFaPositionPriority` was only ever assigned an
         # empty dict, so the override never fired.
-        slot, candidate, kind = max(candidates, key=_rating)
+        # ⚠️ AN UPGRADE THE TEAM CANNOT PAY FOR DROPS OUT OF THE CHOICE, it does not end the
+        # turn (2026-11-03). Fills and upgrades compete for one pick, so when the best was an
+        # upgrade whose cut fee the Treasury could not cover the turn returned with nothing
+        # signed, the same upgrade won every later turn too, and the draft hit its 100-round
+        # safety valve with the team's open slots still empty: a season of games crashing on
+        # a missing player (measured in the trade-market harness, old code and new).
+        from managers.frontOfficeBrain import cutFeeFor as _cutFeeFor
+        from managers.facilitiesManager import canPayCutFee as _canPayCutFee
+        while True:
+            slot, candidate, kind = max(candidates, key=_rating)
+            if kind != 'upgrade':
+                break
+            incumbent = team.rosterDict.get(slot)
+            if incumbent is None or _canPayCutFee(getattr(team, 'id', None),
+                                                  int(_cutFeeFor(incumbent))):
+                break
+            logger.info(f"FA draft upgrade: {team.name} cannot pay the cut fee for "
+                        f"{incumbent.name}; keeps him")
+            candidates = [c for c in candidates if not (c[2] == 'upgrade' and c[0] == slot)]
+            if not candidates:
+                return not firstOpenSlotByPos
         windowTerm = windowTerms.get((slot, getattr(candidate, 'id', None))) \
             if kind == 'fa' else None
 

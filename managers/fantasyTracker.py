@@ -564,36 +564,9 @@ class FantasyTracker:
                 # NOTE: slot_number 6 is the KICKER (QB1/RB2/WR1=3/WR2=4/TE5/K6/FLEX7);
                 # only FLEX is gated.
                 flexUserIds = {eq.user_id for eq in allEquipped if eq.slot_number == 7}
-                extraSlotUserIds = set()
-                if flexUserIds:
-                    from database.models import ShopPurchase, CardTemplate as CT2
-                    # MVP cards among FLEX users
-                    mvpRows = (
-                        session.query(EquippedCard.user_id)
-                        .join(UserCard, EquippedCard.user_card_id == UserCard.id)
-                        .join(CT2, UserCard.card_template_id == CT2.id)
-                        .filter(
-                            EquippedCard.season == seasonNum,
-                            EquippedCard.week == currentWeek,
-                            EquippedCard.user_id.in_(flexUserIds),
-                            CT2.classification.isnot(None),
-                            CT2.classification.contains("mvp"),
-                        ).distinct().all()
-                    )
-                    extraSlotUserIds.update(r[0] for r in mvpRows)
-                    # Active temp_card_slot powerup
-                    remaining = flexUserIds - extraSlotUserIds
-                    if remaining:
-                        slotRows = (
-                            session.query(ShopPurchase.user_id)
-                            .filter(
-                                ShopPurchase.user_id.in_(remaining),
-                                ShopPurchase.season == seasonNum,
-                                ShopPurchase.item_slug == "temp_card_slot",
-                                ShopPurchase.expires_at_week >= currentWeek,
-                            ).distinct().all()
-                        )
-                        extraSlotUserIds.update(r[0] for r in slotRows)
+                extraSlotUserIds = equippedRepo.flexEntitledUserIds(
+                    seasonNum, currentWeek, flexUserIds
+                )
 
                 for eq in allEquipped:
                     # During active games, only locked cards produce output

@@ -1237,6 +1237,8 @@ def _prospectProjection(player):
     the truth carries hidden talent only good scouts can see. ⚠️ The 2026-09-27 rule's real
     point stands: ONE projection on every page, never a per-club band.
     """
+    if not _stillRising(player):
+        return None
     try:
         low, mid, high = player.projectionRange(0.0)
         return {"expected": round(float(mid), 1), "low": round(float(low), 1),
@@ -1245,6 +1247,56 @@ def _prospectProjection(player):
         return None
 
 
+def _stillRising(player) -> bool:
+    """Whether a player gets a projection at all: only while still rising (fixed
+    2026-11-05). A projection is where a developing player is heading. Aging lowers a
+    veteran's attributes but never his true skill, so projecting him toward it showed 94 of
+    98 veterans with 8+ seasons (season-11 snapshot) heading back UP, a 77 offense projected
+    to 88. Prospects always rise. Fails open, to the projection."""
+    if getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False):
+        return True
+    try:
+        from player_development import PlayerDevelopment, CareerPhase
+        return PlayerDevelopment.careerContext(player, 0).phase == CareerPhase.RISING
+    except Exception:
+        return True
+
+
+
+# The attributes the profile shows as att1..att3, per position (`buildPlayerWithAttributes`).
+_PROFILE_ATTRS = {
+    'QB': ('armStrength', 'accuracy', 'agility'),
+    'RB': ('speed', 'power', 'agility'),
+    'WR': ('speed', 'hands', 'reach'),
+    'TE': ('hands', 'power', 'agility'),
+    'K': ('legStrength', 'accuracy'),
+}
+
+
+def _projectionDetail(player):
+    """The PUBLIC projected range of offense, defense and each attribute the profile shows
+    (`Player.projectionDetail(0)`), shaped like the overall's `{expected, low, high}`
+    (owner, 2026-11-04). Attributes are keyed `att1`.. as the profile reads them, defensive
+    ones by their own key. None on failure or for a player no longer rising
+    (`_stillRising`), and the page then shows today's values only."""
+    if not _stillRising(player):
+        return None
+    try:
+        d = player.projectionDetail(0.0)
+        if not d:
+            return None
+        rng = lambda t: {"low": round(t[0]), "expected": round(t[1]), "high": round(t[2])}
+        pos = player.position.name if hasattr(player.position, 'name') else str(player.position)
+        return {
+            "offense": rng(d['offense']),
+            "defense": rng(d['defense']),
+            "attributes": {f"att{i}": rng(d['attributes'][a])
+                           for i, a in enumerate(_PROFILE_ATTRS.get(pos, ()), start=1)
+                           if a in d['attributes']},
+            "defensive": {k: rng(t) for k, t in d['defensive'].items()},
+        }
+    except Exception:
+        return None
 
 def _draftInfo(player):
     """Who drafted this player and when, for the profile (owner, 2026-11-02).
@@ -1328,6 +1380,17 @@ async def get_player(player_id: int, response: Response):
         player_dict['expected'] = projection.get('expected')
         player_dict['projectionLow'] = projection.get('low')
         player_dict['projectionHigh'] = projection.get('high')
+        player_dict['projectionDetail'] = _projectionDetail(player)
+        # Prospects only (owner, 2026-11-04); None for everyone else, without building
+        # the peer tables.
+        player_dict['scoutingReport'] = None
+        if getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False):
+            try:
+                import scouting_report
+                player_dict['scoutingReport'] = scouting_report.scoutingReport(
+                    player, scouting_report.buildPeerTables(floosball_app.playerManager.activePlayers))
+            except Exception:
+                pass
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
@@ -8953,20 +9016,50 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             "buyerWhy": getattr(t, 'buyer_why', None),
         } for t in trades]
 
+        moveTypes = ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
+                     'rookie_pick', 'retirement')
+        if not tradesHidden:
+            # ⚠️ SETTLED TRADES BELONG IN THE ACTIVITY FEED (owner, 2026-11-04). A trade
+            # writes one recap row per side; they are folded into ONE row below, carrying
+            # both sides, so it sits in the timeline where it happened.
+            moveTypes = moveTypes + ('trade',)
         movesQuery = (session.query(SeasonRecapEvent)
                       .filter(SeasonRecapEvent.season == season,
-                              SeasonRecapEvent.event_type.in_(
-                                  ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
-                                   'rookie_pick', 'retirement'))))
+                              SeasonRecapEvent.event_type.in_(moveTypes)))
         if tradesHidden:
             # A cut, signing or promotion a trade forced carries the trade's id.
             movesQuery = movesQuery.filter(SeasonRecapEvent.trade_id.is_(None))
         moves = movesQuery.order_by(SeasonRecapEvent.id.desc()).limit(limit).all()
-        moveRows = [{
-            "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
-            "playerId": m.player_id, "player": m.player_name,
-            "position": m.position, "rating": m.rating, "detail": m.detail,
-        } for m in moves]
+        feedTradeIds = {m.trade_id for m in moves if m.event_type == 'trade' and m.trade_id}
+        feedTrades = {t.id: t for t in trades if t.id in feedTradeIds}
+        missing = feedTradeIds - set(feedTrades)
+        if missing:
+            feedTrades.update({t.id: t for t in session.query(Trade).filter(Trade.id.in_(missing))})
+        feedOrigins = _pickOriginsFor(session, list(feedTrades.values()), teamBlob)
+        moveRows, seenTrades = [], set()
+        for m in moves:
+            if m.event_type == 'trade':
+                t = feedTrades.get(m.trade_id)
+                if t is None or t.id in seenTrades:
+                    continue
+                seenTrades.add(t.id)
+                moveRows.append({
+                    "type": "trade", "team": None, "playerId": None, "player": None,
+                    "position": None, "rating": None, "detail": None,
+                    "trade": {
+                        "id": t.id, "teamA": teamBlob(t.team_a_id), "teamB": teamBlob(t.team_b_id),
+                        "aGave": _tradeAssetsWithRatings((t.assets_json or {}).get('aGave', []),
+                                                         ratingById, feedOrigins),
+                        "bGave": _tradeAssetsWithRatings((t.assets_json or {}).get('bGave', []),
+                                                         ratingById, feedOrigins),
+                    },
+                })
+                continue
+            moveRows.append({
+                "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
+                "playerId": m.player_id, "player": m.player_name,
+                "position": m.position, "rating": m.rating, "detail": m.detail,
+            })
     finally:
         session.close()
 
@@ -9080,11 +9173,166 @@ def _ratingsByPlayerId() -> dict:
     return out
 
 
+def _withContractInfo(assets, playersById, pickOutlooks=None) -> list:
+    """Trade-vote assets with what a voter needs to judge them (owner, 2026-11-04: fans
+    were frustrated by trades that sent away picks, not knowing what those picks were
+    likely to become). Every piece carries `expectedRating`, what it can be expected to be,
+    which the card shows as stars (owner, 2026-11-04): a roster player's next-season rating
+    (his projected settling point while still developing), a prospect's projected rating, a
+    pick's `outlook.expected`. Behind the card's Why?: a roster player's seasons left,
+    career stage (the profile's `computeCareerStage`) and next season; a prospect's range
+    and the seasons left to make the roster; what a pick is likely to fetch
+    (`_pickOutlooks`). Current values, like the ratings: an open vote
+    is about the players as they are now."""
+    pm = floosball_app.playerManager if floosball_app else None
+    for a in assets:
+        if a.get('kind') == 'pick':
+            outlook = (pickOutlooks or {}).get(a.get('id'))
+            if outlook:
+                a['outlook'] = outlook
+                if outlook.get('expected') is not None:
+                    a['expectedRating'] = outlook['expected']
+            continue
+        player = (playersById or {}).get(a.get('id')) if a.get('kind') in ('player', 'prospect') else None
+        if player is None:
+            continue
+        pos = getattr(getattr(player, 'position', None), 'name', None)
+        if pos:
+            a['position'] = pos
+        if a.get('kind') == 'prospect' or getattr(player, 'is_prospect', False):
+            proj = _prospectProjection(player)
+            if proj:
+                a['projection'] = {"low": proj["low"], "high": proj["high"]}
+                a['expectedRating'] = proj["expected"]
+            from constants import PROSPECT_DEVELOPMENT_WINDOW
+            left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
+            a['windowLeft'] = max(0, left)
+            continue
+        term = getattr(player, 'termRemaining', None)
+        if term is not None:
+            a['termRemaining'] = int(term)
+        a['seasonsPlayed'] = int(getattr(player, 'seasonsPlayed', 0) or 0)
+        try:
+            if pm is not None:
+                a['careerStage'] = pm.computeCareerStage(player)
+        except Exception:
+            pass
+        # A rising player's next season reads his public projection: the sim's own
+        # development aims at his TRUE skill, hidden talent included, which fans must not
+        # see until it is revealed (fixed 2026-11-05). Past his peak the aging model is
+        # public, so it reads that.
+        if _stillRising(player):
+            pub = _prospectProjection(player)
+            if pub:
+                a['nextSeason'] = int(round(max(pub["expected"], float(getattr(player, 'playerRating', 0) or 0))))
+        else:
+            try:
+                from constants import DEV_LUCK_NEUTRAL_BIAS
+                a['nextSeason'] = int(player.computeNextSeasonRating(int(round(DEV_LUCK_NEUTRAL_BIAS))))
+            except Exception:
+                pass
+        if a.get('careerStage') == 'developing':
+            proj = _prospectProjection(player)
+            if proj and proj["high"] > proj["low"]:
+                a['projection'] = {"low": proj["low"], "high": proj["high"]}
+                a['expectedRating'] = proj["expected"]
+        if 'expectedRating' not in a and a.get('nextSeason') is not None:
+            a['expectedRating'] = a['nextSeason']
+    return assets
+
+
+def _pickTypical(slot: float):
+    """What a pick around this slot typically becomes (`PICK_OUTCOME_BY_SLOT`), or None."""
+    from constants import PICK_OUTCOME_BY_SLOT
+    k = int(round(slot))
+    for (lo, hi), median, three, four in PICK_OUTCOME_BY_SLOT:
+        if lo <= k <= hi:
+            return {"band": [lo, hi], "medianBest": median,
+                    "threeStarShare": three, "fourStarShare": four}
+    return None
+
+
+def _pickOutlooks(session, trades, season: int) -> dict:
+    """{pickId: what a voter needs to judge the pick} for every pick in these trades.
+
+    {draftSeason, draftsOut, slot, slotFinal, expectedSlot, classProspect, typical}:
+    a pick in the upcoming draft (`draftsOut` 0) carries the original team's slot in the
+    draft order (`_rookieDraftOrder`) and the class prospect at that rank by the public
+    consensus, which is roughly who is there. A later pick carries the slot it is expected
+    to land at (`trading.expectedPickSlot`, the market's own regression of today's
+    standing toward the middle), since its class does not exist yet. Both carry what a pick
+    around that slot typically becomes on the current prospect model (`_pickTypical`).
+    ⚠️ NOT the league's own drafts: those ran under the prospect model before hidden talent
+    and the 48-player class (owner, 2026-11-04)."""
+    import trading
+    from database.models import DraftPick
+    ids = {a.get('id') for t in trades for side in ('aGave', 'bGave')
+           for a in ((t.assets_json or {}).get(side) or [])
+           if a.get('kind') == 'pick' and a.get('id') is not None}
+    if not ids:
+        return {}
+    try:
+        picks = session.query(DraftPick.id, DraftPick.season, DraftPick.original_team_id).filter(
+            DraftPick.id.in_(ids)).all()
+    except Exception:
+        return {}
+    try:
+        order, final, _ = _rookieDraftOrder()
+    except Exception:
+        order, final = [], False
+    n = len(order) or 32
+    pm = floosball_app.playerManager if floosball_app else None
+    klass = None
+    out = {}
+    for pid, pickSeason, orig in picks:
+        draftsOut = int(pickSeason or 0) - int(season or 0)
+        slotNow = (order.index(orig) + 1) if orig in order else None
+        entry = {"draftSeason": pickSeason, "draftsOut": draftsOut}
+        if slotNow is None:
+            out[pid] = entry
+            continue
+        if draftsOut <= 0:
+            entry["slot"] = slotNow
+            entry["slotFinal"] = bool(final)
+            expected = float(slotNow)
+            if klass is None:
+                klass = []
+                for p in (getattr(pm, 'activePlayers', None) or []):
+                    if getattr(p, 'is_upcoming_rookie', False):
+                        proj = _prospectProjection(p)
+                        if proj:
+                            klass.append((proj["expected"], proj, p))
+                klass.sort(key=lambda x: -x[0])
+            if klass:
+                _, proj, p = klass[min(slotNow, len(klass)) - 1]
+                entry["classProspect"] = {
+                    "rank": min(slotNow, len(klass)), "classSize": len(klass),
+                    "expected": proj["expected"], "low": proj["low"], "high": proj["high"]}
+        else:
+            expected = trading.expectedPickSlot(slotNow, draftsOut, n)
+            entry["expectedSlot"] = int(round(expected))
+        typical = _pickTypical(expected)
+        if typical:
+            entry["typical"] = typical
+        # ⚠️ ONE MEASURE FOR BOTH: the consensus projection at that slot, the real class's
+        # where it exists, else an average class's (`PICK_CONSENSUS_BY_SLOT`). The typical
+        # outcome reads higher and made every future pick look better than this year's.
+        from constants import PICK_CONSENSUS_BY_SLOT
+        if entry.get("classProspect"):
+            entry["expected"] = entry["classProspect"]["expected"]
+        else:
+            k = min(len(PICK_CONSENSUS_BY_SLOT), max(1, int(round(expected))))
+            entry["expected"] = PICK_CONSENSUS_BY_SLOT[k - 1]
+        out[pid] = entry
+    return out
+
+
 class _TradeVoteRequest(BaseModel):
     approve: Optional[bool] = None      # True yes, False no, None withdraws the vote
 
 
-def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes) -> dict:
+def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes, playersById=None,
+                  pickOutlooks=None) -> dict:
     """One trade proposal for the Transactions page: what each side gives, why, when the
     vote closes, the tally against the rule and the caller's own vote."""
     from managers import tradeVotes
@@ -9104,8 +9352,12 @@ def _tradeVoteRow(session, p, teamBlob, ratingById, pickOrigins, myVotes) -> dic
         "status": p.status, "closeKind": p.close_kind, "closesAt": _utcIso(p.closes_at),
         "resolvedAt": _utcIso(p.resolved_at), "tradeId": p.trade_id,
         "teamA": teamBlob(p.team_a_id), "teamB": teamBlob(p.team_b_id),
-        "aGave": _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins),
-        "bGave": _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins),
+        "aGave": _withContractInfo(
+            _tradeAssetsWithRatings(assets.get('aGave', []), ratingById, pickOrigins), playersById,
+            pickOutlooks),
+        "bGave": _withContractInfo(
+            _tradeAssetsWithRatings(assets.get('bGave', []), ratingById, pickOrigins), playersById,
+            pickOutlooks),
         "trigger": lj.get('trigger'), "sellerWhy": lj.get('why'), "buyerWhy": bj.get('why'),
         "tally": {"yes": v.get('yes', 0), "no": v.get('no', 0),
                   "passing": bool(v.get('passed')), "reason": v.get('reason'),
@@ -9158,7 +9410,14 @@ def get_trade_votes(response: Response, user: Optional[_User] = Depends(_getOpti
                 TradeVote.proposal_id.in_([r.id for r in rows])).all()}
         ratingById = _ratingsByPlayerId()
         pickOrigins = _pickOriginsFor(session, rows, teamBlob)
-        out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes)
+        pm = floosball_app.playerManager
+        playersById = {getattr(pl, 'id', None): pl
+                       for pl in (getattr(pm, 'activePlayers', None) or [])}
+        # Only an open vote is about the pick as it stands; a closed one's draft has moved on.
+        pickOutlooks = _pickOutlooks(
+            session, [r for r in rows if r.status == tradeVotes.OPEN], season)
+        out = [_tradeVoteRow(session, r, teamBlob, ratingById, pickOrigins, myVotes,
+                             playersById, pickOutlooks if r.status == tradeVotes.OPEN else None)
                for r in rows if r.status != tradeVotes.EXPIRED]
         return build_success_response({
             "open": [r for r in out if r["status"] == tradeVotes.OPEN],
@@ -9301,20 +9560,43 @@ def get_draft_class(response: Response,
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
 
-    entries = []
-    for p in floosball_app.playerManager.activePlayers:
-        if not getattr(p, 'is_upcoming_rookie', False):
-            continue
-        entries.append({
-            "playerId": getattr(p, 'id', None),
-            "name": p.name,
-            "position": p.position.name,
-            "rating": round(getattr(p, 'playerRating', 0), 1),
-            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
-            "projection": _prospectProjection(p),
-        })
-    # Ordered by what he is today; the projection sits beside it.
-    entries.sort(key=lambda e: -e["rating"])
+    # ⚠️ A PROSPECT RANKING, NOT A MOCK DRAFT (owner, 2026-11-04): ordered by the public
+    # read of what each prospect is worth, with no team attached. A mock draft read as a
+    # team's pick. The rank is the list order.
+    try:
+        # Only the public consensus read, so no GM brain (building the desk brain here
+        # also opened a database session it never closed).
+        ranked = floosball_app.playerManager.prospectRanking()
+    except Exception as e:
+        logger.warning(f"prospect ranking unavailable: {e}")
+        ranked = sorted((p for p in floosball_app.playerManager.activePlayers
+                         if getattr(p, 'is_upcoming_rookie', False)),
+                        key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+    # A scouting report per prospect, from the public projection against the starters at
+    # each position (`scouting_report`, owner 2026-11-04). The peer tables are built once.
+    import scouting_report
+    try:
+        peers = scouting_report.buildPeerTables(floosball_app.playerManager.activePlayers)
+    except Exception as e:
+        logger.warning(f"scouting peers unavailable: {e}")
+        peers = None
+
+    def _report(p):
+        if peers is None:
+            return None
+        try:
+            return scouting_report.scoutingReport(p, peers)
+        except Exception:
+            return None
+    entries = [{
+        "playerId": getattr(p, 'id', None),
+        "name": p.name,
+        "position": p.position.name,
+        "rating": round(getattr(p, 'playerRating', 0), 1),
+        "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+        "projection": _prospectProjection(p),
+        "scoutingReport": _report(p),
+    } for p in ranked]
     response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=60")
     return build_success_response({
         "season": season,

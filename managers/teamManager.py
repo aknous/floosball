@@ -976,7 +976,8 @@ class TeamManager:
             # Check if team has historical data (stat archives)
             if hasattr(team, 'statArchive') and len(team.statArchive) > 0:
                 # For teams with historical data: average current ELO with 1500 (regression to mean)
-                team.elo = round((team.elo + 1500) / 2)
+                from constants import ELO_SEASON_REGRESSION
+                team.elo = round(1500 + (team.elo - 1500) * (1 - ELO_SEASON_REGRESSION))
                 self.logger.debug(f"Team {team.name}: ELO updated with history regression to {team.elo}")
             else:
                 # For new teams: adjust ELO based on overall rating relative to league mean

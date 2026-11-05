@@ -351,6 +351,20 @@ def getTreasury(session, teamId: int) -> int:
     return int(row.balance) if row else 0
 
 
+def canPayCutFee(teamId, fee: int) -> bool:
+    """Whether `chargeCutFee` would succeed, charging nothing."""
+    if fee <= 0 or teamId is None:
+        return True
+    from database.connection import get_session
+    session = get_session()
+    try:
+        return getTreasury(session, teamId) >= fee
+    except Exception:
+        return False
+    finally:
+        session.close()
+
+
 def chargeCutFee(teamId, fee: int) -> bool:
     """Debit a team's Treasury for a cut (`frontOfficeBrain.cutFeeFor`). False, with
     nothing charged, when it cannot cover it: ⚠️ the fee never goes into debt, because a

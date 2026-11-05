@@ -478,7 +478,11 @@ class PlayerResponseBuilder(ResponseBuilder):
         """Build player dictionary with detailed attributes"""
         player_dict = PlayerResponseBuilder.buildBasicPlayerDict(player)
         
-        # Add position-specific attributes
+        # Add position-specific attributes.
+        # ⚠️ NO POTENTIAL STARS (removed 2026-11-04): `att1PotStars` and its siblings were the
+        # star rating of each attribute's TRUE potential, which carries the hidden talent,
+        # and anyone could read them off the network response. Fans get the public
+        # projection (`projectionDetail` on the player endpoint).
         attr_dict = {}
         
         pos = player.position.name if hasattr(player.position, 'name') else str(player.position)
@@ -493,10 +497,7 @@ class PlayerResponseBuilder(ResponseBuilder):
                 'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.accuracy),
                 'att3': 'Agility',
                 'att3Value': player.attributes.agility,
-                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility),
-                'att1PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialArmStrength),
-                'att2PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialAccuracy),
-                'att3PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialAgility)
+                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility)
             })
         elif pos == 'RB':
             attr_dict.update({
@@ -508,10 +509,7 @@ class PlayerResponseBuilder(ResponseBuilder):
                 'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.power),
                 'att3': 'Agility',
                 'att3Value': player.attributes.agility,
-                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility),
-                'att1PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialSpeed),
-                'att2PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialPower),
-                'att3PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialAgility)
+                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility)
             })
         elif pos == 'WR':
             attr_dict.update({
@@ -523,10 +521,7 @@ class PlayerResponseBuilder(ResponseBuilder):
                 'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.hands),
                 'att3': 'Reach',
                 'att3Value': player.attributes.reach,
-                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.reach),
-                'att1PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialSpeed),
-                'att2PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialHands),
-                'att3PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialReach)
+                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.reach)
             })
         elif pos == 'TE':
             attr_dict.update({
@@ -538,10 +533,7 @@ class PlayerResponseBuilder(ResponseBuilder):
                 'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.power),
                 'att3': 'Agility',
                 'att3Value': player.attributes.agility,
-                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility),
-                'att1PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialHands),
-                'att2PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialPower),
-                'att3PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialAgility)
+                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility)
             })
         elif pos == 'K':
             attr_dict.update({
@@ -550,9 +542,7 @@ class PlayerResponseBuilder(ResponseBuilder):
                 'att1stars': PlayerResponseBuilder.calculateStarRating(player.attributes.legStrength),
                 'att2': 'Accuracy',
                 'att2Value': player.attributes.accuracy,
-                'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.accuracy),
-                'att1PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialLegStrength),
-                'att2PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialAccuracy)
+                'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.accuracy)
             })
         
         # Add common attributes

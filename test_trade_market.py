@@ -113,6 +113,28 @@ class StubBrain:
     def developmentLean(self, coach, team=None):
         return self._attrLean(coach, 'playerDevelopment')
 
+    # The real rule for acting on a projection (frontOfficeBrain.seenForward): growth as
+    # projected, aging half public plus scouting. A stub player is past his peak when the
+    # stub labels him regressing.
+    def _isPastPeak(self, player):
+        classify = getattr(self, 'classifyArc', None)
+        return callable(classify) and classify(player) == 'regressing'
+
+    def agingSeen(self, coach, team=None):
+        return 0.5 + 0.5 * self.scoutingVision(coach, team)
+
+    def scoutingVision(self, coach, team=None):
+        return 0.5
+
+    def seenForward(self, player, forward, coach=None, team=None):
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        return FrontOfficeBrain.seenForward(self, player, forward, coach, team)
+
+    def seasonRating(self, player, coach=None, team=None):
+        fwd = getattr(self, 'trueForwardRating', None)
+        forward = fwd(player, coach, team) if callable(fwd) else player.playerRating
+        return self.seenForward(player, forward, coach, team)
+
 
 def _congest(team, ratings=(84, 80, 76), position=Position.WR):
     """Put more walk-year players on a club than `RESIGN_LIMIT_PER_OFFSEASON` can keep.
@@ -302,7 +324,7 @@ def test_a_bundle_reads_as_a_sentence():
     clear a bar by four times is not negotiating."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
-    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None:
+    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None, **kw:
                                _assets([2.0, 3.0, 9.0, 12.0]))
     pieces = market._assemble(buyer, seller, bar=4.0, gross=30.0, displaced=0.0)
     assert 0 < len(pieces) <= constants.TRADE_MAX_PIECES
@@ -322,7 +344,7 @@ def test_the_bundle_is_valued_on_BOTH_sides():
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
 
     # The seller prizes these picks; the buyer barely minds losing them.
-    def assets(team, valuingTeam=None, swapPosition=None):
+    def assets(team, valuingTeam=None, swapPosition=None, **kw):
         high = valuingTeam is seller
         return _assets([10.0, 10.0] if high else [1.0, 1.0])
 
@@ -339,7 +361,7 @@ def test_a_buyer_refuses_a_bundle_that_costs_more_than_the_upgrade():
     pieces costs the buyer more than it gains."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
-    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None:
+    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None, **kw:
                                _assets([50.0, 50.0]))
     assert market._assemble(buyer, seller, bar=40.0, gross=5.0, displaced=0.0) == []
     assert market._assemble(buyer, seller, bar=40.0, gross=500.0, displaced=0.0) != []
@@ -514,7 +536,7 @@ def test_the_displaced_player_is_counted_ONCE_in_a_swap():
     market = _market([seller, buyer])
 
     # The only thing the buyer can offer is the very man it would have to cut, worth 6.
-    def assets(team, valuingTeam=None, swapPosition=None):
+    def assets(team, valuingTeam=None, swapPosition=None, **kw):
         if swapPosition is None:
             return []
         return [{'kind': 'player', 'id': 30, 'name': 'Incumbent',
@@ -531,7 +553,7 @@ def test_the_displaced_player_is_counted_ONCE_in_a_swap():
 
     # ⚠️ The mirror: paying in PICKS really does cost both the picks and the displaced
     # man, so an identically-priced picks bundle must be refused at the same numbers.
-    def picksOnly(team, valuingTeam=None, swapPosition=None):
+    def picksOnly(team, valuingTeam=None, swapPosition=None, **kw):
         return [{'kind': 'pick', 'id': 7, 'name': 'a pick', 'detail': {}, 'value': 6.0}]
 
     market._tradeableAssets = picksOnly
@@ -756,7 +778,7 @@ def test_deadline_urgency_raises_the_OFFER_not_just_the_ceiling():
     seller, buyer = FakeTeam(1, 'Seller', wins=2, losses=12), FakeTeam(2, 'Buyer', wins=13, losses=1)
     teams = [seller, buyer]
 
-    def assets(team, valuingTeam=None, swapPosition=None):
+    def assets(team, valuingTeam=None, swapPosition=None, **kw):
         return [{'kind': 'pick', 'id': 1, 'name': 'a pick', 'detail': {}, 'value': 10.0}]
 
     reached = {}

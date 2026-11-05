@@ -981,6 +981,10 @@ class SeasonManager:
                     self._carryForwardEquippedCards(
                         lockSession, equippedRepo, seasonNum, currentWeek
                     )
+                # A FLEX card whose Accession expired (and no MVP card) leaves before the lock.
+                staleFlex = equippedRepo.dropStaleFlex(seasonNum, currentWeek)
+                if staleFlex:
+                    logger.info(f"Removed {staleFlex} expired FLEX card(s) from week {currentWeek}")
                 equippedRepo.lockAllForWeek(seasonNum, currentWeek)
                 # Auto-lock rosters that have all slots filled
                 unlocked = lockSession.query(FantasyRoster).filter_by(
@@ -1993,10 +1997,16 @@ class SeasonManager:
                     session.close()
                     return
 
-                # Group by user_id
+                # Group by user_id. A FLEX card (slot 7) counts only while the user is
+                # entitled to the slot; an expired Accession's card is skipped.
+                flexEntitled = equippedRepo.flexEntitledUserIds(
+                    season, week, {eq.user_id for eq in allEquipped if eq.slot_number == 7}
+                )
                 byUser = {}
                 for eq in allEquipped:
                     if not eq.locked:
+                        continue
+                    if eq.slot_number == 7 and eq.user_id not in flexEntitled:
                         continue
                     byUser.setdefault(eq.user_id, []).append(eq)
 
@@ -7689,11 +7699,14 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"Could not broadcast rookie_draft_start: {e}")
 
+        leagueTeams = list(getattr(
+            self.serviceContainer.getService('team_manager'), 'teams', None) or [])
+        resignIntent = self.walkYearResignIntent(
+            brain, leagueTeams, getattr(self.currentSeason, 'freeAgencyOrder', None) or [])
         pickGen = self.playerManager.rookieDraftPickGenerator(
             rookies, draftOrder, leagueHighlights, brain=brain,
             season=self.currentSeason.seasonNumber,
-            leagueTeams=list(getattr(
-                self.serviceContainer.getService('team_manager'), 'teams', None) or []))
+            leagueTeams=leagueTeams, resignIntent=resignIntent)
         try:
             for entry in pickGen:
                 kind = entry.get('type')
@@ -7780,6 +7793,10 @@ class SeasonManager:
             # nothing left that will ever place them.
             for _ in pickGen:
                 pass
+        finally:
+            # The re-sign intent describes this draft only, and must not outlive it even
+            # when the draft raises (it would steer later `expectedDraftees` reads).
+            self.playerManager._walkYearResignIntent = {}
 
         if (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()
                 and not getattr(self.timingManager, '_isFastCatchingUp', False)):
@@ -8410,7 +8427,12 @@ class SeasonManager:
             if SENTIMENT_ENABLED:
                 from database.connection import get_session
                 from database.repositories.sentiment_repository import buildSentimentMap
-                sentimentMap = buildSentimentMap(get_session())
+                # The session is only read here; close it (it used to be left open).
+                _ss = get_session()
+                try:
+                    sentimentMap = buildSentimentMap(_ss)
+                finally:
+                    _ss.close()
         except Exception as e:
             logger.warning(f"GM brain: sentiment unavailable, running neutral: {e}")
         performanceMap = {}
@@ -8469,7 +8491,12 @@ class SeasonManager:
             if SENTIMENT_ENABLED:
                 from database.connection import get_session
                 from database.repositories.sentiment_repository import buildSentimentMap
-                sentimentMap = buildSentimentMap(get_session())
+                # The session is only read here; close it (it used to be left open).
+                _ss = get_session()
+                try:
+                    sentimentMap = buildSentimentMap(_ss)
+                finally:
+                    _ss.close()
         except Exception as e:
             logger.debug(f"desk GM brain: sentiment unavailable: {e}")
         try:
@@ -9236,6 +9263,36 @@ class SeasonManager:
                 s.close()
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
+
+    def walkYearResignIntent(self, brain, teams, faOrder) -> dict:
+        """`{playerId: True if the GM intends to re-sign him}` for every player whose
+        contract runs one more season, read at the rookie draft, so the draft knows
+        whether a walk-year superstar is staying (owner, 2026-11-04;
+        `playerManager.superstarLockedPositions`).
+
+        The same decision next offseason's step 3 makes (`_resignDecision`): until
+        salaries start the per-offseason re-sign limit and the GM's ranking decide it,
+        and after that the limit is lifted and the team's budget decides it
+        (`_affordableResigns`). A projection a year early: the free-agent pool, draft
+        order and finances are today's.
+
+        ⚠️ NO EXPECTED DRAFTEES (`slotOwners=[]`). They come from this draft, which is
+        what is asking, so counting them would be circular: the team would plan to let
+        the star walk for a rookie it only drafts because the star is walking."""
+        from constants import RESIGN_LIMIT_PER_OFFSEASON
+        limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
+        out = {}
+        for team in teams or []:
+            try:
+                expiring, forcedWalk, kept, _d, _a = self._resignDecision(
+                    team, brain, list(faOrder or []), [], limit)
+            except Exception as e:
+                logger.debug(f"re-sign intent unavailable for {getattr(team, 'name', team)}: {e}")
+                continue
+            keptIds = {id(p) for p in kept}
+            for p in expiring + forcedWalk:
+                out[getattr(p, 'id', None)] = id(p) in keptIds
+        return out
 
     def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True):
         """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,

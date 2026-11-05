@@ -239,8 +239,8 @@ def test_a_prospect_grows_over_the_same_horizon_the_starter_declines_over():
     prospect = _rising(10, 78, 92)
     f = FO_CEILING_CREDIT * brain._attrLean(coach, 'playerDevelopment')
     H = FO_STANDING_HORIZON_SEASONS
-    expected = (14 * ((1 - f) - (1 - f) ** H) * brain.scoutingVision(coach, _team())
-                * POSITION_VALUE['TE'])
+    # Scouting is in the ceiling read already, so it is not applied again (seenForward).
+    expected = 14 * ((1 - f) - (1 - f) ** H) * POSITION_VALUE['TE']
     got = brain._growthBeyondNextSeason(prospect, _team(), coach)
     assert abs(got - expected) < 1e-6, (got, expected)
     # Never past the ceiling, even for the best developer.
@@ -265,7 +265,10 @@ def test_an_aging_starter_rated_higher_can_lose_to_a_rising_prospect():
     """The owner's question: the starter is rated higher today but aging out. Against
     the same prospect, the fading starter is replaced and a prime one is not."""
     brain = Brain()
-    prospect = _rising(10, 82, 94)
+    # ⚠️ A modest ceiling on purpose: since growth stopped being discounted by scouting a
+    # second time (2026-11-02), a last-window 82 with a 94 ceiling out-projects a prime
+    # 85 as well, which is the honest read, not the case this test is about.
+    prospect = _rising(10, 82, 86)
     fading = _player(11, 85, nextSeason=83.5, position=Position.TE)
     prime = _player(12, 85, position=Position.TE)
     assert brain.prospectReplacesStarter(prospect, fading, _team(), _coach(), finalWindow=True)
@@ -368,13 +371,13 @@ def test_the_fa_draft_board_carries_the_incumbents_standing():
 
 
 def test_season_rating_reads_growth_and_aging_through_scouting():
-    """Who is better THIS season (owner, 2026-10-17): today's rating moved toward next
-    season's projection by the GM's scouting vision."""
+    """Who is better THIS season (owner, 2026-10-17): next season's projection as the GM
+    sees it (`seenForward`): growth as projected, aging half public plus scouting."""
     brain = Brain()
     coach = _coach()
-    vision = brain.scoutingVision(coach, _team())
+    seen = brain.agingSeen(coach, _team())
     aging = _player(1, 85, nextSeason=83.0)
-    assert abs(brain.seasonRating(aging, coach, _team()) - (85 - 2.0 * vision)) < 1e-9
+    assert abs(brain.seasonRating(aging, coach, _team()) - (85 - 2.0 * seen)) < 1e-9
     assert brain.seasonRating(_player(2, 80), coach, _team()) == 80.0
     rising = _rising(3, 78, 92)
     assert 78 < brain.seasonRating(rising, coach, _team()) < 92
