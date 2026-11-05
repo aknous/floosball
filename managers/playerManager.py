@@ -191,7 +191,8 @@ def isCutProtected(player, season, ignoreProspectContract: bool = False) -> bool
 
 class _ConsensusBrain:
     """A GM brain whose read of every prospect is the public consensus ceiling (vision 0,
-    no scouting error), for the mock draft board. Everything else is the real brain's."""
+    no scouting error), for the public prospect ranking. Everything else is the real
+    brain's."""
 
     def __init__(self, brain):
         self._brain = brain
@@ -4703,8 +4704,8 @@ class PlayerManager:
                          preferNeed: bool = True, intent: dict = None):
         """The pick a team makes at this slot from `eligible`: the best prospect available
         at the top `ROOKIE_DRAFT_BPA_SLOTS`, then asset value shading into need, then the
-        clear-need preference. ONE definition for the draft and the mock draft board
-        (`mockRookieDraft`), so the board cannot drift from what the draft does."""
+        clear-need preference. The draft calls it for each pick, and for the pick it would
+        have made without the star rules (the log line that says when they moved one)."""
         from constants import ROOKIE_DRAFT_BPA_SLOTS
         if not eligible:
             return None
@@ -4725,31 +4726,18 @@ class PlayerManager:
             -self.countTeamProspectsAtPosition(team, r.position)))
         return self.preferClearNeed(brain, team, eligible, choice, intent) if preferNeed else choice
 
-    def mockRookieDraft(self, brain, owners: list, intent: dict = None) -> list:
-        """The rookie draft as the public would mock it: `[(slot, owningTeam, rookie)]`.
-
-        Runs `chooseRookiePick` down `owners` (the slot order, as owning teams) over the
-        upcoming class, but every team reads every prospect at the PUBLIC CONSENSUS
-        ceiling (vision 0, no scouting error; owner, 2026-11-04). Each team's own read sees
-        some hidden talent, and a mock built on it would give that away. Read-only: no
-        rookie or team is changed. A slot with nobody it can take is left out.
-        """
+    def prospectRanking(self, brain) -> list:
+        """The upcoming class ranked like a published prospect list: best first by the
+        PUBLIC read of what each prospect is worth (`rookieBoardValue` on the consensus
+        ceiling, vision 0, no scouting error), with no team or need attached (owner,
+        2026-11-04: a ranking, not a mock draft, which read as a team's pick). Position
+        weighs in, so kickers fall. Ties go to the higher public ceiling. Read-only."""
         consensus = _ConsensusBrain(brain)
-        available = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
-        out = []
-        n = len(owners or [])
-        for slot, team in enumerate(owners or [], start=1):
-            if not available:
-                break
-            locked = self.superstarLockedPositions(consensus, team, intent)
-            eligible = [r for r in available if self.hasOpenProspectSlot(team, r.position)
-                        and r.position not in locked]
-            pick = self.chooseRookiePick(consensus, team, eligible, slot, n, intent=intent)
-            if pick is None:
-                continue
-            available.remove(pick)
-            out.append((slot, team, pick))
-        return out
+        rookies = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
+        return sorted(rookies, key=lambda r: (
+            -self.rookieBoardValue(consensus, None, r),
+            -self.rookieCeiling(consensus, None, r),
+            -float(getattr(r, 'playerRating', 0) or 0)))
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.

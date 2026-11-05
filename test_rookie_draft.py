@@ -99,7 +99,7 @@ class Harness:
     rookieCeiling = PlayerManager.rookieCeiling
     bpaChoice = PlayerManager.bpaChoice
     chooseRookiePick = PlayerManager.chooseRookiePick
-    mockRookieDraft = PlayerManager.mockRookieDraft
+    prospectRanking = PlayerManager.prospectRanking
     superstarLockedPositions = PlayerManager.superstarLockedPositions
     keptStarPositions = PlayerManager.keptStarPositions
     preferClearNeed = PlayerManager.preferClearNeed
@@ -529,20 +529,18 @@ def test_re_sign_intent_follows_the_limit_then_the_budget():
     print("PASS the re-sign intent uses the limit, then the budget, and no draftees")
 
 
-def test_the_mock_draft_reads_the_public_consensus_not_a_teams_scouting():
-    """Owner, 2026-11-04: the mock draft board picks off the public projection. A team's
-    own read sees hidden talent; a mock built on it would give that away. Here the team's
-    scouting rates B far above A, the public read (no projection: the rating) the reverse."""
+def test_the_prospect_ranking_is_the_public_read_and_kickers_fall():
+    """Owner, 2026-11-04: the class is shown as a prospect ranking, by the public read of
+    what each prospect is worth. A team's scouting (here rating the second QB far higher)
+    is never used, and a kicker with the best public read still ranks below a QB: a kicker
+    is worth less."""
     a = FakePlayer(1, 85, Position.QB, 'Public Favorite')
     b = FakePlayer(2, 70, Position.QB, 'Scouts Secret')
-    scouted = {'Public Favorite': 80, 'Scouts Secret': 99}
-    clubs = _teams(1)
-    brain = StubBrain(lambda p, team: scouted[p.name])
-    h = Harness([a, b])
-    mock = h.mockRookieDraft(brain, clubs)
-    assert [r.name for _s, _t, r in mock] == ['Public Favorite'], mock
-    assert a.is_upcoming_rookie and b.is_upcoming_rookie, "the mock changed the class"
-    # The real draft, on the team's own read, takes the other one.
-    events = list(Harness([a, b]).rookieDraftPickGenerator([a, b], _teams(1), brain=brain))
-    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Scouts Secret'
-    print("PASS the mock reads the public consensus, not the team's scouting")
+    k = FakePlayer(3, 95, Position.K, 'Big Leg')
+    scouted = {'Public Favorite': 80, 'Scouts Secret': 99, 'Big Leg': 95}
+    h = Harness([a, b, k])
+    ranked = [r.name for r in h.prospectRanking(StubBrain(lambda p, team: scouted[p.name]))]
+    assert ranked[0] == 'Public Favorite', ranked
+    assert ranked.index('Big Leg') > ranked.index('Public Favorite'), ranked
+    assert all(r.is_upcoming_rookie for r in (a, b, k)), "the ranking changed the class"
+    print("PASS the ranking reads the public consensus, and kickers fall")
