@@ -175,7 +175,7 @@ def scoutingReport(player, tables) -> dict:
         lean = 'offense' if gap >= LEAN_GAP else 'defense' if gap <= -LEAN_GAP else 'two_way'
 
     return {
-        'summary': _summary(player, pos, strengths),
+        'summary': _summary(player, pos, strengths, detail),
         'lean': lean,
         'strengths': [entry(*g) for g in strengths],
         'weaknesses': [entry(*g, weak=True) for g in weaknesses],
@@ -191,16 +191,40 @@ def _stars(rating: float) -> int:
     return 1
 
 
-def _summary(player, pos, strengths) -> str:
-    noun = POSITION_NOUN.get(pos, 'player')
-    try:
-        low, _mid, high = player.projectionRange(0.0)
-    except Exception:
-        low = high = float(getattr(player, 'playerRating', 0) or 0)
+DEFENSIVE_NOUN = {'QB': 'safety', 'RB': 'linebacker', 'WR': 'cornerback', 'TE': 'defensive end'}
+
+
+def _starRange(low: float, high: float) -> str:
     a, b = _stars(low), _stars(high)
-    stars = f"a {a}-star {noun}" if a == b else f"a {a} to {b}-star {noun}"
-    # The headline names position skills only: they are what the player is billed as.
+    return f"{a}-star" if a == b else f"{a} to {b}-star"
+
+
+def _summary(player, pos, strengths, detail=None) -> str:
+    """"Projects as a 4 to 5-star safety and a 3 to 5-star quarterback, with a big arm and
+    good accuracy." Each side of the ball gets its own star range (owner, 2026-11-04: the
+    overall's range averaged the two and billed a safety's projection as a quarterback's),
+    the stronger projected side first; a kicker has one."""
+    noun = POSITION_NOUN.get(pos, 'player')
+    detail = detail or {}
+    off, dfn = detail.get('offense'), detail.get('defense')
+    if off and dfn and pos in DEFENSIVE_NOUN:
+        sides = [(off[1], _starRange(off[0], off[2]), noun),
+                 (dfn[1], _starRange(dfn[0], dfn[2]), DEFENSIVE_NOUN[pos])]
+        # The clearly stronger side first, by the same gap as the lean; a two-way prospect
+        # keeps the position he is billed as in front.
+        if sides[1][0] - sides[0][0] >= LEAN_GAP:
+            sides.reverse()
+        lead = f"a {sides[0][1]} {sides[0][2]} and a {sides[1][1]} {sides[1][2]}"
+    else:
+        try:
+            low, _mid, high = player.projectionRange(0.0)
+        except Exception:
+            low = high = float(getattr(player, 'playerRating', 0) or 0)
+        if off:
+            low, high = off[0], off[2]
+        lead = f"a {_starRange(low, high)} {noun}"
+    # The skills named are the position's: they are what the player is billed as.
     skills = POSITION_SKILLS.get(pos, ())
     withs = [PHRASES[t][3] for _side, t, _s in strengths if t in skills][:2]
-    tail = f" with {' and '.join(withs)}" if withs else ""
-    return f"Projects as {stars}{tail}."
+    tail = f", with {' and '.join(withs)}" if withs else ""
+    return f"Projects as {lead}{tail}."

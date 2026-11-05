@@ -102,3 +102,21 @@ def test_the_lean_follows_the_projected_sides():
         gap = d['offense'][1] - d['defense'][1]
         want = 'offense' if gap >= sr.LEAN_GAP else 'defense' if gap <= -sr.LEAN_GAP else 'two_way'
         assert rep['lean'] == want, (p.name, gap, rep['lean'])
+
+
+def test_the_summary_names_both_sides_stronger_first():
+    """Owner, 2026-11-04: "4-5 star S and 3-4 star QB". Each side gets its own star range;
+    the clearly stronger side leads, a two-way prospect keeps his billed position first."""
+    starters, prospects = _league()
+    tables = sr.buildPeerTables(starters)
+    for p in prospects:
+        rep = sr.scoutingReport(p, tables)
+        noun = sr.POSITION_NOUN[p.position.name]
+        if p.position.name == 'K':
+            assert ' and a ' not in rep['summary'].split(',')[0], rep['summary']
+            continue
+        dnoun = sr.DEFENSIVE_NOUN[p.position.name]
+        head = rep['summary'].split(',')[0]
+        assert noun in head and dnoun in head, rep['summary']
+        first = dnoun if rep['lean'] == 'defense' else noun
+        assert head.index(first) < head.index(dnoun if first == noun else noun), rep['summary']
