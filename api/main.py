@@ -8953,20 +8953,50 @@ def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le
             "buyerWhy": getattr(t, 'buyer_why', None),
         } for t in trades]
 
+        moveTypes = ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
+                     'rookie_pick', 'retirement')
+        if not tradesHidden:
+            # ⚠️ SETTLED TRADES BELONG IN THE ACTIVITY FEED (owner, 2026-11-04). A trade
+            # writes one recap row per side; they are folded into ONE row below, carrying
+            # both sides, so it sits in the timeline where it happened.
+            moveTypes = moveTypes + ('trade',)
         movesQuery = (session.query(SeasonRecapEvent)
                       .filter(SeasonRecapEvent.season == season,
-                              SeasonRecapEvent.event_type.in_(
-                                  ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
-                                   'rookie_pick', 'retirement'))))
+                              SeasonRecapEvent.event_type.in_(moveTypes)))
         if tradesHidden:
             # A cut, signing or promotion a trade forced carries the trade's id.
             movesQuery = movesQuery.filter(SeasonRecapEvent.trade_id.is_(None))
         moves = movesQuery.order_by(SeasonRecapEvent.id.desc()).limit(limit).all()
-        moveRows = [{
-            "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
-            "playerId": m.player_id, "player": m.player_name,
-            "position": m.position, "rating": m.rating, "detail": m.detail,
-        } for m in moves]
+        feedTradeIds = {m.trade_id for m in moves if m.event_type == 'trade' and m.trade_id}
+        feedTrades = {t.id: t for t in trades if t.id in feedTradeIds}
+        missing = feedTradeIds - set(feedTrades)
+        if missing:
+            feedTrades.update({t.id: t for t in session.query(Trade).filter(Trade.id.in_(missing))})
+        feedOrigins = _pickOriginsFor(session, list(feedTrades.values()), teamBlob)
+        moveRows, seenTrades = [], set()
+        for m in moves:
+            if m.event_type == 'trade':
+                t = feedTrades.get(m.trade_id)
+                if t is None or t.id in seenTrades:
+                    continue
+                seenTrades.add(t.id)
+                moveRows.append({
+                    "type": "trade", "team": None, "playerId": None, "player": None,
+                    "position": None, "rating": None, "detail": None,
+                    "trade": {
+                        "id": t.id, "teamA": teamBlob(t.team_a_id), "teamB": teamBlob(t.team_b_id),
+                        "aGave": _tradeAssetsWithRatings((t.assets_json or {}).get('aGave', []),
+                                                         ratingById, feedOrigins),
+                        "bGave": _tradeAssetsWithRatings((t.assets_json or {}).get('bGave', []),
+                                                         ratingById, feedOrigins),
+                    },
+                })
+                continue
+            moveRows.append({
+                "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
+                "playerId": m.player_id, "player": m.player_name,
+                "position": m.position, "rating": m.rating, "detail": m.detail,
+            })
     finally:
         session.close()
 

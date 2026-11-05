@@ -50,6 +50,9 @@ def test_the_transactions_page_stays_without_its_trade_sections():
     assert 'SeasonRecapEvent.trade_id.is_(None)' in body
     assert 'if not tradesHidden and windowState == TRADE_WINDOW_OPEN' in body
     assert 'raise HTTPException(404' not in body
+    # Settled trades join the Activity feed only while trades are shown (owner, 2026-11-04).
+    i = body.index("moveTypes = moveTypes + ('trade',)")
+    assert body.rfind('if not tradesHidden:', 0, i) > body.rfind('\n        moveTypes = (', 0, i)
 
 
 def test_with_trading_off_every_team_drafts_in_its_own_slot():
