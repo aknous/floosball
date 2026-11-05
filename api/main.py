@@ -1361,6 +1361,13 @@ async def get_player(player_id: int, response: Response):
         player_dict['projectionLow'] = projection.get('low')
         player_dict['projectionHigh'] = projection.get('high')
         player_dict['projectionDetail'] = _projectionDetail(player)
+        # Prospects only (owner, 2026-11-04); None for everyone else.
+        try:
+            import scouting_report
+            player_dict['scoutingReport'] = scouting_report.scoutingReport(
+                player, scouting_report.buildPeerTables(floosball_app.playerManager.activePlayers))
+        except Exception:
+            player_dict['scoutingReport'] = None
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
@@ -9531,6 +9538,22 @@ def get_draft_class(response: Response,
         ranked = sorted((p for p in floosball_app.playerManager.activePlayers
                          if getattr(p, 'is_upcoming_rookie', False)),
                         key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+    # A scouting report per prospect, from the public projection against the starters at
+    # each position (`scouting_report`, owner 2026-11-04). The peer tables are built once.
+    import scouting_report
+    try:
+        peers = scouting_report.buildPeerTables(floosball_app.playerManager.activePlayers)
+    except Exception as e:
+        logger.warning(f"scouting peers unavailable: {e}")
+        peers = None
+
+    def _report(p):
+        if peers is None:
+            return None
+        try:
+            return scouting_report.scoutingReport(p, peers)
+        except Exception:
+            return None
     entries = [{
         "playerId": getattr(p, 'id', None),
         "name": p.name,
@@ -9538,6 +9561,7 @@ def get_draft_class(response: Response,
         "rating": round(getattr(p, 'playerRating', 0), 1),
         "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
         "projection": _prospectProjection(p),
+        "scoutingReport": _report(p),
     } for p in ranked]
     response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=60")
     return build_success_response({
