@@ -973,13 +973,17 @@ class TradeMarket:
         return self._classBoardCache[key]
 
     def _isHeadlinePick(self, holder, pick) -> bool:
-        """A top slot in the upcoming draft where the prospect the holder expects there
-        projects as a 5-star. See `TRADE_HEADLINE_PICK_*`: it keys on the player, so in a
-        weak class the same slot trades like any other pick."""
-        from constants import TRADE_HEADLINE_PICK_SLOTS, TRADE_HEADLINE_PICK_CEILING
+        """A top slot in the upcoming draft: one of the top
+        `TRADE_HEADLINE_PICK_ALWAYS_SLOTS` in any class, or a slot up to
+        `TRADE_HEADLINE_PICK_SLOTS` where the prospect the holder expects there projects as
+        a 5-star. See `TRADE_HEADLINE_PICK_*`."""
+        from constants import (TRADE_HEADLINE_PICK_SLOTS, TRADE_HEADLINE_PICK_CEILING,
+                               TRADE_HEADLINE_PICK_ALWAYS_SLOTS)
         if int(pick.get('season', 0)) != int(self.season):
             return False
         slot = int(pick.get('slot') or 99)
+        if slot <= int(TRADE_HEADLINE_PICK_ALWAYS_SLOTS):
+            return True
         if slot > int(TRADE_HEADLINE_PICK_SLOTS):
             return False
         ceilings = self._classCeilings(holder)

@@ -156,6 +156,9 @@ def main():
     ap.add_argument('--seed', type=int, default=None)
     ap.add_argument('--consensus-by-slot', action='store_true',
                     help='the consensus projection at each class rank (no development)')
+    ap.add_argument('--ceiling-by-slot', type=float, default=None, metavar='VISION',
+                    help="a GM's ceiling read at each class rank (what the market prices "
+                         "a pick on), at this scouting vision")
     ap.add_argument('--by-slot', action='store_true',
                     help='what each slot band became (median best rating, 3- and 4-star shares)')
     args = ap.parse_args()
@@ -171,6 +174,27 @@ def main():
             for k in range(args.teams):
                 ranks[k].append(mids[k])
         print(tuple(round(float(np.mean(r))) for r in ranks))
+        return
+    if args.ceiling_by_slot is not None:
+        # The read the draft board and the upcoming-pick price use
+        # (`FrontOfficeBrain._ceilingRating`): the projection's ceiling at this vision,
+        # plus the club's standing scouting error at the deadline-week band.
+        from prospect_scouting import believedPotential
+        from constants import GM_ACTIVE_WEEK
+        pm = makeManager(args.teams)
+        v = float(args.ceiling_by_slot)
+        ranks = [[] for _ in range(args.teams)]
+        pid = 0
+        for c in range(args.classes):
+            reads = []
+            for p in pm._generateRookieClass(1):
+                pid += 1
+                reads.append(believedPotential(p.projectionFor(v)[1], 1, pid, c + 1, v,
+                                               int(GM_ACTIVE_WEEK)))
+            reads.sort(reverse=True)
+            for k in range(args.teams):
+                ranks[k].append(reads[k])
+        print(tuple(round(float(np.mean(r)), 1) for r in ranks))
         return
     res = run(args)
     keys = list(NFL)

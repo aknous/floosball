@@ -4045,6 +4045,12 @@ TRADE_PICK_PREMIUM_TOP_SLOTS = 3
 #      the PRIME arc, with `TRADE_TOP_PICK_STAR_MIN_TERM` seasons of contract.
 # Future-draft picks are unaffected: their class does not exist yet.
 TRADE_HEADLINE_PICK_SLOTS = 5
+# ⚠️ THE TOP THREE ARE HEADLINE PICKS IN ANY CLASS (owner, 2026-11-04: "a trade for a top 3
+# pick must have a return that guarantees a 4-5 star impact player, not just a bunch of
+# middle picks and average prospects that equal a star player in total value"). This
+# overrides the 2026-10-01 weak-class exception for slots 1-3; slots 4 to
+# TRADE_HEADLINE_PICK_SLOTS stay headline only when the class projects a 5-star there.
+TRADE_HEADLINE_PICK_ALWAYS_SLOTS = 3
 TRADE_HEADLINE_PICK_CEILING = 92
 TRADE_TOP_PICK_PIECE_DECAY = 0.5
 TRADE_TOP_PICK_STAR_RATING = 84
@@ -4214,6 +4220,20 @@ TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
 #   .venv/bin/python prospect_redraft_check.py --consensus-by-slot --classes 200 --seed 1
 PICK_CONSENSUS_BY_SLOT = (93, 90, 89, 88, 87, 86, 85, 84, 84, 83, 83, 82, 82, 81, 81, 80,
                           80, 79, 79, 78, 78, 77, 77, 77, 76, 76, 75, 75, 75, 74, 74, 73)
+
+# ⚠️ WHAT THE MARKET PRICES A PICK IN A FUTURE DRAFT ON (`trading.pickSlotSkill`, owner
+# 2026-11-04): the ceiling an average GM reads at each class rank (index 0 = pick 1), the
+# same read the draft board and an upcoming pick's price use (`_ceilingRating`: the
+# projection's ceiling at the GM's vision plus its standing scouting error). It replaced
+# an order-statistic formula fitted to the OLD model (32-player classes, no hidden talent),
+# which put pick 24 at 72 and pick 32 at 57 against 80 and 76 here, so the market priced a
+# future late pick at about nothing while the same slot in the upcoming draft was worth a
+# real prospect. Measured at the league's average vision (0.62); 0.45 and 0.85 move it by
+# under a point. Re-measure whenever prospect generation, scouting or the class size moves:
+#   .venv/bin/python prospect_redraft_check.py --ceiling-by-slot 0.62 --classes 200 --seed 1
+PICK_CEILING_BY_SLOT = (95.1, 92.9, 91.5, 90.4, 89.5, 88.8, 88.1, 87.4, 86.8, 86.2, 85.7,
+                        85.2, 84.6, 84.1, 83.7, 83.2, 82.7, 82.3, 81.9, 81.5, 81.0, 80.5,
+                        80.1, 79.7, 79.2, 78.8, 78.4, 78.0, 77.5, 77.1, 76.6, 76.2)
 
 PICK_OUTCOME_BY_SLOT = (
     ((1, 3), 92, 1.00, 0.99),

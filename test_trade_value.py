@@ -129,16 +129,19 @@ def test_an_80_is_worth_13_of_surplus_not_80():
     print("PASS an 80 on a one-year deal is 13, not 80; on two years, 26")
 
 
-def test_the_pick_curve_is_steep_and_monotone():
-    """⚠️ THE STEEPNESS IS WHAT MAKES AN EARLY PICK A REAL ASSET and gives the market
-    denominations to settle a gap with. Fitted to 4,000 simulated classes."""
-    measured = {1: 98.6, 3: 92.0, 8: 85.2, 12: 81.6, 16: 78.4, 24: 71.8, 32: 57.2}
-    for slot, want in measured.items():
-        got = trading.pickSlotSkill(slot)
-        assert abs(got - want) < 1.0, (slot, got, want)
+def test_the_pick_curve_is_the_measured_ceiling_by_slot():
+    """`pickSlotSkill` is `PICK_CEILING_BY_SLOT`, an average GM's ceiling read at each
+    class rank on the current prospect model (owner, 2026-11-04: re-evaluate what picks
+    become after the prospect change). Monotone, and interpolated for the fractional slot
+    a future pick regresses to."""
+    from constants import PICK_CEILING_BY_SLOT
+    for slot in (1, 8, 16, 32):
+        assert trading.pickSlotSkill(slot) == PICK_CEILING_BY_SLOT[slot - 1]
     skills = [trading.pickSlotSkill(s) for s in range(1, 33)]
     assert skills == sorted(skills, reverse=True)
-    print("PASS the pick curve reproduces the measured order statistics")
+    mid = trading.pickSlotSkill(8.5)
+    assert PICK_CEILING_BY_SLOT[8] < mid < PICK_CEILING_BY_SLOT[7]
+    print("PASS the pick curve is the measured ceiling read by slot")
 
 
 def test_a_future_pick_is_discounted_BY_SLOT():
@@ -462,23 +465,26 @@ def test_a_future_picks_slot_regresses_toward_the_middle():
 
 def test_a_late_future_pick_is_worth_something():
     """The number that produced the absurd trade: a contender's own future first-rounder
-    must not be worth ZERO, or it will give them away by the handful."""
-    assert trading.pickValue(30, 0) == 0.0, "this season's slot-30 pick is genuinely thin"
-    assert trading.pickValue(30, 1) > 0.0, "a future late pick is still worth nothing"
-    assert trading.pickValue(30, 2) > 0.0
-    # ⚠️ BUT ONLY JUST (owner, 2026-10-02: late picks are "inevitable replacement level
-    # players"): well under a mid-round pick the same distance out.
-    assert trading.pickValue(30, 1) < 0.5 * trading.pickValue(10, 1)
+    must not be worth ZERO, or it will give them away by the handful. ⚠️ The Oct 2 premise
+    that late picks are replacement level came from the old prospect model; on the current
+    one a pick 25-32 reaches 3 stars about 57% of the time (`PICK_OUTCOME_BY_SLOT`), so it
+    is worth a real starter's share, and still less than a mid pick the same distance out."""
+    for out in (0, 1, 2):
+        assert trading.pickValue(30, out) > 0.0, out
+        assert trading.pickValue(30, out) < trading.pickValue(10, out), out
     print(f"PASS a contender's own pick: {trading.pickValue(30, 1):.1f} next season, "
           f"{trading.pickValue(30, 2):.1f} the season after")
 
 
 def test_a_top_pick_still_dwarfs_a_late_one():
-    """⚠️ THE OVER-REACH GUARD. Regressing every pick toward the middle would flatten the
-    curve that makes an early pick worth having at all — the steepness IS the feature."""
-    assert trading.pickValue(2, 1) > 2 * trading.pickValue(30, 1)
-    assert trading.pickValue(2, 0) > 5 * trading.pickValue(24, 0)
-    print("PASS the pick curve stays steep")
+    """⚠️ THE OVER-REACH GUARD, stated as the owner's concern (2026-11-04: late picks were
+    treated as if more of them made a star). A bundle counts its best pick in full and each
+    further one at half the one before, so even three late picks (1 + 0.5 + 0.25 of one)
+    must not reach a top pick, this year or next."""
+    for out in (0, 1):
+        late = trading.pickValue(24, out)
+        assert trading.pickValue(2, out) > 1.75 * late, (out, trading.pickValue(2, out), late)
+    print("PASS three late picks never add up to a top pick")
 
 
 # ------------------------------------------- the buyer's clock

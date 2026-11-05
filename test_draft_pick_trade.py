@@ -98,7 +98,8 @@ def test_a_slot_nobody_can_use_finds_a_buyer():
     skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
         [Position.QB, Position.QB, Position.RB, Position.RB,
          Position.WR, Position.WR, Position.TE, Position.TE])]
-    available = [FakeRookie(1, Position.WR), FakeRookie(2, Position.WR)]
+    # Ceilings worth more than a future mid pick, so this tests WHO can buy, not the price.
+    available = [FakeRookie(1, Position.WR, 90), FakeRookie(2, Position.WR, 90)]
 
     assert pm.hasOpenProspectSlot(skipper, Position.K)
     assert not pm.hasOpenProspectSlot(skipper, Position.WR)
@@ -218,7 +219,7 @@ def test_the_buyer_pool_is_the_LEAGUE_not_the_draft_order():
     skipper.prospects = [FakeRookie(90 + i, p) for i, p in enumerate(
         [Position.QB, Position.QB, Position.RB, Position.RB,
          Position.WR, Position.WR, Position.TE, Position.TE])]
-    available = [FakeRookie(1, Position.WR)]
+    available = [FakeRookie(1, Position.WR, 90)]
 
     fromOrder, _ = pm.findPickBuyer(skipper, available, [skipper], SEASON)
     fromLeague, _ = pm.findPickBuyer(skipper, available, [skipper, soldTheirs], SEASON)
@@ -275,8 +276,8 @@ def test_the_slot_is_priced_on_WHO_IS_LEFT_not_on_the_slot_number():
         [Position.QB, Position.QB, Position.RB, Position.RB,
          Position.WR, Position.WR, Position.TE, Position.TE])]
 
-    # The generic value of a slot this late is nil...
-    assert trading.pickValue(30, 0) < 1.0, trading.pickValue(30, 0)
+    # The generic value of a slot this late is well under a future mid pick...
+    assert trading.pickValue(30, 0) < trading.pickValue(16, 1), trading.pickValue(30, 0)
     # ...yet a 90 is still sitting there, and the trade must see him.
     found, _ = pm.findPickBuyer(skipper, [FakeRookie(3, Position.WR, 90)],
                                 [skipper, buyer], SEASON, slotByTeamId={2: 16})

@@ -91,14 +91,22 @@ def test_a_headline_pick_is_never_bundle_change():
     assert {2, 3} <= ids, "an unprotected or future pick was dropped from the bundle pool"
 
 
-def test_in_a_weak_class_a_top_pick_trades_like_any_other():
-    """Owner, 2026-10-01: "if its a weak draft class then it could still be possible".
-    The rule keys on the prospect at the slot: no 5-star there, no protection."""
-    m, teams = _market({'Best Of A Weak Class': 20.0, 'Solid': 15.0},
-                       ceilings={'Best Of A Weak Class': 88.0, 'Solid': 85.0})
-    assert not m._isHeadlinePick(teams[0], PICK1)
+def test_a_top_three_pick_is_protected_in_any_class():
+    """Owner, 2026-11-04: a trade for a top-3 pick must return a 4-5 star impact player,
+    so #1-#3 are headline picks even in a weak class (this overrides the 2026-10-01
+    weak-class exception for them). #4 and #5 still need a 5-star prospect at the slot."""
+    weakCeil = {'Best Of A Weak Class': 88.0, 'Solid': 86.0, 'Third': 85.0,
+                'Fourth': 84.0, 'Fifth': 83.0}
+    m, teams = _market({n: 10.0 for n in weakCeil}, ceilings=weakCeil)
+    head = lambda slot: m._isHeadlinePick(teams[0], {**PICK1, 'slot': slot})
+    assert head(1) and head(2) and head(3), "a top-3 pick in a weak class was unprotected"
+    assert not head(4) and not head(5), "a weak class protected #4-#5"
     m.picksOwnedBy = lambda team: [PICK1]
-    assert 1 in {a['id'] for a in m._tradeableAssets(teams[0])}
+    assert 1 not in {a['id'] for a in m._tradeableAssets(teams[0])}, \
+        "a top-3 pick was offered as bundle change"
+    strongCeil = {'A': 99.0, 'B': 97.0, 'C': 95.0, 'D': 93.0, 'E': 84.0}
+    m, teams = _market({n: 10.0 for n in strongCeil}, ceilings=strongCeil)
+    assert m._isHeadlinePick(teams[0], {**PICK1, 'slot': 4}), "a 5-star at #4 was unprotected"
 
 
 def test_the_headline_test_reads_the_prospect_at_the_slot():
