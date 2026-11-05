@@ -1000,6 +1000,11 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
                         EquippedCard.season == season,
                         EquippedCard.week == week)
                 .all())
+    # A FLEX card with no entitlement (Accession expired, no MVP card) scores nothing.
+    if any(eq.slot_number == 7 for eq in equipped):
+        from database.repositories.card_repositories import EquippedCardRepository
+        if not EquippedCardRepository(session).flexEntitledUserIds(season, week, {userId}):
+            equipped = [eq for eq in equipped if eq.slot_number != 7]
     result = calculateWeekCardBonuses(equipped, ctx)
     peakResult = calculateWeekCardBonuses(equipped, _peakContext(ctx))
     peakBySlot = {b.slotNumber: b for b in peakResult.cardBreakdowns}

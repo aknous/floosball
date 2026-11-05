@@ -981,6 +981,10 @@ class SeasonManager:
                     self._carryForwardEquippedCards(
                         lockSession, equippedRepo, seasonNum, currentWeek
                     )
+                # A FLEX card whose Accession expired (and no MVP card) leaves before the lock.
+                staleFlex = equippedRepo.dropStaleFlex(seasonNum, currentWeek)
+                if staleFlex:
+                    logger.info(f"Removed {staleFlex} expired FLEX card(s) from week {currentWeek}")
                 equippedRepo.lockAllForWeek(seasonNum, currentWeek)
                 # Auto-lock rosters that have all slots filled
                 unlocked = lockSession.query(FantasyRoster).filter_by(
@@ -1993,10 +1997,16 @@ class SeasonManager:
                     session.close()
                     return
 
-                # Group by user_id
+                # Group by user_id. A FLEX card (slot 7) counts only while the user is
+                # entitled to the slot; an expired Accession's card is skipped.
+                flexEntitled = equippedRepo.flexEntitledUserIds(
+                    season, week, {eq.user_id for eq in allEquipped if eq.slot_number == 7}
+                )
                 byUser = {}
                 for eq in allEquipped:
                     if not eq.locked:
+                        continue
+                    if eq.slot_number == 7 and eq.user_id not in flexEntitled:
                         continue
                     byUser.setdefault(eq.user_id, []).append(eq)
 

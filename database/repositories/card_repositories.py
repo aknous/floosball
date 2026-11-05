@@ -167,6 +167,74 @@ class EquippedCardRepository:
             .all()
         )
 
+    def flexEntitledUserIds(self, season: int, week: int, userIds) -> set:
+        """Which of `userIds` may field a card in the FLEX slot (slot_number 7) this week.
+
+        Entitled = an MVP-classified card equipped that week, OR an Accession
+        (temp_card_slot) power-up still running (`expires_at_week >= week`).
+
+        ⚠️ THE ONE DEFINITION. The game-start carry-forward used to copy a FLEX card
+        into the new week with no check, and week-end scoring scored every locked row,
+        so a FLEX card kept counting after Accession expired. Every reader that asks
+        "does this FLEX card count" goes through here.
+        """
+        from database.models import ShopPurchase
+        userIds = set(userIds or ())
+        if not userIds:
+            return set()
+        mvpRows = (
+            self.session.query(EquippedCard.user_id)
+            .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+            .filter(
+                EquippedCard.season == season,
+                EquippedCard.week == week,
+                EquippedCard.user_id.in_(userIds),
+                CardTemplate.classification.isnot(None),
+                CardTemplate.classification.contains("mvp"),
+            ).distinct().all()
+        )
+        entitled = {r[0] for r in mvpRows}
+        remaining = userIds - entitled
+        if remaining:
+            slotRows = (
+                self.session.query(ShopPurchase.user_id)
+                .filter(
+                    ShopPurchase.user_id.in_(remaining),
+                    ShopPurchase.season == season,
+                    ShopPurchase.item_slug == "temp_card_slot",
+                    ShopPurchase.expires_at_week >= week,
+                ).distinct().all()
+            )
+            entitled.update(r[0] for r in slotRows)
+        return entitled
+
+    def dropStaleFlex(self, season: int, week: int) -> int:
+        """Delete this week's FLEX rows for users no longer entitled to the slot.
+
+        Run at game start, after the carry-forward and before the lock, so an expired
+        Accession's FLEX card never enters the week. Returns the number removed."""
+        flexUserIds = {
+            r[0] for r in self.session.query(EquippedCard.user_id)
+            .filter_by(season=season, week=week, slot_number=7).distinct().all()
+        }
+        if not flexUserIds:
+            return 0
+        stale = flexUserIds - self.flexEntitledUserIds(season, week, flexUserIds)
+        if not stale:
+            return 0
+        removed = (
+            self.session.query(EquippedCard)
+            .filter(
+                EquippedCard.season == season,
+                EquippedCard.week == week,
+                EquippedCard.slot_number == 7,
+                EquippedCard.user_id.in_(stale),
+            ).delete(synchronize_session='fetch')
+        )
+        self.session.flush()
+        return removed
+
     def getEquippedCardIds(self, userId: int, season: int = 0, week: int = 0) -> set:
         """Get the set of user_card_ids equipped for a specific season/week."""
         return {
