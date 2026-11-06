@@ -9270,7 +9270,8 @@ class SeasonManager:
         whether a walk-year superstar is staying (owner, 2026-11-04;
         `playerManager.superstarLockedPositions`).
 
-        The same decision next offseason's step 3 makes (`_resignDecision`): until
+        The same decision next offseason's step 3 makes, measured against next offseason's
+        projected market (`playerManager.projectedMarketPool`) (`_resignDecision`): until
         salaries start the per-offseason re-sign limit and the GM's ranking decide it,
         and after that the limit is lifted and the team's budget decides it
         (`_affordableResigns`). A projection a year early: the free-agent pool, draft
@@ -9281,20 +9282,45 @@ class SeasonManager:
         the star walk for a rookie it only drafts because the star is walking."""
         from constants import RESIGN_LIMIT_PER_OFFSEASON
         limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
-        out = {}
-        for team in teams or []:
-            try:
-                expiring, forcedWalk, kept, _d, _a = self._resignDecision(
-                    team, brain, list(faOrder or []), [], limit)
-            except Exception as e:
-                logger.debug(f"re-sign intent unavailable for {getattr(team, 'name', team)}: {e}")
-                continue
-            keptIds = {id(p) for p in kept}
-            for p in expiring + forcedWalk:
-                out[getattr(p, 'id', None)] = id(p) in keptIds
-        return out
+        def decide(poolFor):
+            out = {}
+            for team in teams or []:
+                try:
+                    expiring, forcedWalk, kept, _d, _a = self._resignDecision(
+                        team, brain, list(faOrder or []), [], limit, pool=poolFor(team))
+                except Exception as e:
+                    logger.debug(f"re-sign intent unavailable for {getattr(team, 'name', team)}: {e}")
+                    continue
+                keptIds = {id(p) for p in kept}
+                for p in expiring + forcedWalk:
+                    out[getattr(p, 'id', None)] = id(p) in keptIds
+            return out
 
-    def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True):
+        # ⚠️ AGAINST NEXT OFFSEASON'S MARKET, NOT THIS ONE (owner, 2026-11-06). Today's
+        # free agents are signed in this offseason's FA draft, days from now; measuring a
+        # player whose deal ends after next season against them let the Melons plan to let
+        # TeeTee Moonshine walk for Riverdale Dreamcast, who would be gone by then. That
+        # market is what this FA draft leaves plus the players the other GMs plan to let
+        # go, so the read runs twice: once against today's pool to learn who walks, then
+        # against the market those walkers make (`playerManager.projectedMarketPool`).
+        # A rule-based guess at the walkers ("everyone under 84 walks") made the market
+        # richer than any real one and had teams plan to let 20% more starters go.
+        first = decide(lambda team: None)
+        try:
+            nextPool = self.playerManager.projectedMarketPool(brain, list(teams or []),
+                                                              intent=first)
+        except Exception as e:
+            logger.debug(f"next offseason's market unavailable for re-sign intent: {e}")
+            return first
+
+        def notMine(team):
+            name = getattr(team, 'name', None)
+            return [p for p in nextPool
+                    if getattr(getattr(p, 'team', None), 'name', getattr(p, 'team', None)) != name]
+        return decide(notMine)
+
+    def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True,
+                        pool=None):
         """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,
         teamsAhead)`. Read-only: nothing on the players changes here.
 
@@ -9357,7 +9383,7 @@ class SeasonManager:
             internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
         except Exception as e:
             logger.debug(f"expected draftees unavailable for {team.name}: {e}")
-        kept = brain.chooseResigns(expiring, limit, coach=coach,
+        kept = brain.chooseResigns(expiring, limit, coach=coach, pool=pool,
                                    pickDepth=pickDepth, team=team,
                                    teamsAhead=teamsAhead, internal=internal,
                                    lastChance=lastChance)

@@ -82,6 +82,12 @@ class Boards(Brain):
     def _ceilingRating(self, player, team=None):
         return float((getattr(team, 'reads', None) or {}).get(player.id, player.ceiling))
 
+    def projectedRating(self, player, seasonsAhead, coach=None, team=None):
+        # A rookie is read at his ceiling every season, anyone else at today's rating.
+        if getattr(player, 'is_upcoming_rookie', False):
+            return self._ceilingRating(player, team)
+        return float(player.playerRating)
+
 
 def test_the_teams_ahead_pick_off_their_own_boards():
     """The Bees pick 2nd (the predicted slots are the top 2). On their own read the WR is

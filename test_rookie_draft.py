@@ -104,9 +104,18 @@ class Harness:
     keptStarPositions = PlayerManager.keptStarPositions
     preferClearNeed = PlayerManager.preferClearNeed
     rookieBoardValue = PlayerManager.rookieBoardValue
-    rookieNeedValue = PlayerManager.rookieNeedValue
     _rookieNeedBar = PlayerManager._rookieNeedBar
-    rookieNeedMargin = PlayerManager.rookieNeedMargin
+    _planRating = PlayerManager._planRating
+    _planMarket = PlayerManager._planMarket
+    _planMarketUncached = PlayerManager._planMarketUncached
+    _planSlotHolders = staticmethod(PlayerManager._planSlotHolders)
+    _planOpenSlots = PlayerManager._planOpenSlots
+    _likelyResigned = PlayerManager._likelyResigned
+    projectedMarketPool = PlayerManager.projectedMarketPool
+    positionOutlook = PlayerManager.positionOutlook
+    positionPlan = PlayerManager.positionPlan
+    rookiePlanValue = PlayerManager.rookiePlanValue
+    rookiePlanMargin = PlayerManager.rookiePlanMargin
 
 
 def _run(rookies, teams, brain=None, resignIntent=None):
@@ -580,7 +589,7 @@ def test_re_sign_intent_follows_the_limit_then_the_budget():
 
     kept, walked = P(1), P(2)
 
-    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True):
+    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True, pool=None):
         calls.append((slotOwners, limit))
         return [kept, walked], [], [kept], 0, 0
 

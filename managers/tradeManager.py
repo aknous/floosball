@@ -1159,26 +1159,11 @@ class TradeMarket:
         ⚠️ AND IT IS ZERO FOR A BALANCED CLUB, which is what keeps this a redistribution
         between clubs rather than a thumb on the whole market.
         """
-        from constants import TRADE_NEED_SENSITIVITY, TRADE_NEED_MAX_TILT
+        from managers.frontOfficeBrain import sideNeedTilt
         cached = self._needCache.get(id(team))
         if cached is not None:
             return cached
-        teams = list(getattr(self.teamManager, 'teams', None) or [])
-        offs = [float(getattr(t, 'offenseRating', 0) or 0) for t in teams]
-        defs = [float(getattr(t, 'defenseRating', 0) or 0) for t in teams]
-        offs = [o for o in offs if o > 0]
-        defs = [dv for dv in defs if dv > 0]
-        tilt = 0.0
-        if offs and defs:
-            meanOff, meanDef = sum(offs) / len(offs), sum(defs) / len(defs)
-            myOff = float(getattr(team, 'offenseRating', 0) or 0)
-            myDef = float(getattr(team, 'defenseRating', 0) or 0)
-            if meanOff > 0 and meanDef > 0 and myOff > 0 and myDef > 0:
-                offGap = (meanOff - myOff) / meanOff
-                defGap = (meanDef - myDef) / meanDef
-                tilt = max(-TRADE_NEED_MAX_TILT,
-                           min(TRADE_NEED_MAX_TILT,
-                               (defGap - offGap) * TRADE_NEED_SENSITIVITY))
+        tilt = sideNeedTilt(team, list(getattr(self.teamManager, 'teams', None) or []))
         self._needCache[id(team)] = tilt
         return tilt
 

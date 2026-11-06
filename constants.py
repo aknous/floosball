@@ -3812,6 +3812,22 @@ TRADE_NEED_SENSITIVITY = 2.5
 # up to 10 points more to a club that badly needs defense, and 10 less to one that does not.
 TRADE_NEED_MAX_TILT = 1.0
 
+# ---- A coach's offense/defense preference (docs/TEAM_PLAN.md) ----
+# Owner, 2026-11-06: "coaches should have a preference, are they a defensive minded team,
+# offensive, or both?" Read off the attributes every coach already has: defensiveMind minus
+# offensiveMind over FO_SIDE_COACH_SPAN (the full 60-100 attribute range) is the lean, -1
+# offense to +1 defense, and FO_SIDE_COACH_WEIGHT is how much of the side tilt it can supply
+# (`FrontOfficeBrain.sideTilt`, added to the team's own need, `sideNeedTilt`). At 0.5 the
+# most one-sided coach moves a player's read by a quarter of the gap between his offense
+# and defense; a coach with equal minds is neutral.
+FO_SIDE_COACH_SPAN = 40.0
+FO_SIDE_COACH_WEIGHT = 0.5
+# A team planning a later offseason (docs/TEAM_PLAN.md) cannot count on another team's
+# player reaching free agency if he is rated at least this (the 4-star line) and not past
+# his longevity: his team is likely to re-sign him (owner, 2026-11-06). A deal ending after
+# next season is decided by the GM's own re-sign read instead (`walkYearResignIntent`).
+FO_MARKET_KEEP_RATING = 84
+
 # ---- The core a club builds around is NOT a trade asset ----
 # ⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE (owner, 2026-09-15: "teams
 # should also be identifying star players to build around and not consider every highly

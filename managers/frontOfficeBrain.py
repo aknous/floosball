@@ -121,6 +121,32 @@ def _atLeastOneSurvives(upgrades: int, trials: int, p: float) -> float:
     return _clamp(total, 0.0, 1.0)
 
 
+def sideNeedTilt(team, teams) -> float:
+    """How badly this team needs DEFENSE rather than offense, -1 .. +1: positive means its
+    defense lags its offense against the league's, negative the reverse, 0 for a balanced
+    team (and for one simply bad at both, which has no particular need).
+
+    ONE definition, read by the trade market (`TradeMarket.needTilt`) and the team plan
+    (`FrontOfficeBrain.sideTilt`). Measured relative to the league so a weak team does not
+    read a phantom need; scaled by TRADE_NEED_SENSITIVITY, capped at TRADE_NEED_MAX_TILT."""
+    from constants import TRADE_NEED_SENSITIVITY, TRADE_NEED_MAX_TILT
+    offs = [float(getattr(t, 'offenseRating', 0) or 0) for t in teams or []]
+    defs = [float(getattr(t, 'defenseRating', 0) or 0) for t in teams or []]
+    offs = [o for o in offs if o > 0]
+    defs = [dv for dv in defs if dv > 0]
+    if not offs or not defs:
+        return 0.0
+    meanOff, meanDef = sum(offs) / len(offs), sum(defs) / len(defs)
+    myOff = float(getattr(team, 'offenseRating', 0) or 0)
+    myDef = float(getattr(team, 'defenseRating', 0) or 0)
+    if meanOff <= 0 or meanDef <= 0 or myOff <= 0 or myDef <= 0:
+        return 0.0
+    offGap = (meanOff - myOff) / meanOff
+    defGap = (meanDef - myDef) / meanDef
+    return max(-TRADE_NEED_MAX_TILT,
+               min(TRADE_NEED_MAX_TILT, (defGap - offGap) * TRADE_NEED_SENSITIVITY))
+
+
 def isScoutable(player) -> bool:
     """Is this player a draft prospect — someone every club is GUESSING about?
 
@@ -860,6 +886,85 @@ class FrontOfficeBrain:
         if not points:
             return 0.0
         return points * positionValue(starter, venueBiasFor(team))
+
+    # ------------------------------------------------------------ team plan
+
+    def projectedRating(self, player, seasonsAhead: int, coach=None, team=None) -> float:
+        """The rating this team expects from the player `seasonsAhead` seasons from now
+        (0 = today), for the team plan (docs/TEAM_PLAN.md).
+
+        Past his peak: the sim's aging at its average (`_nextSeasonRatingPastPeak`),
+        extended at that rate and seen as `seenForward` sees it, which understates a
+        steepening decline rather than inventing a curve. Developing: each season
+        realises the same share f = FO_CEILING_CREDIT x development lean of what is left
+        to this team's read of his ceiling, the compounding `_growthBeyondNextSeason`
+        uses, so season 1 is `trueForwardRating` and it never passes the ceiling. Prime:
+        flat."""
+        current = float(getattr(player, 'playerRating', 0) or 0)
+        k = max(0, int(seasonsAhead or 0))
+        if k == 0 or player is None:
+            return current
+        nextSeason = self._nextSeasonRatingPastPeak(player, coach, team)
+        if nextSeason is not None:
+            step = float(nextSeason) - current
+            if step >= 0:
+                return float(nextSeason)       # the peak season's overshoot, once
+            return current + step * k * self.agingSeen(coach, team)
+        try:
+            if self.classifyArc(player) != ARC_DEVELOPING:
+                return current
+            ceiling = float(self._ceilingRating(player, team))
+        except Exception:
+            return current
+        if ceiling <= current:
+            return current
+        f = _clamp(FO_CEILING_CREDIT * self.developmentLean(coach, team), 0.0, 1.0)
+        return ceiling - (ceiling - current) * (1.0 - f) ** k
+
+    def _leagueTeams(self):
+        teams = getattr(self, 'leagueTeams', None)
+        if teams:
+            return teams
+        try:
+            tm = self.playerManager.serviceContainer.getService('team_manager')
+            return list(getattr(tm, 'teams', None) or [])
+        except Exception:
+            return []
+
+    def sideTilt(self, team, coach=None) -> float:
+        """How much this team weighs DEFENSE over offense when it judges a player, -1 ..
+        +1 (owner, 2026-11-06: "teams need to be looking at both ratings, not just the
+        overall. and coaches should have a preference"). Its need (`sideNeedTilt`, its
+        offense and defense against the league's) plus the coach's lean: defensiveMind
+        against offensiveMind over FO_SIDE_COACH_SPAN, times FO_SIDE_COACH_WEIGHT. A
+        balanced team with a balanced coach reads 0, i.e. plain overall ratings."""
+        from constants import FO_SIDE_COACH_SPAN, FO_SIDE_COACH_WEIGHT, TRADE_NEED_MAX_TILT
+        if team is None:
+            return 0.0
+        cache = self.__dict__.setdefault('_sideTiltCache', {})
+        key = getattr(team, 'id', None)
+        key = id(team) if key is None else key
+        if key in cache:
+            return cache[key]
+        need = sideNeedTilt(team, self._leagueTeams())
+        coach = coach if coach is not None else getattr(team, 'coach', None)
+        lean = 0.0
+        if coach is not None:
+            gap = (float(getattr(coach, 'defensiveMind', 80) or 80)
+                   - float(getattr(coach, 'offensiveMind', 80) or 80))
+            lean = _clamp(gap / float(FO_SIDE_COACH_SPAN), -1.0, 1.0) * FO_SIDE_COACH_WEIGHT
+        tilt = _clamp(need + lean, -TRADE_NEED_MAX_TILT, TRADE_NEED_MAX_TILT)
+        cache[key] = tilt
+        return tilt
+
+    def sideRating(self, player, rating: float, tilt: float) -> float:
+        """`rating` read through a side tilt: rating + tilt x (defense - offense) / 2, the
+        trade market's `ratingFor`. A player with no split (a kicker) is unchanged."""
+        off = float(getattr(player, 'offensiveRating', 0) or 0)
+        dfn = float(getattr(player, 'defensiveRating', 0) or 0)
+        if off <= 0 or dfn <= 0 or not tilt:
+            return float(rating)
+        return float(rating) + float(tilt) * (dfn - off) / 2.0
 
     def freeAgentValue(self, player, coach=None, rng=None, team=None) -> float:
         """A free agent's value when he is weighed against a team's own player:
