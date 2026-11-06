@@ -5482,7 +5482,16 @@ class PlayerManager:
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
-            pick = self.chooseRookiePick(brain, team, eligible, slotNumber)
+            # ⚠️ A ROOKIE THE PLAN COUNTED ON IS DRAFTED IF HE IS STILL THERE (team plan
+            # stage 3, docs/TEAM_PLAN.md). The re-sign step let a starter go because this
+            # team expected to take him; the draft used to re-decide, by then seeing the
+            # full free-agent pool, and take someone else (season-13 snapshot: the Trains
+            # let a 76 WR go for Griffin Star, took Ivy Linguine #2, and the Jetskis took
+            # Griffin Star #3).
+            committed = PlayerManager.committedRookie(self, team, eligible)
+            pick = committed or self.chooseRookiePick(brain, team, eligible, slotNumber)
+            if committed is not None:
+                logger.info(f"Team plan: {team.name} drafts {committed.name} #{slotNumber} as planned")
             # Say when the star rules moved the pick (the superstar lock, or comparable
             # upside at a clear need), and what it would have been without them.
             try:
@@ -6013,6 +6022,24 @@ class PlayerManager:
         slot filled during the draft cannot be cut again (`_draftFilledSlots`)."""
         return bool(rosterComplete) and not cls._turnMadeAMove(events)
 
+    def committedRookie(self, team, rookies):
+        """The upcoming rookie among `rookies` this team's plan counted on drafting (the
+        re-sign step let a starter go because it expected to take him), or None."""
+        committed = (getattr(self, '_prospectCommitments', None) or {}).get(getattr(team, 'id', None)) or {}
+        for r in rookies or []:
+            if getattr(r, 'id', None) in committed and getattr(r, 'is_upcoming_rookie', False):
+                return r
+        return None
+
+    def committedProspect(self, team, prospects):
+        """The prospect among `prospects` this team's plan has taking over (the re-sign
+        step let a starter go for him; docs/TEAM_PLAN.md, stage 3), or None."""
+        committed = (getattr(self, '_prospectCommitments', None) or {}).get(getattr(team, 'id', None)) or {}
+        for p in prospects or []:
+            if getattr(p, 'id', None) in committed and getattr(p, 'is_prospect', False):
+                return p
+        return None
+
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                           eventLog=None, allowUpgrades: bool = True) -> bool:
@@ -6233,9 +6260,11 @@ class PlayerManager:
                     if bestFa is not None:
                         cands.append((slot, bestFa, 'fa'))
                     continue
-                # The better player this season among the team's own prospects.
-                best = max(posProspects, key=_seasonRating)
-                if _prospectTakes(best, bestFa):
+                # The better player this season among the team's own prospects, or the
+                # one the plan has taking over.
+                committed = PlayerManager.committedProspect(self, team, posProspects)
+                best = committed or max(posProspects, key=_seasonRating)
+                if committed is not None or _prospectTakes(best, bestFa):
                     cands.append((slot, best, 'prospect'))
                 else:
                     cands.append((slot, bestFa, 'fa'))
@@ -6258,10 +6287,16 @@ class PlayerManager:
                 posProspects = [p for p in prospects if p.position.value == posVal]
                 if not posProspects:
                     continue
-                best = max(posProspects, key=_seasonRating)
+                committed = PlayerManager.committedProspect(self, team, posProspects)
+                best = committed or max(posProspects, key=_seasonRating)
                 bestFa = _bestFaFor(POS_TO_FALIST.get(posVal, []), True, True)
-                if not _prospectTakes(best, bestFa):
+                if committed is None and not _prospectTakes(best, bestFa):
                     continue
+                if committed is not None:
+                    logger.info(f"Team plan: {team.name} promotes {best.name} "
+                                f"({getattr(best, 'playerRating', 0)}) as planned"
+                                + (f", over {bestFa.name} ({getattr(bestFa, 'playerRating', 0)})"
+                                   if bestFa is not None and not _prospectTakes(best, bestFa) else ""))
                 self._promoteProspectIntoSlot(team, best, slot, freeAgencyDict,
                                               leagueHighlights, eventLog)
                 promotedAny = True

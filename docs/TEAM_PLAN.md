@@ -53,7 +53,11 @@ balanced team with a balanced coach reads plain overall ratings.
 2. **Re-sign step** reads the same outlook (is the starter needed once the prospects and
    market are counted).
 3. **Promotion pass and FA draft** follow the plan's promotion seasons, so the FA draft
-   cannot sign over a prospect the plan has taking over unless the plan changes.
+   cannot sign over a prospect the plan has taking over unless the plan changes. Built as
+   commitments: when the re-sign step lets a starter go because a prospect (or a top-pick
+   rookie) covers him, the FA draft, the step-3.78 last look and the market path promote
+   that player into the open slot. A commitment lapses if he is no longer the team's
+   prospect.
 
 Each stage is measured on a prod snapshot before the next.
 

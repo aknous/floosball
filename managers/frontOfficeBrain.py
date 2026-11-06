@@ -1601,6 +1601,9 @@ class FrontOfficeBrain:
         # for three seasons, which then left the rookie no slot to be promoted into. Each
         # alternative covers ONE incumbent at his position, the weakest first.
         coveredIds = set()
+        # {incumbent id: the internal alternative covering him}, read by the re-sign step
+        # to record the team plan's commitment (docs/TEAM_PLAN.md, stage 3).
+        self.lastCoverage = {}
         byPos = {}
         for alt in internal or []:
             posV = getattr(getattr(alt, 'position', None), 'value', None)
@@ -1635,6 +1638,7 @@ class FrontOfficeBrain:
                               and self.ratedAtLeast(alt, pl, coach))
                 if covers:
                     coveredIds.add(id(pl))
+                    self.lastCoverage[getattr(pl, 'id', None)] = alt
 
         from managers.playerManager import fanVerdict
         ranked = []

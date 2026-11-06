@@ -448,12 +448,15 @@ def runSigningPeriod(pm, teams: list, brain, season: int, freeAgencyOrder: list,
                         if getattr(p, 'is_prospect', False) and p.position.value == posVal]
                 if not pros:
                     continue
-                best = max(pros, key=lambda p: brain.seasonRating(p, coach, team))
+                # The prospect the team plan has taking over keeps the slot (docs/TEAM_PLAN.md).
+                from managers.playerManager import PlayerManager
+                committed = PlayerManager.committedProspect(pm, team, pros)
+                best = committed or max(pros, key=lambda p: brain.seasonRating(p, coach, team))
                 fas = [f for f in pm.freeAgents if f.position.value == posVal
                        and not getattr(f, 'willRetire', False)]
                 bestFa = max(fas, key=lambda f: brain.decisionValue(f, coach, team=team), default=None)
                 try:
-                    takes = brain.prospectTakesSlot(best, bestFa, coach, team)
+                    takes = committed is not None or brain.prospectTakesSlot(best, bestFa, coach, team)
                 except Exception:
                     takes = bestFa is None
                 if takes:

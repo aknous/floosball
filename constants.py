@@ -3827,6 +3827,12 @@ FO_SIDE_COACH_WEIGHT = 0.5
 # his longevity: his team is likely to re-sign him (owner, 2026-11-06). A deal ending after
 # next season is decided by the GM's own re-sign read instead (`walkYearResignIntent`).
 FO_MARKET_KEEP_RATING = 84
+# The team plan's commitments (docs/TEAM_PLAN.md, stage 3): when the re-sign step lets a
+# starter walk because a prospect (or a top-pick rookie) will take over, the FA draft and
+# the washout last look honor it. Saved as {"season": N, "teams": {teamId: {playerId:
+# positionValue}}} so a restart between step 3 and the FA draft keeps it. Season-scoped:
+# `clear_db` deletes it.
+PROSPECT_COMMITMENTS_SETTING = 'prospect_commitments'
 
 # ---- The core a club builds around is NOT a trade asset ----
 # ⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE (owner, 2026-09-15: "teams

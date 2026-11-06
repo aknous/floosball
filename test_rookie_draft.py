@@ -98,6 +98,7 @@ class Harness:
     payForfeitedSlot = PlayerManager.payForfeitedSlot
     rookieCeiling = PlayerManager.rookieCeiling
     blockedByOwnProspect = PlayerManager.blockedByOwnProspect
+    committedRookie = PlayerManager.committedRookie
     chooseRookiePick = PlayerManager.chooseRookiePick
     prospectRanking = PlayerManager.prospectRanking
     superstarLockedPositions = PlayerManager.superstarLockedPositions

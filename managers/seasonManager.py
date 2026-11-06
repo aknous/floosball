@@ -7663,6 +7663,7 @@ class SeasonManager:
 
         await self._setOffseasonFlow('rookie_draft', None)
         self._offseasonPhase = 'rookie_draft'
+        self._restoreProspectCommitments()
 
         draftOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) or []
         if not draftOrder:
@@ -8053,6 +8054,7 @@ class SeasonManager:
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager or not self.currentSeason:
             return
+        self._restoreProspectCommitments()
         teams = list(getattr(self.currentSeason, 'freeAgencyOrder', None) or [])
         for team in getattr(teamManager, 'teams', None) or []:
             if team not in teams:
@@ -8660,6 +8662,7 @@ class SeasonManager:
         self.playerManager._faCutBars = cutBars
         # The open-slot prospect-or-free-agent rule reads the same GM (`_attemptRosterFill`).
         self.playerManager._faBrain = brain
+        self._restoreProspectCommitments()
         # ⚠️ AND WHY ANYONE IS MISSING FROM A BOARD, so a pick can explain itself. See
         # `buildDraftBoard`'s note: a fan watching a five-star go unpicked assumes the club
         # blundered, and the club may simply have been turned down.
@@ -8892,6 +8895,25 @@ class SeasonManager:
                 # two sides of the comparison were read by different GMs.
                 value = brain.decisionValue(prospect, coach=coach, team=team)
                 cutFor = None
+                if slot and washoutOnly:
+                    # ⚠️ A SLOT THE PLAN HAS COMMITTED TO ANOTHER PROSPECT IS NOT OPEN to a
+                    # washout (team plan stage 3): the re-sign step let the starter go for
+                    # that prospect. Season-13 snapshot: Buffalo let Dialup McAvoy go for
+                    # Wallet Jorns, and Marv Chesteron, washing out, took the slot here.
+                    from managers.playerManager import PlayerManager
+                    others = [pr for pr in (getattr(team, 'prospects', None) or [])
+                              if pr is not prospect
+                              and getattr(pr.position, 'value', None) == prospect.position.value]
+                    committedOther = PlayerManager.committedProspect(self.playerManager, team, others)
+                    if committedOther is not None and PlayerManager.committedProspect(
+                            self.playerManager, team, [prospect]) is None:
+                        openHere = sum(1 for sl, pl in team.rosterDict.items()
+                                       if pl is None and sl in {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'],
+                                                                4: ['te'], 5: ['k']}.get(prospect.position.value, []))
+                        if openHere <= 1:
+                            # Not through the final-window cut plan either: it hands back
+                            # the same empty slot.
+                            continue
                 if slot:
                     # ⚠️ AN OPEN SLOT IS THE FA DRAFT'S TO FILL (owner, 2026-10-17: "teams
                     # should be able to hold off on promoting until the free agent draft").
@@ -8905,7 +8927,11 @@ class SeasonManager:
                         continue
                     fa = brain.expectedFreeAgent(prospect.position, team=team, coach=coach,
                                                  pickDepth=pickDepth)
-                    if not brain.prospectTakesSlot(prospect, fa, coach, team):
+                    # The plan's commitment (the re-sign step let a starter go for him)
+                    # decides it; otherwise this team's own comparison.
+                    from managers.playerManager import PlayerManager
+                    if (PlayerManager.committedProspect(self.playerManager, team, [prospect]) is None
+                            and not brain.prospectTakesSlot(prospect, fa, coach, team)):
                         continue
                 if not slot and not lastChance:
                     # ⚠️ A PROSPECT WHO IS CLEARLY BETTER TODAY DOES NOT WAIT (owner,
@@ -9527,10 +9553,13 @@ class SeasonManager:
             slotOwners = []
             logger.debug(f"draft slots unavailable for retention: {e}")
 
+        commitments = {}
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
+            brain.lastCoverage = {}
             expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
                 team, brain, faOrder, slotOwners, limit, afford=not marketMode)
+            coverage = dict(getattr(brain, 'lastCoverage', None) or {})
             if marketMode:
                 # THE RE-SIGN HEAD START (owner, 2026-11-01). The team offers the players
                 # its GM wants (plus anyone its fans voted to keep, budget permitting), at
@@ -9579,6 +9608,18 @@ class SeasonManager:
                 p._gmResigned = id(p) in keptIds
             for p in forcedWalk:
                 p._gmResigned = False
+            # ⚠️ A STARTER LET GO BECAUSE A PROSPECT TAKES OVER IS A COMMITMENT (team plan,
+            # stage 3, docs/TEAM_PLAN.md). The FA draft used to re-decide that slot from
+            # scratch, so the prospect could lose it to a free agent and the starter was
+            # gone for nothing (season-13 snapshot: the Melons let TeeTee Moonshine walk
+            # for Comicbook Connery, then signed Catface Martins over Connery).
+            for p in expiring:
+                alt = coverage.get(getattr(p, 'id', None))
+                if id(p) in keptIds or alt is None or getattr(alt, 'id', None) is None:
+                    continue
+                commitments.setdefault(team.id, {})[alt.id] = p.position.value
+                logger.info(f"Team plan: {team.name} let {p.name} ({getattr(p, 'playerRating', 0)}) "
+                            f"go for {alt.name} ({getattr(alt, 'playerRating', 0)})")
             logger.info(f"Retention {team.name} (GM brain): re-signed {len(kept)}, "
                         f"forced-walk {len(forcedWalk)}, walked {len(expiring) - len(kept)} "
                         f"(faDepth {pickDepth})")
@@ -9605,6 +9646,45 @@ class SeasonManager:
                     f"{p.name}({getattr(p, 'playerRating', 0)})" for p, _s in cuts))
 
         logger.info(f"GM brain sweep complete: {cutTally} upgrade cut(s) league-wide")
+        self._saveProspectCommitments(commitments)
+
+    def _saveProspectCommitments(self, commitments: dict) -> None:
+        """Record this offseason's team plan commitments ({teamId: {playerId:
+        positionValue}}) for the FA draft and the washout last look, in memory and in
+        `PROSPECT_COMMITMENTS_SETTING` so a restart before the FA draft keeps them."""
+        from constants import PROSPECT_COMMITMENTS_SETTING
+        self.playerManager._prospectCommitments = {int(t): {int(p): int(v) for p, v in m.items()}
+                                                   for t, m in (commitments or {}).items()}
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        self.playerManager._prospectCommitmentsSeason = season
+        try:
+            from game_rules import _writeAppSetting
+            _writeAppSetting(PROSPECT_COMMITMENTS_SETTING, json.dumps(
+                {'season': season, 'teams': {str(t): {str(p): v for p, v in m.items()}
+                                             for t, m in self.playerManager._prospectCommitments.items()}}))
+        except Exception as e:
+            logger.warning(f"Could not save the team plan's commitments: {e}")
+
+    def _restoreProspectCommitments(self) -> None:
+        """Reload this offseason's commitments after a restart (a no-op when they are
+        already in memory, or saved for another season)."""
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        if (getattr(self.playerManager, '_prospectCommitments', None) is not None
+                and getattr(self.playerManager, '_prospectCommitmentsSeason', None) == season):
+            return
+        self.playerManager._prospectCommitmentsSeason = season
+        from constants import PROSPECT_COMMITMENTS_SETTING
+        try:
+            from game_rules import _readAppSetting
+            raw = _readAppSetting(PROSPECT_COMMITMENTS_SETTING)
+            data = json.loads(raw) if raw else {}
+        except Exception:
+            data = {}
+        if data.get('season') != season:
+            self.playerManager._prospectCommitments = {}
+            return
+        self.playerManager._prospectCommitments = {
+            int(t): {int(p): int(v) for p, v in m.items()} for t, m in (data.get('teams') or {}).items()}
 
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
