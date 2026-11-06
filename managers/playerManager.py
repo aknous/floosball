@@ -4563,21 +4563,20 @@ class PlayerManager:
         return trading.prospectValue(ceiling, 0, rookieTerm=trading.rookieTermForSkill(ceiling),
                                      positionWeight=posW)
 
-    def rookieNeedValue(self, brain, team, rookie) -> float:
+    def rookieNeedValue(self, brain, team, rookie, intent: dict = None) -> float:
         """What a rookie is worth to THIS club for what it is MISSING: the same
         `prospectValue` as the board, but measured above what the club already has at
         his position instead of above replacement.
 
         "What it already has" is the higher of its weaker starter there (WR has two
-        slots) and the best ceiling already in its pipeline there. A starter on a walk
-        year or set to retire counts as nobody, because that slot is about to open. Same
-        shape as a trade bid, which prices the upgrade over the man displaced.
+        slots) and the best ceiling already in its pipeline there (`_rookieNeedBar`).
+        Same shape as a trade bid, which prices the upgrade over the man displaced.
         """
         import trading
         from constants import REPLACEMENT_RATING
         from managers.frontOfficeBrain import positionValue
         ceiling = self.rookieCeiling(brain, team, rookie)
-        upgrade = max(0.0, ceiling - self._rookieNeedBar(brain, team, rookie))
+        upgrade = max(0.0, ceiling - self._rookieNeedBar(brain, team, rookie, intent=intent))
         try:
             posW = positionValue(rookie)
         except Exception:
@@ -4586,19 +4585,30 @@ class PlayerManager:
                                      rookieTerm=trading.rookieTermForSkill(ceiling),
                                      positionWeight=posW)
 
-    def _rookieNeedBar(self, brain, team, rookie, leaving=None) -> float:
+    def _rookieNeedBar(self, brain, team, rookie, leaving=None, intent: dict = None) -> float:
         """What a rookie must beat to fill a need at his position: the higher of the
-        team's weaker starter there (a walk-year or retiring starter counts as nobody)
-        and the best ceiling already in its pipeline there, never below replacement.
-        `leaving` (a player a trade is taking away) counts as nobody too."""
+        team's weaker starter there and the best ceiling already in its pipeline there,
+        never below replacement. A retiring starter counts as nobody, and so does
+        `leaving` (a player a trade is taking away).
+
+        ⚠️ A WALK-YEAR STARTER COUNTS AS NOBODY ONLY IF THE GM WILL LET HIM GO (fixed
+        2026-11-06). `intent` (`{playerId: re-sign?}`, else the draft's
+        `_walkYearResignIntent`) is next offseason's re-sign decision; one the GM
+        intends to keep is counted at his rating. Counting every walk-year starter as
+        gone put about three picks a draft behind a starter the team was keeping who
+        was already as good as the rookie could become (prod snapshot, season 13: the
+        Exoticos took a 79-ceiling QB while planning to re-sign their 82). With no
+        intent read (the trade market), a walk-year starter still counts as leaving."""
         from constants import REPLACEMENT_RATING
+        known = intent if intent is not None else (getattr(self, '_walkYearResignIntent', None) or {})
         posValue = getattr(getattr(rookie, 'position', None), 'value', None)
         slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
         starters = []
         for slot in slots:
             p = (getattr(team, 'rosterDict', None) or {}).get(slot)
+            walkYear = p is not None and (getattr(p, 'termRemaining', 99) or 99) <= 1
             gone = p is None or p is leaving or getattr(p, 'willRetire', False) or \
-                (getattr(p, 'termRemaining', 99) or 99) <= 1
+                (walkYear and not known.get(getattr(p, 'id', None), False))
             starters.append(float(REPLACEMENT_RATING) if gone
                             else float(getattr(p, 'playerRating', 0) or 0))
         bar = min(starters) if starters else float(REPLACEMENT_RATING)
@@ -4607,14 +4617,25 @@ class PlayerManager:
                 bar = max(bar, self.rookieCeiling(brain, team, prospect))
         return max(bar, float(REPLACEMENT_RATING))
 
-    def rookieNeedMargin(self, brain, team, rookie) -> float:
+    def rookieNeedMargin(self, brain, team, rookie, intent: dict = None) -> float:
         """How close the rookie's ceiling (this team's read) comes to what he must beat
         at his position; negative when he is blocked. The draft's tie-break once no rookie
         left fills a need (owner, 2026-10-17): take the one with the best chance of
         earning a spot. It used to fall to the highest ceiling at ANY position, so with
         pure need weighting a team still took a QB behind its 90 QB (prod-snapshot sim:
         17% of picks 9-32 landed behind a 4-star+ starter)."""
-        return self.rookieCeiling(brain, team, rookie) - self._rookieNeedBar(brain, team, rookie)
+        return (self.rookieCeiling(brain, team, rookie)
+                - self._rookieNeedBar(brain, team, rookie, intent=intent))
+
+    def blockedByOwnProspect(self, brain, team, rookie) -> bool:
+        """Does this team already hold a prospect at the rookie's position projected
+        (its own read of the ceiling) to be as good or better? Such a rookie is not
+        drafted while anyone else is available (owner, 2026-11-06)."""
+        posValue = getattr(getattr(rookie, 'position', None), 'value', None)
+        ceiling = self.rookieCeiling(brain, team, rookie)
+        return any(getattr(getattr(pr, 'position', None), 'value', None) == posValue
+                   and self.rookieCeiling(brain, team, pr) >= ceiling
+                   for pr in (getattr(team, 'prospects', None) or []))
 
     def superstarLockedPositions(self, brain, team, intent: dict = None) -> set:
         """See `keptStarPositions`: positions held by kept 5-star starters."""
@@ -4680,52 +4701,48 @@ class PlayerManager:
                    if r is not pick and r.position != FloosPlayer.Position.K
                    and r.position != pick.position
                    and self.rookieCeiling(brain, team, r) >= floor
-                   and self._rookieNeedBar(brain, team, r) < float(ROOKIE_DRAFT_CLEAR_NEED_RATING)]
+                   and self._rookieNeedBar(brain, team, r, intent=intent)
+                   < float(ROOKIE_DRAFT_CLEAR_NEED_RATING)]
         if not options:
             return pick
         return max(options, key=lambda r: (
             self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
             -self.countTeamProspectsAtPosition(team, r.position)))
 
-    def bpaChoice(self, brain, team, eligible, preferNeed: bool = True, intent: dict = None):
-        """The pick at a top `ROOKIE_DRAFT_BPA_SLOTS` slot: the highest ceiling on this
-        club's own board, whatever the position or need (owner, 2026-10-01), kickers
-        excluded unless a kicker is all it can take. Ties go to the better player today,
-        then a position the club is thin at. ONE definition, shared by the draft and by
-        `expectedDraftees`, so the prediction cannot drift from the pick."""
-        pool = [r for r in eligible if r.position != FloosPlayer.Position.K] or eligible
-        if not pool:
-            return None
-        pick = max(pool, key=lambda r: (
-            self.rookieCeiling(brain, team, r), float(getattr(r, 'playerRating', 0) or 0),
-            -self.countTeamProspectsAtPosition(team, r.position)))
-        return self.preferClearNeed(brain, team, pool, pick, intent) if preferNeed else pick
-
-    def chooseRookiePick(self, brain, team, eligible, slotNumber: int, draftLength: int,
+    def chooseRookiePick(self, brain, team, eligible, slotNumber: int,
                          preferNeed: bool = True, intent: dict = None):
-        """The pick a team makes at this slot from `eligible`: the best prospect available
-        at the top `ROOKIE_DRAFT_BPA_SLOTS`, then asset value shading into need, then the
-        clear-need preference. The draft calls it for each pick, and for the pick it would
-        have made without the star rules (the log line that says when they moved one)."""
-        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        """The pick a team makes at this slot from `eligible`. The draft calls it for each
+        pick, and for the pick it would have made without the star rules (the log line
+        that says when they moved one); `expectedDraftees` calls it to predict the top
+        picks, so the prediction and the pick are one rule.
+
+        ⚠️ NEED AT EVERY PICK (owner, 2026-11-06: "teams just need to be picking by need
+        at all picks"). Each rookie is worth `rookieNeedValue`, his ceiling above what the
+        team already has at his position (`_rookieNeedBar`). The top picks used to take
+        the best prospect available whatever the need (`ROOKIE_DRAFT_BPA_SLOTS`, then a
+        ramp into need by pick 8); the board value (`rookieBoardValue`) now prices slots
+        and ranks the class publicly but no longer makes a pick.
+        ⚠️ NEVER BEHIND THE TEAM'S OWN PROSPECT (`blockedByOwnProspect`): a rookie its
+        pipeline already matches or beats at his position is skipped while anyone else
+        is available. The need value alone mostly does this (that prospect sets the
+        bar, so the rookie scores 0), but when no rookie left fills a need the
+        tie-break could still land on one.
+        Kickers are passed over at the top `ROOKIE_DRAFT_TOP_SLOTS` unless a kicker is
+        all that is left (owner, 2026-10-01). Ties go to the rookie least blocked at his
+        position, then the higher ceiling, then a position the team is thin at. Then the
+        clear-need preference (`preferClearNeed`)."""
+        from constants import ROOKIE_DRAFT_TOP_SLOTS
         if not eligible:
             return None
-        if slotNumber <= int(ROOKIE_DRAFT_BPA_SLOTS):
-            return self.bpaChoice(brain, team, eligible, preferNeed=preferNeed, intent=intent)
-        # ⚠️ ASSET VALUE SHADING INTO NEED as the draft goes on: the same two
-        # `prospectValue` readings, one above replacement and one above what this
-        # club already has, so they blend on one scale. Tie-break (a pure-need
-        # pick where nobody left fills a need scores 0 for everyone) toward the
-        # rookie least blocked at his position, then the higher ceiling, then a
-        # position this club is thin at.
-        needW = self.rookieNeedWeight(slotNumber, draftLength)
-        choice = max(eligible, key=lambda r: (
-            (1.0 - needW) * self.rookieBoardValue(brain, team, r)
-            + needW * self.rookieNeedValue(brain, team, r),
-            self.rookieNeedMargin(brain, team, r) if needW > 0 else 0.0,
+        pool = [r for r in eligible if not self.blockedByOwnProspect(brain, team, r)] or list(eligible)
+        if slotNumber <= int(ROOKIE_DRAFT_TOP_SLOTS):
+            pool = [r for r in pool if r.position != FloosPlayer.Position.K] or pool
+        choice = max(pool, key=lambda r: (
+            self.rookieNeedValue(brain, team, r, intent=intent),
+            self.rookieNeedMargin(brain, team, r, intent=intent),
             self.rookieCeiling(brain, team, r),
             -self.countTeamProspectsAtPosition(team, r.position)))
-        return self.preferClearNeed(brain, team, eligible, choice, intent) if preferNeed else choice
+        return self.preferClearNeed(brain, team, pool, choice, intent) if preferNeed else choice
 
     def prospectRanking(self, brain=None) -> list:
         """The upcoming class ranked like a published prospect list: best first by the
@@ -4745,32 +4762,42 @@ class PlayerManager:
         """The rookies this club will take with its top picks in the upcoming draft.
 
         `slotOwners` is the draft order as owning teams (slot 1 first). The top
-        `ROOKIE_DRAFT_BPA_SLOTS` slots are SIMULATED: each owner in turn takes `bpaChoice`
-        off its own board, exactly as the draft will, so this club sees who the clubs
-        ahead take rather than assuming they take its own favorites. Their reads are
-        deterministic (`prospect_scouting`), so the prediction matches the draft unless a
-        trade moves a pick in between. Used by re-sign decisions, which run before the
-        draft.
+        `ROOKIE_DRAFT_TOP_SLOTS` slots are SIMULATED: each owner in turn makes the pick
+        the draft will make (`chooseRookiePick`) off its own board, so this club sees who
+        the clubs ahead take rather than assuming they take its own favorites. Their
+        reads are deterministic (`prospect_scouting`), so the prediction matches the
+        draft unless a trade moves a pick in between. Used by re-sign decisions, which
+        run before the draft.
 
         ⚠️ TOP SLOTS ONLY (owner, 2026-10-02: "when you have a top 3-5 pick, you should
-        have a good idea of which players will be available to you"). Later slots shade
-        toward need and depend on every club ahead, so a team there does not plan its
-        roster around a rookie it may not get. A first version read slot k as the k-th
-        best on the club's own board and was wrong at #3: the clubs ahead pick off their
-        own boards, so the Bees let a 74 QB walk for a QB who was already gone.
+        have a good idea of which players will be available to you"). Later slots depend
+        on every club ahead, so a team there does not plan its roster around a rookie it
+        may not get. A first version read slot k as the k-th best on the club's own
+        board and was wrong at #3: the clubs ahead pick off their own boards, so the Bees
+        let a 74 QB walk for a QB who was already gone.
+
+        ⚠️ EVERY WALK-YEAR STARTER IS ASSUMED TO STAY. The picks are made by need, and
+        the re-sign decision asking this is what decides whether those starters leave;
+        counting them as gone would have a team plan to let a starter walk for a rookie
+        it only drafts because the starter is walking. So a rookie is expected only
+        where he is the pick with the incumbents in place, and the re-sign check then
+        asks whether he replaces one.
         """
-        from constants import ROOKIE_DRAFT_BPA_SLOTS
+        from constants import ROOKIE_DRAFT_TOP_SLOTS
         available = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
         teamId = getattr(team, 'id', None)
         out = []
         try:
-            for owner in list(slotOwners or [])[:int(ROOKIE_DRAFT_BPA_SLOTS)]:
+            for slot, owner in enumerate(list(slotOwners or [])[:int(ROOKIE_DRAFT_TOP_SLOTS)], start=1):
                 if not available:
                     break
-                locked = self.superstarLockedPositions(brain, owner)
+                stays = {getattr(p, 'id', None): True
+                         for p in (getattr(owner, 'rosterDict', None) or {}).values()
+                         if p is not None and (getattr(p, 'termRemaining', 99) or 99) <= 1}
+                locked = self.superstarLockedPositions(brain, owner, stays)
                 eligible = [r for r in available if self.hasOpenProspectSlot(owner, r.position)
                             and r.position not in locked]
-                pick = self.bpaChoice(brain, owner, eligible)
+                pick = self.chooseRookiePick(brain, owner, eligible, slot, intent=stays)
                 if pick is None:
                     continue
                 available.remove(pick)
@@ -4779,22 +4806,6 @@ class PlayerManager:
         except Exception:
             return []
         return out
-
-    @staticmethod
-    def rookieNeedWeight(slot: int, draftLength: int) -> float:
-        """How much a pick weighs NEED against asset value (owner, 2026-10-01: early
-        picks take the best player available, and "the further back the draft goes, the
-        more teams draft by need"). 0 through `ROOKIE_DRAFT_BPA_SLOTS`, rising evenly to
-        1 at `ROOKIE_DRAFT_NEED_FULL_SLOT` (owner, 2026-10-17: need "outside of the top
-        couple picks"), or at the last pick in a draft shorter than that."""
-        from constants import ROOKIE_DRAFT_BPA_SLOTS, ROOKIE_DRAFT_NEED_FULL_SLOT
-        start = int(ROOKIE_DRAFT_BPA_SLOTS)
-        if slot <= start or draftLength <= start:
-            return 0.0
-        full = min(int(ROOKIE_DRAFT_NEED_FULL_SLOT), int(draftLength))
-        if full <= start:
-            return 1.0
-        return min(1.0, (slot - start) / float(full - start))
 
     def countTeamProspectsAtPosition(self, team, position) -> int:
         """How many prospects this team already holds at a given Position enum."""
@@ -5099,7 +5110,6 @@ class PlayerManager:
         for i, t in enumerate(draftOrder):
             slotByTeamId.setdefault(getattr(t, 'id', None), i + 1)
 
-        from constants import ROOKIE_DRAFT_BPA_SLOTS
         for slotNumber, onTheClock in enumerate(draftOrder, start=1):
             if not available:
                 break
@@ -5172,12 +5182,12 @@ class PlayerManager:
 
             yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
-            pick = self.chooseRookiePick(brain, team, eligible, slotNumber, len(draftOrder))
+            pick = self.chooseRookiePick(brain, team, eligible, slotNumber)
             # Say when the star rules moved the pick (the superstar lock, or comparable
             # upside at a clear need), and what it would have been without them.
             try:
                 plain = self.chooseRookiePick(brain, team, unlocked, slotNumber,
-                                              len(draftOrder), preferNeed=False)
+                                              preferNeed=False)
                 if plain is not None and plain is not pick:
                     why = ('superstar lock' if plain.position in locked
                            else 'clear need')

@@ -861,6 +861,27 @@ class FrontOfficeBrain:
             return 0.0
         return points * positionValue(starter, venueBiasFor(team))
 
+    def freeAgentValue(self, player, coach=None, rng=None, team=None) -> float:
+        """A free agent's value when he is weighed against a team's own player:
+        `decisionValue` plus the same aging term a starter's standing carries
+        (`_agingDrag` over FO_STANDING_HORIZON_SEASONS, position-weighted).
+
+        ⚠️ BOTH SIDES OF A KEEP-OR-REPLACE CALL COUNT AGE (owner, 2026-11-06: "teams do
+        need to take player age into account"). The incumbent's side has carried his
+        decline through `starterStanding` since 2026-10-10, while the free agent was
+        priced on next season alone, so an aging free agent always looked better than
+        he would play over the deal. Prod snapshot, season 13: the Melons planned to let
+        TeeTee Moonshine (86 QB, his fourth season) walk for Riverdale Dreamcast, an 81
+        in his 13th, who led by under a point before his own decline (-1.4) was counted.
+        A rising or prime free agent is unchanged."""
+        value = self.decisionValue(player, coach, rng=rng, team=team)
+        if not FO_STANDING_ENABLED or player is None:
+            return value
+        drag = self._agingDrag(player, coach, team)
+        if not drag:
+            return value
+        return value + drag * positionValue(player, venueBiasFor(team))
+
     def _agingDrag(self, starter, coach=None, team=None) -> float:
         """Rating points (<= 0) for a past-peak starter's decline beyond next season.
 
@@ -1172,7 +1193,7 @@ class FrontOfficeBrain:
                 continue
             if team is not None and not self.willSignWith(fa, team):
                 continue
-            values.append(self.decisionValue(fa, coach, rng=rng, team=team))
+            values.append(self.freeAgentValue(fa, coach, rng=rng, team=team))
         if not values:
             return 0.0
         values.sort(reverse=True)
@@ -1343,7 +1364,7 @@ class FrontOfficeBrain:
             pid = getattr(fa, 'id', None)
             if pid is None:
                 continue
-            board[pid] = self.decisionValue(fa, coach, rng=rng, team=team)
+            board[pid] = self.freeAgentValue(fa, coach, rng=rng, team=team)
         for p in alsoValue or []:
             pid = getattr(p, 'id', None)
             if p is None or pid is None:
@@ -1415,7 +1436,7 @@ class FrontOfficeBrain:
                 continue
             if team is not None and not self.willSignWith(fa, team):
                 continue
-            if self.decisionValue(fa, coach, rng=rng, team=team) - incumbent >= margin:
+            if self.freeAgentValue(fa, coach, rng=rng, team=team) - incumbent >= margin:
                 upgrades += 1
         if upgrades <= 0:
             return 0.0

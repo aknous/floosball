@@ -3,7 +3,7 @@
 Reported (owner, 2026-10-02): the Strangers held the #1 pick with two top QBs in the class
 (89 and 93 today) and re-signed a 74 QB for three seasons, which then left the rookie no
 slot to be promoted into. Re-sign decisions now count the team's own prospects and, for a
-top-5 pick, the rookie it expects to draft (owner: "when you have a top 3-5 pick, you
+top-2 pick, the rookie it expects to draft (owner: "when you have a top 3-5 pick, you
 should have a good idea of which players will be available to you").
 
 Run: .venv/bin/python -m pytest -q test_resign_internal.py
@@ -84,20 +84,35 @@ class Boards(Brain):
 
 
 def test_the_teams_ahead_pick_off_their_own_boards():
-    """The Bees pick 2nd (the best-available slots are the top 2 since 2026-10-17). On
-    their own board the WR is second-best, but the club ahead takes the WR on ITS board,
-    so the Bees get the QB they rate highest, not the WR."""
-    qbA = _p(1, 80, Position.QB, ceiling=99, rookie=True)
+    """The Bees pick 2nd (the predicted slots are the top 2). On their own read the WR is
+    the pick, but the club ahead takes the WR on ITS read, so the Bees get the QB, not
+    the WR they want. Each team picks by need (owner, 2026-11-06); with empty rosters
+    that is each read's ceiling above replacement, position weighted."""
+    qbA = _p(1, 80, Position.QB, ceiling=85, rookie=True)
     wr = _p(3, 80, Position.WR, ceiling=97, rookie=True)
-    rb = _p(4, 80, Position.RB, ceiling=90, rookie=True)
+    rb = _p(4, 70, Position.RB, ceiling=72, rookie=True)
     pm = _pm([qbA, wr, rb])
-    first = _team(1, reads={3: 100})                    # loves the WR
-    bees = _team(3)                                     # true reads: qbA, then the WR
+    first = _team(1, reads={1: 70, 3: 100})             # loves the WR, not the QB
+    bees = _team(3, reads={3: 100})                     # also wants the WR first
+    assert pm.expectedDraftees(Boards(), bees, [bees]) == [wr], "the Bees' own pick"
     got = pm.expectedDraftees(Boards(), bees, [first, bees])
     assert got == [qbA], [r.id for r in got]
-    # A third pick is past the best-available slots and plans on nobody.
+    # A third pick is past the predicted slots and plans on nobody.
     third = _team(4)
     assert pm.expectedDraftees(Boards(), third, [first, bees, third]) == []
+
+
+def test_a_walk_year_starter_is_assumed_to_stay_in_the_prediction():
+    """The prediction feeds the decision on whether the walk-year starters stay, so it
+    assumes they do: a team with a walk-year 90 QB is not predicted to take a 92 QB over
+    a 85 RB it has nobody at, which would be planning to let him walk for a rookie it
+    only drafts because he walks."""
+    qb = _p(1, 80, Position.QB, ceiling=92, rookie=True)
+    rbR = _p(2, 75, Position.RB, ceiling=85, rookie=True)
+    starter = _p(9, 90, Position.QB); starter.termRemaining = 1; starter.willRetire = False
+    team = _team(1)
+    team.rosterDict = {'qb': starter}
+    assert _pm([qb, rbR]).expectedDraftees(Boards(), team, [team]) == [rbR]
 
 
 def test_a_later_pick_plans_on_nobody():

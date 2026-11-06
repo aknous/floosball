@@ -3086,19 +3086,15 @@ COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
 # ONLY as the position-supply deficit fill, and any class left in the database is
 # released into free agency on load rather than being stranded there forever.
 ROOKIE_DRAFT_ENABLED = True
-# The top N slots of the rookie draft take the BEST PROSPECT AVAILABLE by the club's own
-# read of his ceiling, ignoring position value and roster need, kickers excluded (owner,
-# 2026-10-01: "with high picks, prospects are assets"). A top pick is the one chance at a
-# headline prospect, and on the old board the QB multiplier let a 75-ceiling quarterback
-# go #2 while a 99 went #4. After these slots the board shifts from asset value toward
-# NEED (playerManager.rookieNeedWeight).
-# ⚠️ 5 -> 2, AND PURE NEED BY PICK 8 INSTEAD OF THE LAST PICK (owner, 2026-10-17:
-# "hopefully teams are drafting based on need outside of the top couple picks"). At 5
-# slots with a linear ramp to #32, need was ~19% of the decision at #10 and ~44% at #17,
-# and 16% of the picks after #5 landed behind a 4-star+ starter, where a good prospect
-# washes out (prod: Hersh Pruitt #8 behind a 92 TE; SEA's two RBs behind an 84-88).
-ROOKIE_DRAFT_BPA_SLOTS = 2
-ROOKIE_DRAFT_NEED_FULL_SLOT = 8
+# EVERY PICK IS MADE BY NEED (owner, 2026-11-06: "teams just need to be picking by need
+# at all picks"; `playerManager.chooseRookiePick`). The top slots used to take the best
+# prospect available whatever the need (5 slots from 2026-10-01, 2 from 2026-10-17, then
+# a ramp to pure need at pick 8). The top N slots keep two jobs: they never take a
+# kicker unless a kicker is all that is left (owner, 2026-10-01), and they are the picks
+# the re-sign check predicts a team will make (`playerManager.expectedDraftees`; owner,
+# 2026-10-02: a team with a top pick "should have a good idea of which players will be
+# available").
+ROOKIE_DRAFT_TOP_SLOTS = 2
 # ⚠️ NO PICK GOES TO A POSITION A SUPERSTAR HOLDS, NOT EVEN A TOP PICK (owner,
 # 2026-11-04: a top-3 team with a 5-star starter in his prime "and no plans to replace
 # them" should not draft there). A rookie behind him washes out unless he is traded, and
