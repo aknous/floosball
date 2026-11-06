@@ -1270,7 +1270,7 @@ class TradeMarket:
             ask = 0.0
             pos = getattr(getattr(prospect, 'position', None), 'name', '')
             why = (f"{prospect.name} has one season left to make the roster and is behind "
-                   f"the starters at {pos}, so the team would lose him for nothing.")
+                   f"the starters at {pos}, so the team would lose them for nothing.")
             out.append(ProspectListing(team, prospect, ask, 0.0, why=why))
         out.sort(key=lambda l: -self._believedCeiling(team, l.prospect))
         return out[:1]
@@ -1314,7 +1314,8 @@ class TradeMarket:
         if not pieces:
             return None
         pos = getattr(getattr(prospect, 'position', None), 'name', '')
-        why = f"The team has a place at {pos} for {prospect.name} before his window closes."
+        why = (f"The team has a place at {pos} for {prospect.name} before their window "
+               f"closes.")
         return Bid(buyer, pieces, sum(p['value'] for p in pieces), why=why)
 
     def needTilt(self, team) -> float:
