@@ -3024,6 +3024,27 @@ class DraftPick(Base):
                 f"from={self.original_team_id} owner={self.current_owner_id})>")
 
 
+class TeamPlanSnapshot(Base):
+    """A team's roster plan as it stood at one offseason step (docs/TEAM_PLAN.md), saved
+    so the owner can look at it. ⚠️ FOR VIEWING ONLY: every decision rebuilds its plan
+    from current state (`playerManager.positionPlan`); nothing reads this back. Measured
+    on the season-13 snapshot, plans barely drift between steps (about 3 position changes
+    an offseason with nothing at the position changed), so a stored plan was not needed
+    for stability. Only the current and previous season are kept.
+
+    `plan_json`: {"tilt", "faDepth", "positions": {"QB": {"keep": {playerId: bool},
+    "seasons": [[{source, id, name, rating}], ...]}, ...}, "commitments": {playerId: pos}}
+    """
+    __tablename__ = "team_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    step: Mapped[str] = mapped_column(String(32), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    plan_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Trade(Base):
     """A settled trade — the durable record both sides and the transactions page read.
 

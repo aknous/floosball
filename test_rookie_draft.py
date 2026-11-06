@@ -115,6 +115,8 @@ class Harness:
     projectedMarketPool = PlayerManager.projectedMarketPool
     positionOutlook = PlayerManager.positionOutlook
     positionPlan = PlayerManager.positionPlan
+    _planPromotes = PlayerManager._planPromotes
+    teamPlanSummary = PlayerManager.teamPlanSummary
     rookiePlanValue = PlayerManager.rookiePlanValue
     rookiePlanMargin = PlayerManager.rookiePlanMargin
 
@@ -590,7 +592,8 @@ def test_re_sign_intent_follows_the_limit_then_the_budget():
 
     kept, walked = P(1), P(2)
 
-    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True, pool=None):
+    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True, pool=None,
+                     planIntent=None):
         calls.append((slotOwners, limit))
         return [kept, walked], [], [kept], 0, 0
 

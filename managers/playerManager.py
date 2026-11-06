@@ -4672,7 +4672,19 @@ class PlayerManager:
         if k == 1:
             taken = sum(self._planOpenSlots(brain, t, posValue, 1, contractShift, intent)
                         for t in ahead)
-            candidates = [fa for fa in pool if signsHere(fa)]
+            pending = []
+            if int(contractShift) > 0:
+                # Before the contract countdown (step 3), other teams' expiring players
+                # who are likely to walk join this offseason's market later in the sweep.
+                for t in teams:
+                    if t is team:
+                        continue
+                    for p in self._planSlotHolders(t, posValue):
+                        if (int(getattr(p, 'termRemaining', 0) or 0) - int(contractShift) <= 0
+                                and not getattr(p, 'willRetire', False)
+                                and not self._likelyResigned(brain, p, 1, intent)):
+                            pending.append(p)
+            candidates = [fa for fa in pool + pending if signsHere(fa)]
         else:
             leftover = sorted(pool, key=lambda fa: -float(getattr(fa, 'playerRating', 0) or 0))
             leftover = leftover[sum(self._planOpenSlots(brain, t, posValue, 1, contractShift, intent)
@@ -4683,8 +4695,9 @@ class PlayerManager:
                     continue
                 for p in self._planSlotHolders(t, posValue):
                     left = int(getattr(p, 'termRemaining', 0) or 0) - int(contractShift)
-                    if 0 < left < k and not getattr(p, 'willRetire', False) \
-                            and not self._likelyResigned(brain, p, left, intent):
+                    lo = 0 if int(contractShift) > 0 else 1   # pending decisions count now
+                    if lo <= left < k and not getattr(p, 'willRetire', False) \
+                            and not self._likelyResigned(brain, p, max(1, left), intent):
                         walkers.append(p)
             taken = sum(self._planOpenSlots(brain, t, posValue, k, contractShift, intent)
                         for t in ahead)
@@ -4739,7 +4752,12 @@ class PlayerManager:
                 n += 1
                 continue
             left = int(getattr(p, 'termRemaining', 0) or 0) - int(contractShift)
-            if left <= 0 or (left < k and not self._likelyResigned(brain, p, left, intent)):
+            if left <= 0 and int(contractShift) > 0:
+                # Expiring now with the decision still pending (step 3, the in-season
+                # desk): open only if his team is not likely to keep him.
+                if not self._likelyResigned(brain, p, 1, intent):
+                    n += 1
+            elif left <= 0 or (left < k and not self._likelyResigned(brain, p, left, intent)):
                 n += 1
         return n
 
@@ -4776,7 +4794,7 @@ class PlayerManager:
                                                 extra, faOrder)]
 
     def positionPlan(self, brain, team, position, intent: dict = None, contractShift: int = 0,
-                     extra=None, faOrder=None) -> list:
+                     extra=None, faOrder=None, settled: bool = False) -> list:
         """This team's level at `position` for each of the next FO_STANDING_HORIZON_SEASONS
         seasons (docs/TEAM_PLAN.md): the sum of its slot holders' projected ratings (WR has
         two slots), from
@@ -4788,6 +4806,8 @@ class PlayerManager:
             of the position inside his window is promoted and stays, one who never does
             washes out;
           - `extra` (a rookie being weighed), a prospect with a full window;
+          - `settled`: season 1 is already decided (a plan read after the FA draft), so
+            nobody is promoted or signed into it;
           - the free agent market (`_planMarket`: who will be left at this team's pick,
             today's pool for this offseason, the pool this FA draft leaves plus other
             teams' expiring players not likely re-signed for a later one), only for slots
@@ -4830,18 +4850,23 @@ class PlayerManager:
 
         plan = []
         signed = []     # free agents this plan signs this offseason who win a slot: they stay
+        gone = set()    # starters a prospect has displaced: cut, out for the rest
         for k in range(1, horizon + 1):
-            # (rating, player, source, prospect entry)
-            options = [(self._planRating(brain, team, p, k, tilt, False), p, 'starter', None)
-                       for p, covered in starters if covered >= k]
-            options += [(self._planRating(brain, team, fa, k, tilt, False), fa, 'market', None)
+            promotionsOpen = k > 1 or not settled
+            # (rating, player, source, prospect entry). Contracted players and promoted
+            # prospects HOLD their slots; nothing outranks them by rating alone.
+            holders = [(self._planRating(brain, team, p, k, tilt, False), p, 'starter', None)
+                       for p, covered in starters if covered >= k and id(p) not in gone]
+            holders += [(self._planRating(brain, team, fa, k, tilt, False), fa, 'market', None)
                         for fa in signed]
-            openSlots = max(0, nSlots - len(options))
-            for entry in prospects:
-                pr, left, promoted = entry
-                if promoted or k <= left:
-                    options.append((self._planRating(brain, team, pr, k, tilt, True), pr,
-                                    'rookie' if pr is extra else 'prospect', entry))
+            holders += [(self._planRating(brain, team, e[0], k, tilt, True), e[0],
+                         'rookie' if e[0] is extra else 'prospect', e)
+                        for e in prospects if e[2]]
+            openSlots = max(0, nSlots - len(holders))
+            waiting = [e for e in prospects if not e[2] and k <= e[1] and promotionsOpen]
+            # Open slots: the team's prospects and the free agents it can expect, best first.
+            cands = [(self._planRating(brain, team, e[0], k, tilt, True), e[0],
+                      'rookie' if e[0] is extra else 'prospect', e) for e in waiting]
             # A different free agent for each open slot (the next ones on this team's
             # board at its pick). When a later season's projected pool runs dry, the plan
             # assumes a free agent of the quality this offseason offers at its pick: that
@@ -4852,8 +4877,8 @@ class PlayerManager:
                                                     contractShift, known, openSlots)
                                    if openSlots else []):
                 if fa is not None:
-                    options.append((self._planRating(brain, team, fa, k, tilt, False), fa,
-                                    'market', None))
+                    cands.append((self._planRating(brain, team, fa, k, tilt, False), fa,
+                                  'market', None))
                     continue
                 typical = None
                 if k > 1:
@@ -4861,19 +4886,116 @@ class PlayerManager:
                                            known, openSlots)
                     typical = now[i] if i < len(now) else None
                 if typical is not None:
-                    options.append((self._planRating(brain, team, typical, 1, tilt, False),
-                                    None, 'typical', None))
+                    cands.append((self._planRating(brain, team, typical, 1, tilt, False),
+                                  None, 'typical', None))
                 else:
-                    options.append((float(REPLACEMENT_RATING), None, 'market', None))
-            options.sort(key=lambda o: -o[0])
-            top = options[:nSlots]
-            for _r, p, src, entry in top:
+                    cands.append((float(REPLACEMENT_RATING), None, 'market', None))
+            cands.sort(key=lambda o: -o[0])
+            filled = cands[:openSlots]
+            for _r, p, src, entry in filled:
                 if entry is not None:
-                    entry[2] = True          # promoted: he holds the slot from here on
+                    entry[2] = True          # promoted into an open slot: holds it from here on
                 elif src == 'market' and k == 1 and p is not None:
                     signed.append(p)         # signed this offseason: on the roster from here on
-            plan.append([{'player': p, 'source': src, 'rating': r} for r, p, src, _e in top])
+            season = holders + filled
+            # ⚠️ A PROSPECT DISPLACES A STARTER ONLY BY THE PROMOTION RULES. The plan used to
+            # take the highest-rated options for each slot, so a prospect (or a free agent)
+            # pushed out a starter under contract that no step of the offseason would
+            # actually cut: a plan saved after the FA draft had the Melons starting Alanis
+            # Ratking, still a prospect, over their contracted receiver.
+            if promotionsOpen:
+                for entry in sorted((e for e in waiting if not e[2]),
+                                    key=lambda e: -self._planRating(brain, team, e[0], k, tilt, True)):
+                    contracted = [h for h in season if h[2] in ('starter', 'market') and h[1] is not None]
+                    if not contracted:
+                        break
+                    weakest = min(contracted, key=lambda h: h[0])
+                    pr = entry[0]
+                    mine = self._planRating(brain, team, pr, k, tilt, True)
+                    if not self._planPromotes(brain, team, pr, weakest[1], k, mine, weakest[0],
+                                              finalWindow=(k == entry[1])):
+                        continue
+                    entry[2] = True
+                    season.remove(weakest)
+                    if weakest[2] == 'starter':
+                        gone.add(id(weakest[1]))
+                    else:
+                        signed.remove(weakest[1])
+                    season.append((mine, pr, 'rookie' if pr is extra else 'prospect', entry))
+            plan.append([{'player': p, 'source': src, 'rating': r} for r, p, src, _e in season])
         return plan
+
+    def _planPromotes(self, brain, team, prospect, starter, k, mine, theirs,
+                      finalWindow: bool) -> bool:
+        """Would the team promote this prospect over this contracted starter in season k?
+        Never over a protected player (`isCutProtected`, `signedThisOffseason`). This
+        offseason the brain's own promotion rules decide (`prospectReplacesStarter` on his
+        last window, a clear edge and rated above him today before it); a later season
+        applies the same thresholds to projected ratings, since nobody can evaluate that
+        offseason's rules today."""
+        from constants import FO_CUT_UPGRADE_MARGIN
+        for check in ('isCutProtected', 'signedThisOffseason'):
+            fn = getattr(self, check, None)
+            if callable(fn):
+                try:
+                    if fn(starter):
+                        return False
+                except Exception:
+                    pass
+        coach = getattr(team, 'coach', None)
+        if k == 1 and callable(getattr(brain, 'prospectReplacesStarter', None)):
+            try:
+                if finalWindow:
+                    return bool(brain.prospectReplacesStarter(prospect, starter, team, coach,
+                                                              finalWindow=True))
+                return (brain.prospectEdgeOver(prospect, starter, team, coach)
+                        >= brain.moveOnBar(coach, FO_CUT_UPGRADE_MARGIN)
+                        and brain.ratedAtLeast(prospect, starter, coach, strictly=True))
+            except Exception:
+                return False
+        if finalWindow:
+            return mine >= theirs
+        try:
+            from managers.frontOfficeBrain import positionValue
+            posW = max(0.3, float(positionValue(prospect)))
+        except Exception:
+            posW = 1.0
+        return mine - theirs >= float(FO_CUT_UPGRADE_MARGIN) / posW
+
+    def teamPlanSummary(self, brain, team, intent: dict = None, faOrder=None,
+                        contractShift: int = 0, settled: bool = False) -> dict:
+        """One team's plan as plain data, for viewing (`TeamPlanSnapshot`, the admin
+        endpoint, `tools_team_plans.py`): per position, each season's slot holders and the
+        re-sign reads for its walk-year starters, plus the side tilt and the team's
+        commitments."""
+        from floosball_player import Position
+        known = intent if intent is not None else (getattr(self, '_walkYearResignIntent', None) or {})
+        tiltFn = getattr(brain, 'sideTilt', None)
+        out = {'tilt': round(float(tiltFn(team)), 3) if callable(tiltFn) else 0.0,
+               'faDepth': None, 'positions': {},
+               'commitments': {str(k): v for k, v in ((getattr(self, '_prospectCommitments', None) or {})
+                                                     .get(getattr(team, 'id', None)) or {}).items()}}
+        try:
+            out['faDepth'] = int(brain.faPickDepth(team, faOrder)) if faOrder else None
+        except Exception:
+            pass
+        self._planMarketCache = {}
+        for pos in (Position.QB, Position.RB, Position.WR, Position.TE, Position.K):
+            plan = self.positionPlan(brain, team, pos, known, contractShift, faOrder=faOrder,
+                                     settled=settled)
+            keep = {}
+            for p in self._planSlotHolders(team, pos.value):
+                if int(getattr(p, 'termRemaining', 0) or 0) - int(contractShift) <= 1 \
+                        and getattr(p, 'id', None) in known:
+                    keep[str(p.id)] = {'name': getattr(p, 'name', None), 'kept': bool(known[p.id])}
+            out['positions'][pos.name] = {
+                'keep': keep,
+                'seasons': [[{'source': h['source'],
+                              'id': getattr(h['player'], 'id', None),
+                              'name': getattr(h['player'], 'name', None),
+                              'rating': round(float(h['rating']), 1)} for h in season]
+                            for season in plan]}
+        return out
 
     def rookiePlanValue(self, brain, team, rookie, intent: dict = None, contractShift: int = 0,
                         faOrder=None) -> float:

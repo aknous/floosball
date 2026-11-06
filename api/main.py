@@ -6434,6 +6434,40 @@ def _gamesLive() -> bool:
     return any(getattr(g, 'status', None) == FloosGame.GameStatus.Active for g in games)
 
 
+@app.get("/api/admin/team-plans")
+def admin_team_plans(season: Optional[int] = None, step: Optional[str] = None,
+                     team: Optional[int] = None, _auth: None = Depends(_checkAdminAuth)):
+    """Admin: each team's saved roster plan (docs/TEAM_PLAN.md, `TeamPlanSnapshot`), the
+    latest saved step by default. For viewing; no decision reads it."""
+    from sqlalchemy import func
+    from database.connection import get_session
+    from database.models import TeamPlanSnapshot, Team as _TeamRow
+    session = get_session()
+    try:
+        q = session.query(TeamPlanSnapshot)
+        if season is None:
+            season = session.query(func.max(TeamPlanSnapshot.season)).scalar()
+        if season is None:
+            return build_success_response({'season': None, 'step': None, 'steps': [], 'teams': []})
+        q = q.filter(TeamPlanSnapshot.season == season)
+        steps = [r[0] for r in session.query(TeamPlanSnapshot.step)
+                 .filter(TeamPlanSnapshot.season == season)
+                 .group_by(TeamPlanSnapshot.step)
+                 .order_by(func.max(TeamPlanSnapshot.created_at)).all()]
+        if step is None and steps:
+            step = steps[-1]
+        q = q.filter(TeamPlanSnapshot.step == step)
+        if team is not None:
+            q = q.filter(TeamPlanSnapshot.team_id == team)
+        names = {t.id: (t.name, getattr(t, 'abbr', None)) for t in session.query(_TeamRow).all()}
+        rows = [{'teamId': r.team_id, 'team': names.get(r.team_id, (None,))[0],
+                 'abbr': names.get(r.team_id, (None, None))[1], 'plan': r.plan_json,
+                 'savedAt': _utcIso(r.created_at)} for r in q.order_by(TeamPlanSnapshot.team_id).all()]
+        return build_success_response({'season': season, 'step': step, 'steps': steps, 'teams': rows})
+    finally:
+        session.close()
+
+
 @app.get("/api/admin/rules")
 def admin_get_rules(_auth: None = Depends(_checkAdminAuth)):
     """Admin: the league's rule slate (the Rulebook's rules), live value against standard."""

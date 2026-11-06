@@ -260,3 +260,65 @@ def test_next_offseasons_market_is_what_this_one_leaves_plus_likely_walkers():
     assert 'Best FA' not in names and 'Rest FA' in names, names   # A signs the 85 now
     assert 'Plain Walker' in names and 'Prime Star' not in names, names
     print("PASS next offseason's market: what this one leaves plus likely walkers")
+
+
+def _planWith(starter, prospect, ratings, settled=False, harness=None):
+    team = FakeTeam(1, 'Club')
+    team.rosterDict = {'qb': starter}
+    team.prospects = [prospect] if prospect is not None else []
+    h = harness or Harness([])
+    return h.positionPlan(PlanBrain(ratings, teams=[team]), team, Position.QB, intent={},
+                          settled=settled)
+
+
+def test_a_prospect_does_not_push_out_a_contracted_starter_by_rating_alone():
+    """A plan saved after the FA draft had the Melons starting Alanis Ratking, still a
+    prospect, over their contracted receiver. An early-window prospect takes a starter's
+    slot only with a clear edge (FO_CUT_UPGRADE_MARGIN, in rating at this position)."""
+    kid = FakePlayer(950, 75, Position.QB, 'Kid'); kid.prospect_seasons = 0
+    plan = _planWith(_starter(80, term=3), kid, {'Kid': 82, 'Starter': 80})
+    assert [s[0]['source'] for s in plan] == ['starter', 'starter', 'prospect'], plan
+    # (season 3 is his last window, where matching the starter is enough)
+    kid = FakePlayer(951, 75, Position.QB, 'Kid'); kid.prospect_seasons = 0
+    plan = _planWith(_starter(80, term=3), kid, {'Kid': 86, 'Starter': 80})
+    assert plan[0][0]['source'] == 'prospect', plan
+    print("PASS a prospect needs a clear edge to push out a contracted starter")
+
+
+def test_on_his_last_window_matching_the_starter_is_enough():
+    from constants import PROSPECT_DEVELOPMENT_WINDOW
+    kid = FakePlayer(952, 75, Position.QB, 'Kid'); kid.prospect_seasons = PROSPECT_DEVELOPMENT_WINDOW - 1
+    assert _planWith(_starter(80, term=3), kid, {'Kid': 80, 'Starter': 80})[0][0]['source'] == 'prospect'
+    kid = FakePlayer(953, 75, Position.QB, 'Kid'); kid.prospect_seasons = PROSPECT_DEVELOPMENT_WINDOW - 1
+    plan = _planWith(_starter(80, term=3), kid, {'Kid': 79, 'Starter': 80})
+    assert all(s[0]['source'] == 'starter' for s in plan), plan
+    print("PASS on his last window matching the starter is enough")
+
+
+def test_a_free_agent_never_pushes_out_a_contracted_starter():
+    """One WR under contract and one open slot: the plan signs ONE free agent for the open
+    slot, the best, and keeps the starter, even with two better free agents available."""
+    team = FakeTeam(1, 'Club')
+    team.rosterDict = {'wr1': _starter(70, Position.WR, name='Starter WR', term=3)}
+    h = Harness([])
+    h.freeAgents = [_freeAgent(800, 85, Position.WR, 'FA 85'), _freeAgent(801, 80, Position.WR, 'FA 80')]
+    season1 = h.positionPlan(PlanBrain({}, teams=[team]), team, Position.WR, faOrder=[team])[0]
+    assert sorted(x['player'].name for x in season1) == ['FA 85', 'Starter WR'], season1
+    print("PASS a free agent fills an open slot, never a contracted one")
+
+
+def test_a_settled_season_one_promotes_nobody():
+    """After the FA draft, nobody is promoted before next season."""
+    kid = FakePlayer(954, 75, Position.QB, 'Kid'); kid.prospect_seasons = 0
+    plan = _planWith(_starter(70, term=3), kid, {'Kid': 90, 'Starter': 70}, settled=True)
+    assert plan[0][0]['source'] == 'starter' and plan[1][0]['source'] == 'prospect', plan
+    print("PASS a settled season one promotes nobody")
+
+
+def test_a_protected_starter_is_never_displaced():
+    kid = FakePlayer(955, 75, Position.QB, 'Kid'); kid.prospect_seasons = 0
+    h = Harness([])
+    h.signedThisOffseason = lambda p: True
+    plan = _planWith(_starter(70, term=3), kid, {'Kid': 95, 'Starter': 70}, harness=h)
+    assert all(s[0]['source'] == 'starter' for s in plan), plan
+    print("PASS a protected starter is never displaced")

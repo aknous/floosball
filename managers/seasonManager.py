@@ -9312,12 +9312,13 @@ class SeasonManager:
         the star walk for a rookie it only drafts because the star is walking."""
         from constants import RESIGN_LIMIT_PER_OFFSEASON
         limit = RESIGN_LIMIT_PER_OFFSEASON if self._resignLimitOn() else 99
-        def decide(poolFor):
+        def decide(poolFor, planIntent=None):
             out = {}
             for team in teams or []:
                 try:
                     expiring, forcedWalk, kept, _d, _a = self._resignDecision(
-                        team, brain, list(faOrder or []), [], limit, pool=poolFor(team))
+                        team, brain, list(faOrder or []), [], limit, pool=poolFor(team),
+                        planIntent=planIntent)
                 except Exception as e:
                     logger.debug(f"re-sign intent unavailable for {getattr(team, 'name', team)}: {e}")
                     continue
@@ -9347,10 +9348,10 @@ class SeasonManager:
             name = getattr(team, 'name', None)
             return [p for p in nextPool
                     if getattr(getattr(p, 'team', None), 'name', getattr(p, 'team', None)) != name]
-        return decide(notMine)
+        return decide(notMine, planIntent=first)
 
     def _resignDecision(self, team, brain, faOrder, slotOwners, limit, afford: bool = True,
-                        pool=None):
+                        pool=None, planIntent: dict = None):
         """One team's re-sign decision: `(expiring, forcedWalk, kept, pickDepth,
         teamsAhead)`. Read-only: nothing on the players changes here.
 
@@ -9413,10 +9414,25 @@ class SeasonManager:
             internal += self.playerManager.expectedDraftees(brain, team, slotOwners)
         except Exception as e:
             logger.debug(f"expected draftees unavailable for {team.name}: {e}")
-        kept = brain.chooseResigns(expiring, limit, coach=coach, pool=pool,
-                                   pickDepth=pickDepth, team=team,
-                                   teamsAhead=teamsAhead, internal=internal,
-                                   lastChance=lastChance)
+        # ⚠️ THE TEAM PLAN DECIDES (stage 2, docs/TEAM_PLAN.md). `shift` is 1 before this
+        # offseason's contract countdown (step 3 and the in-season desk), 0 after it (the
+        # draft-time read of next offseason's walkers). `planIntent` is what the sweep has
+        # decided for other teams so far; teams not yet decided fall back to the rough
+        # rule in the plan's market.
+        brain.planContext = {
+            'faOrder': list(faOrder or []),
+            'intent': dict(planIntent or {}),
+            'draftees': [r for r in internal if getattr(r, 'is_upcoming_rookie', False)],
+            'shift': 0 if (getattr(self, '_offseasonFlowPhase', None)
+                           and self._isOffseasonStepComplete('frontoffice_decisions')) else 1,
+        }
+        try:
+            kept = brain.chooseResigns(expiring, limit, coach=coach, pool=pool,
+                                       pickDepth=pickDepth, team=team,
+                                       teamsAhead=teamsAhead, internal=internal,
+                                       lastChance=lastChance)
+        finally:
+            brain.planContext = None
         if afford:
             kept = self._affordableResigns(team, expiring, kept)
         return expiring, forcedWalk, kept, pickDepth, teamsAhead
@@ -9558,11 +9574,13 @@ class SeasonManager:
             logger.debug(f"draft slots unavailable for retention: {e}")
 
         commitments = {}
+        decidedSoFar = {}      # {playerId: kept?} for the teams already swept
         for team in sweepTeams:
             coach = getattr(team, 'coach', None)
             brain.lastCoverage = {}
             expiring, forcedWalk, kept, pickDepth, teamsAhead = self._resignDecision(
-                team, brain, faOrder, slotOwners, limit, afford=not marketMode)
+                team, brain, faOrder, slotOwners, limit, afford=not marketMode,
+                planIntent=decidedSoFar)
             coverage = dict(getattr(brain, 'lastCoverage', None) or {})
             if marketMode:
                 # THE RE-SIGN HEAD START (owner, 2026-11-01). The team offers the players
@@ -9610,8 +9628,10 @@ class SeasonManager:
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds
+                decidedSoFar[getattr(p, 'id', None)] = id(p) in keptIds
             for p in forcedWalk:
                 p._gmResigned = False
+                decidedSoFar[getattr(p, 'id', None)] = False
             # ⚠️ A STARTER LET GO BECAUSE A PROSPECT TAKES OVER IS A COMMITMENT (team plan,
             # stage 3, docs/TEAM_PLAN.md). The FA draft used to re-decide that slot from
             # scratch, so the prospect could lose it to a free agent and the starter was
@@ -10368,6 +10388,55 @@ class SeasonManager:
             self._offseasonCompletedSteps = set()
         self._offseasonCompletedSteps.add(step)
         self._persistOffseasonFlow()
+        if step in self.TEAM_PLAN_SNAPSHOT_STEPS:
+            self._snapshotTeamPlans(step)
+
+    # Offseason steps after which every team's plan is saved for viewing (TeamPlanSnapshot).
+    TEAM_PLAN_SNAPSHOT_STEPS = ('frontoffice_decisions', 'prospect_window', 'rookie_draft',
+                                'fa_draft')
+
+    def _snapshotTeamPlans(self, step: str) -> None:
+        """Save every team's plan as it stands after this offseason step, for viewing only
+        (docs/TEAM_PLAN.md): the admin endpoint and `tools_team_plans.py` read it, no
+        decision does. Keeps the current and previous season. Never raises."""
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        if season is None:
+            return
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = list(getattr(teamManager, 'teams', None) or [])
+            brain = self._foBrainForOffseason()
+            brain.leagueTeams = teams
+            faOrder = list(getattr(self.currentSeason, 'freeAgencyOrder', None) or teams)
+            intent = self.walkYearResignIntent(brain, teams, faOrder)
+            settled = step == 'fa_draft'      # season 1 is decided once the FA draft is done
+            summaries = {t.id: self.playerManager.teamPlanSummary(brain, t, intent, faOrder,
+                                                                  settled=settled)
+                         for t in teams if getattr(t, 'id', None) is not None}
+        except Exception as e:
+            logger.warning(f"Team plans not saved after '{step}': {e}")
+            return
+        from database.connection import get_session
+        from database.models import TeamPlanSnapshot
+        session = get_session()
+        try:
+            session.query(TeamPlanSnapshot).filter(
+                TeamPlanSnapshot.season < int(season) - 1).delete(synchronize_session=False)
+            session.query(TeamPlanSnapshot).filter(
+                TeamPlanSnapshot.season == int(season),
+                TeamPlanSnapshot.step == step).delete(synchronize_session=False)
+            for teamId, plan in summaries.items():
+                session.add(TeamPlanSnapshot(season=int(season), step=step, team_id=teamId,
+                                             plan_json=plan))
+            session.commit()
+        except Exception as e:
+            logger.warning(f"Team plans not saved after '{step}': {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        finally:
+            session.close()
 
     def _resetOffseasonCompletedSteps(self) -> None:
         self._offseasonCompletedSteps = set()

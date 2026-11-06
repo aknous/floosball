@@ -51,7 +51,9 @@ balanced team with a balanced coach reads plain overall ratings.
    over) show little need; an opening hole shows a lot; a deep market at the position
    lowers it.
 2. **Re-sign step** reads the same outlook (is the starter needed once the prospects and
-   market are counted).
+   market are counted). Built: a walk-year starter is ranked by the plan with him minus
+   without him. Season-13 snapshot: re-signs down 14%, roster quality unchanged; the
+   extra turnover is the 76-79 band (kept 76% → 42%), 80+ kept slightly more.
 3. **Promotion pass and FA draft** follow the plan's promotion seasons, so the FA draft
    cannot sign over a prospect the plan has taking over unless the plan changes. Built as
    commitments: when the re-sign step lets a starter go because a prospect (or a top-pick
@@ -71,3 +73,12 @@ Each stage is measured on a prod snapshot before the next.
   against the need-only draft, within noise: drafting for seasons two and three only pays
   once the FA draft and promotions follow the plan (stage 3).
 - The draft-time re-sign read now uses next offseason's market (two passes); see CLAUDE.md.
+
+## Saved plans (viewing only)
+
+Every team's plan is saved after step 3, the 3.78 last look, the rookie draft and the FA
+draft (`team_plans`), and read with `GET /api/admin/team-plans` or `tools_team_plans.py`.
+Nothing reads it back: within an offseason plans drift about 3 positions with nothing at
+the position changed, each traceable to a real league change, so decisions keep
+rebuilding. Saving them exposed a bug, now fixed: slots were filled by rating alone, so a
+prospect or free agent could push out a contracted starter no step would cut.

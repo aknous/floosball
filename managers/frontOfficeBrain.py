@@ -1578,6 +1578,53 @@ class FrontOfficeBrain:
             return 0
         return int(index * FO_FA_CONTENTION)
 
+    def _planResignRead(self, player, team, coach=None):
+        """(gain, coverer) for a walk-year starter from the team plan (docs/TEAM_PLAN.md,
+        stage 2), or None when there is no plan context (`planContext`, set by
+        `SeasonManager._resignDecision`). `gain` is what keeping him adds to his
+        position's outlook over the horizon (the plan with him re-signed minus without),
+        plus his results credit for the seasons he holds the slot, position-weighted:
+        the same units as `starterStanding`. `coverer` is the prospect or expected rookie
+        who takes his slot in the plan without him (None when it goes to the market)."""
+        ctx = getattr(self, 'planContext', None)
+        pm = self.playerManager
+        plan = getattr(pm, 'positionPlan', None)
+        if not ctx or team is None or player is None or not callable(plan):
+            return None
+        pid = getattr(player, 'id', None)
+        posValue = getattr(getattr(player, 'position', None), 'value', None)
+        base = dict(ctx.get('intent') or {})
+        extra = next((r for r in ctx.get('draftees') or []
+                      if getattr(getattr(r, 'position', None), 'value', None) == posValue), None)
+        shift, order = ctx.get('shift', 1), ctx.get('faOrder')
+        try:
+            pm._planMarketCache = {}
+            withPlan = plan(self, team, player.position, {**base, pid: True}, shift,
+                            extra=extra, faOrder=order)
+            pm._planMarketCache = {}
+            without = plan(self, team, player.position, {**base, pid: False}, shift,
+                           extra=extra, faOrder=order)
+        except Exception:
+            return None
+        gain = sum(sum(h['rating'] for h in a) - sum(h['rating'] for h in b)
+                   for a, b in zip(withPlan, without))
+        held = sum(1 for season in withPlan if any(h['player'] is player for h in season))
+        try:
+            gain += self._resultsCredit(player, team, coach) * held
+        except Exception:
+            pass
+        coverer = None
+        for a, b in zip(withPlan, without):
+            inWith = {id(h['player']) for h in a if h['player'] is not None}
+            for h in b:
+                if h['source'] in ('prospect', 'rookie') and h['player'] is not None \
+                        and id(h['player']) not in inWith:
+                    coverer = h['player']
+                    break
+            if coverer is not None:
+                break
+        return gain * positionValue(player, venueBiasFor(team)), coverer
+
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
                              pickDepth=0, team=None, teamsAhead=0, internal=None,
                              lastChance=None):
@@ -1592,7 +1639,18 @@ class FrontOfficeBrain:
 
         Returns [(player, surplus)] sorted best-first, already filtered to
         those clearing FO_RESIGN_SURPLUS_MARGIN.
+
+        ⚠️ WITH A PLAN CONTEXT THE TEAM PLAN DECIDES (stage 2, docs/TEAM_PLAN.md): a
+        player's priority is what keeping him adds to his position's plan
+        (`_planResignRead`), which already holds every alternative (prospects and when
+        they would be promoted, an expected rookie, the free agent left at the pick,
+        aging and growth, the offense/defense tilt), so the internal-coverage pass and
+        the free-agent survival odds below are not used. Fan verdicts and the star floor
+        still apply first. Without a context (a bare call) the comparison below runs.
         """
+        if (getattr(self, 'planContext', None) and team is not None
+                and callable(getattr(getattr(self, 'playerManager', None), 'positionPlan', None))):
+            return self._rankResignsByPlan(expiring, coach, team, rng)
         # ⚠️ THE CLUB'S OWN REPLACEMENTS COME FIRST (owner, 2026-10-02). `internal` is its
         # prospects plus the rookies it expects to draft before free agency. One that beats
         # a walk-year player by the margin makes him certainly replaceable: the club does
@@ -1687,6 +1745,35 @@ class FrontOfficeBrain:
             priority = incumbent * (1.0 - replaceable)
             if priority >= FO_RESIGN_SURPLUS_MARGIN:
                 ranked.append((player, priority))
+        ranked.sort(key=lambda pair: -pair[1])
+        return ranked
+
+    def _rankResignsByPlan(self, expiring, coach, team, rng=None):
+        """`rankResignCandidates` read from the team plan. Records `lastCoverage` for
+        every walk-year starter whose slot the plan gives to a prospect or rookie, which
+        the re-sign step turns into a commitment if he walks."""
+        from managers.playerManager import fanVerdict
+        self.lastCoverage = {}
+        ranked = []
+        bar = self.moveOnBar(coach, FO_RESIGN_SURPLUS_MARGIN, floor=0.0)
+        for player in expiring:
+            read = self._planResignRead(player, team, coach)
+            gain, coverer = read if read is not None else (None, None)
+            if coverer is not None:
+                self.lastCoverage[getattr(player, 'id', None)] = coverer
+            verdict = fanVerdict(player, getattr(self, 'sentimentMap', None) or {})
+            if verdict == 'walk':
+                continue
+            if verdict == 'keep':
+                ranked.append((player, FAN_KEEP_PRIORITY
+                               + self.decisionValue(player, coach, rng=rng, team=team)))
+                continue
+            if not self.worthResigningOnStars(player, coach, team):
+                continue
+            if gain is None:
+                continue
+            if gain > bar:
+                ranked.append((player, gain))
         ranked.sort(key=lambda pair: -pair[1])
         return ranked
 
