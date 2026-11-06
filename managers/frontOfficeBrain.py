@@ -547,8 +547,22 @@ class FrontOfficeBrain:
         vision = 0.0
         if team is not None:
             vision = self.scoutingVision(coach if coach is not None else getattr(team, 'coach', None), team)
+        # Cached for the brain's life, keyed on what the projection reads, like
+        # `_nextSeasonRatingPastPeak`: the team plan asks for the same players' projections
+        # thousands of times a pass (a profiled in-season trade pass spent 7s here).
+        key = (getattr(player, 'id', None) or id(player), round(float(vision), 4),
+               getattr(player, 'playerRating', None), getattr(player, 'offensiveRating', None),
+               getattr(player, 'defensiveRating', None), getattr(player, 'seasonsPlayed', None),
+               getattr(player, 'prospect_seasons', None),
+               # development luck moves true skill and potential, not always the rating
+               getattr(getattr(player, 'attributes', None), 'potentialSkillRating', None),
+               getattr(player, 'talentShift', getattr(player, 'talent_shift', None)))
+        cache = self.__dict__.setdefault('_projectionCache', {})
+        if key in cache:
+            return cache[key]
         e, c = fn(vision)
-        return float(e), float(c)
+        cache[key] = (float(e), float(c))
+        return cache[key]
 
     # ------------------------------------------------------------- value
 
@@ -904,6 +918,15 @@ class FrontOfficeBrain:
         k = max(0, int(seasonsAhead or 0))
         if k == 0 or player is None:
             return current
+        key = (getattr(player, 'id', None) or id(player), k, getattr(team, 'id', None),
+               id(coach) if coach is not None else None, current,
+               getattr(player, 'seasonsPlayed', None), getattr(player, 'prospect_seasons', None))
+        cache = self.__dict__.setdefault('_projectedRatingCache', {})
+        if key not in cache:
+            cache[key] = self._projectedRatingUncached(player, k, current, coach, team)
+        return cache[key]
+
+    def _projectedRatingUncached(self, player, k, current, coach, team) -> float:
         nextSeason = self._nextSeasonRatingPastPeak(player, coach, team)
         if nextSeason is not None:
             step = float(nextSeason) - current

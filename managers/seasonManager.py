@@ -8145,10 +8145,14 @@ class SeasonManager:
             brain.season, brain.week = season, int(week or 1)
             from managers import tradeVotes
             votes = tradeVotesEnabled()
-            try:
-                resignIntent = self.projectedResigns()
-            except Exception:
-                resignIntent = {}
+            # Only when the window is open: the projection is the slowest read here and only
+            # the prospect listings use it (weeks 1-14 paid for it for nothing).
+            resignIntent = {}
+            if tradeManager.tradeWindowOpen(week):
+                try:
+                    resignIntent = self.projectedResigns()
+                except Exception:
+                    resignIntent = {}
             accepted = tradeManager.runWeeklyPass(
                 self.playerManager, teamManager, brain, season, week,
                 draftOrder=self._draftOrderIds(),

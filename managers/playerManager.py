@@ -5202,9 +5202,31 @@ class PlayerManager:
         from constants import ROOKIE_DRAFT_TOP_SLOTS
         available = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
         teamId = getattr(team, 'id', None)
+        owners = list(slotOwners or [])[:int(ROOKIE_DRAFT_TOP_SLOTS)]
+        # ⚠️ THE PREDICTED PICKS DO NOT DEPEND ON WHICH TEAM ASKS, so they are simulated once
+        # per state and shared: every team's re-sign read used to re-simulate them (an
+        # in-season trade pass spent 12s here, via the desk's re-sign projection). Keyed on
+        # what the simulation reads: the brain, the owners, the class, and each owner's
+        # roster contracts and prospects.
+        def _state(o):
+            roster = tuple(sorted((getattr(p, 'id', None), getattr(p, 'termRemaining', None))
+                                  for p in (getattr(o, 'rosterDict', None) or {}).values() if p is not None))
+            pros = tuple(sorted(getattr(p, 'id', None) for p in (getattr(o, 'prospects', None) or [])))
+            return (getattr(o, 'id', None), roster, pros)
+        try:
+            key = (id(brain), tuple(_state(o) for o in owners),
+                   tuple(sorted(getattr(r, 'id', None) for r in available)))
+        except Exception:
+            key = None
+        cache = self.__dict__.setdefault('_expectedDrafteesCache', {})
+        if key is not None and key in cache:
+            return [r for owner, r in cache[key] if getattr(owner, 'id', None) == teamId]
+        if len(cache) > 64:
+            cache.clear()
+        picks = []
         out = []
         try:
-            for slot, owner in enumerate(list(slotOwners or [])[:int(ROOKIE_DRAFT_TOP_SLOTS)], start=1):
+            for slot, owner in enumerate(owners, start=1):
                 if not available:
                     break
                 stays = {getattr(p, 'id', None): True
@@ -5218,10 +5240,13 @@ class PlayerManager:
                 if pick is None:
                     continue
                 available.remove(pick)
+                picks.append((owner, pick))
                 if getattr(owner, 'id', None) == teamId:
                     out.append(pick)
         except Exception:
             return []
+        if key is not None:
+            cache[key] = picks
         return out
 
     def countTeamProspectsAtPosition(self, team, position) -> int:
