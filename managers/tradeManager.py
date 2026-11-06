@@ -124,16 +124,19 @@ class PickListing:
 
 
 class ProspectListing:
-    """A PROSPECT ON HIS LAST WINDOW, on the block because he will not make his team's
-    roster before it closes (owner, 2026-11-06). Like `PickListing`, not a `Listing`:
-    nothing here has a roster slot, a backfill or a cut, so the auction only shares
-    `.team`, `.ask` and `.floor`. Settled by `settleProspectTrade`."""
+    """A PROSPECT his team will not promote before his window closes, on the block
+    (owner, 2026-11-06): one on his last window (`last_window_prospect`), or an earlier
+    one his team's plan never promotes (`surplus_prospect`). Like `PickListing`, not a
+    `Listing`: nothing here has a roster slot, a backfill or a cut, so the auction only
+    shares `.team`, `.ask` and `.floor`. Settled by `settleProspectTrade`."""
 
-    def __init__(self, team, prospect, ask, floor, why=None):
+    TRIGGERS = ('last_window_prospect', 'surplus_prospect')
+
+    def __init__(self, team, prospect, ask, floor, why=None, trigger='last_window_prospect'):
         self.team = team
         self.prospect = prospect
         self.player = None          # explicit: nothing here has a roster player
-        self.trigger = 'last_window_prospect'
+        self.trigger = trigger if trigger in self.TRIGGERS else 'last_window_prospect'
         self.ask = ask
         self.floor = floor
         self.why = why
@@ -167,7 +170,7 @@ class TradeMarket:
     """
 
     def __init__(self, playerManager, teamManager, brain, season: int, week=None,
-                 draftOrder=None, resignIntent=None):
+                 draftOrder=None, resignIntent=None, afterFaDraft: bool = False):
         self.playerManager = playerManager
         self.teamManager = teamManager
         self.brain = brain
@@ -176,6 +179,8 @@ class TradeMarket:
         # (`SeasonManager.projectedResigns`), read by `_prospectMakesRoster`.
         self.resignIntent = dict(resignIntent or {})
         self.week = week            # None = an offseason pass
+        self.afterFaDraft = bool(afterFaDraft)   # the offseason pass after the FA draft
+        self._prospectBuys = None   # (buyerId, prospectId) bought in a prospect sale
         # Team ids in this draft's slot order (`standings_view.projectedDraftOrder`), so a
         # pick is priced at the slot the draft will use. None falls back to win% alone.
         self.draftOrder = list(draftOrder) if draftOrder else None
@@ -1244,34 +1249,110 @@ class TradeMarket:
                 return resolved
         return teams
 
+    def _planPromotesProspect(self, team, prospect, adding: bool = False,
+                              default: bool = True) -> bool:
+        """Does this team's plan (`playerManager.positionPlan`) have the prospect holding
+        a slot in any season of its horizon? The plan promotes a prospect who makes the
+        top of his position inside his window and washes out one who never does, so False
+        means he leaves for nothing. `adding`: he is another team's prospect being weighed
+        by this one (the plan's `extra`, with his own clock), which also counts this
+        team's other prospects at the position, so it cannot buy two for one slot.
+        `default` is the answer when the plan is unavailable."""
+        planFn = getattr(self.playerManager, 'positionPlan', None)
+        if not callable(planFn):
+            return default
+        try:
+            plan = planFn(self.brain, team, prospect.position,
+                          intent=self.resignIntent or None,
+                          # in season the coming offseason's contract countdown is still to
+                          # run; after the FA draft it has run and season 1 is decided
+                          contractShift=0 if self.afterFaDraft else 1,
+                          extra=prospect if adding else None,
+                          faOrder=self._marketOrder(), settled=self.afterFaDraft)
+        except Exception:
+            return default
+        pid = getattr(prospect, 'id', None)
+        return any(getattr(h.get('player'), 'id', None) == pid
+                   for season in (plan or []) for h in (season or []))
+
+    def _boughtInProspectSale(self, team, prospect) -> bool:
+        """Did this team buy the prospect in a prospect sale this season or last? It
+        bought him to promote him (a commitment at the next step 3), so it does not sell
+        him on: a team bought Jorman Eckler after the FA draft and listed him again in the
+        next season's window. Read from the trades table, once per market; the in-memory
+        acquisition stamp does not cross the season boundary or a restart."""
+        if self._prospectBuys is None:
+            self._prospectBuys = set()
+            try:
+                from database.connection import get_session
+                from database.models import Trade
+                session = get_session()
+                try:
+                    rows = (session.query(Trade.team_b_id, Trade.assets_json)
+                            .filter(Trade.season.in_([int(self.season), int(self.season) - 1]),
+                                    Trade.trigger.in_(list(ProspectListing.TRIGGERS))).all())
+                finally:
+                    session.close()
+                for buyerId, assets in rows:
+                    for piece in (assets or {}).get('aGave') or []:
+                        if piece.get('kind') == 'prospect':
+                            self._prospectBuys.add((buyerId, piece.get('id')))
+            except Exception as e:
+                logger.debug(f"prospect sale history unavailable: {e}")
+        return (getattr(team, 'id', None), getattr(prospect, 'id', None)) in self._prospectBuys
+
     def prospectListingsFor(self, team) -> list:
-        """This team's prospects on their final window who will not make its roster
-        before it closes, on the block in season (owner, 2026-11-06: teams did not try to
-        trade a prospect they would otherwise lose for nothing). The ask is ZERO: the team
-        has already decided he will not make its roster, so its alternative is losing him,
-        and any return beats that; the auction among the teams that want him sets the
-        price. (The market's usual read of a prospect prices the chance a slot opens for
-        him, about a third on his last season, which is exactly what this team has ruled
-        out.) In the offseason the washout runs before any trade pass."""
+        """This team's prospects who will not make its roster before their window closes,
+        on the block (owner, 2026-11-06: teams did not try to trade a prospect they would
+        otherwise lose for nothing; and, on the Strangers drafting Coco Mattel over their
+        RB prospect Henlo Cockatoo, "they should be trying to trade their RB prospect at
+        that point"). Two kinds:
+          - on his FINAL window, judged by the last look's own rules
+            (`_prospectMakesRoster`);
+          - earlier, when the team's own plan never promotes him (`_planPromotesProspect`).
+        In season (from the clarity week) and in the pass after the FA draft, which is
+        the first moment a blocked prospect is known: the draft and promotions are done.
+        Not before the draft, which can change who is blocked.
+        The ask is ZERO: the team has already decided he will not make its roster, so its
+        alternative is losing him, and any return beats that; the auction among the teams
+        that want him sets the price. (The market's usual read of a prospect prices the
+        chance a slot opens for him, which is exactly what this team has ruled out.)
+        A prospect the plan has committed to (`committedProspect`) is never listed."""
         from constants import PROSPECT_DEVELOPMENT_WINDOW
-        if self.week is None or not self.hasClarity():
+        if self.week is None:
+            if not self.afterFaDraft:
+                return []
+        elif not self.hasClarity():
             return []
+        committedFn = getattr(self.playerManager, 'committedProspect', None)
         out = []
         for prospect in getattr(team, 'prospects', None) or []:
             seasons = int(getattr(prospect, 'prospect_seasons', 0) or 0)
-            if seasons != int(PROSPECT_DEVELOPMENT_WINDOW) - 1:
+            finalWindow = seasons >= int(PROSPECT_DEVELOPMENT_WINDOW) - 1
+            if wasAcquiredThisSeason(prospect, self.season) or self._boughtInProspectSale(team, prospect):
                 continue
-            if wasAcquiredThisSeason(prospect, self.season):
-                continue
-            if self._prospectMakesRoster(team, prospect):
-                continue
+            try:
+                if callable(committedFn) and committedFn(team, [prospect]) is not None:
+                    continue
+            except Exception:
+                pass
             if self._believedCeiling(team, prospect) <= REPLACEMENT_RATING:
                 continue        # nobody pays for a prospect barely above replacement
-            ask = 0.0
             pos = getattr(getattr(prospect, 'position', None), 'name', '')
-            why = (f"{prospect.name} has one season left to make the roster and is behind "
-                   f"the starters at {pos}, so the team would lose them for nothing.")
-            out.append(ProspectListing(team, prospect, ask, 0.0, why=why))
+            if finalWindow:
+                if self._prospectMakesRoster(team, prospect):
+                    continue
+                trigger = 'last_window_prospect'
+                why = (f"{prospect.name} has one season left to make the roster and is "
+                       f"behind the starters at {pos}, so the team would lose them for "
+                       f"nothing.")
+            else:
+                if self._planPromotesProspect(team, prospect):
+                    continue
+                trigger = 'surplus_prospect'
+                why = (f"{prospect.name} is behind the starters at {pos} and the team has "
+                       f"no place for them before their window closes.")
+            out.append(ProspectListing(team, prospect, 0.0, 0.0, why=why, trigger=trigger))
         out.sort(key=lambda l: -self._believedCeiling(team, l.prospect))
         return out[:1]
 
@@ -1290,7 +1371,15 @@ class TradeMarket:
                 return None
         except Exception:
             return None
-        if not self._prospectMakesRoster(buyer, prospect):
+        from constants import PROSPECT_DEVELOPMENT_WINDOW
+        if int(getattr(prospect, 'prospect_seasons', 0) or 0) >= int(PROSPECT_DEVELOPMENT_WINDOW) - 1:
+            if not self._prospectMakesRoster(buyer, prospect):
+                return None
+        elif not self._planPromotesProspect(buyer, prospect, adding=True, default=False):
+            # An earlier-window prospect: the buyer's own plan with him in it. The
+            # last-window test was too loose here: Uber Whitcomb was bought into a slot
+            # whose starter the buyer kept, and a team bought two QB prospects for one
+            # slot, so neither was promoted.
             return None
         ceiling = self._believedCeiling(buyer, prospect)
         upgrade = ceiling - self._needBar(buyer, prospect)
@@ -2477,7 +2566,9 @@ class TradeMarket:
                 'value': self._pickValueTo(valuer, pick),
             })
         for prospect in getattr(team, 'prospects', None) or []:
-            if wasAcquiredThisSeason(prospect, self.season):
+            # nor one it bought in a prospect sale to promote (season 13 snapshot: the
+            # Caddies bought Jaems Cherrycola and paid with him in the next season's window)
+            if wasAcquiredThisSeason(prospect, self.season) or self._boughtInProspectSale(team, prospect):
                 continue        # pass-the-parcel, one asset class down
             # ⚠️ READ BY THE CLUB VALUING HIM, NOT THE ONE HOLDING HIM (2026-11-02). The seller
             # used to price a prospect it was being offered through the BUYER's scouting,
@@ -2647,7 +2738,7 @@ class TradeMarket:
 
 def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
                   draftOrder=None, excludeTeamIds=None, pickTrades: bool = True,
-                  resignIntent=None) -> list:
+                  resignIntent=None, afterFaDraft: bool = False) -> list:
     """One pass of the market. Returns the settled trades as manifests.
 
     ⚠️ SETTLED SEQUENTIALLY, RE-VALIDATING EACH REMAINING ACCEPTED TRADE AGAINST THE NEW
@@ -2671,7 +2762,8 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
         return []
 
     market = TradeMarket(playerManager, teamManager, brain, season, week,
-                         draftOrder=draftOrder, resignIntent=resignIntent)
+                         draftOrder=draftOrder, resignIntent=resignIntent,
+                         afterFaDraft=afterFaDraft)
     settled = []
     bidsUsed = {}
 
@@ -2702,10 +2794,10 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None,
                 'winner': winner,
             })
 
-    # ── last-window prospects: in season only ─────────────────────────────────
+    # ── prospects their team will not promote: in season and after the FA draft ──
     # A prospect who will not make his team's roster before his window closes is sold
     # rather than lost for nothing (owner, 2026-11-06).
-    if week is not None:
+    if week is not None or afterFaDraft:
         for team in list(getattr(teamManager, 'teams', None) or []):
             if getattr(team, 'id', None) in excluded:
                 continue
@@ -2933,7 +3025,7 @@ def settleProspectTrade(seasonManager, listing, winner, season: int, week=None,
     manifest['tradeId'] = tradeId
     _recordTrade(seasonManager, manifest, tradeId)
     _publishTrade(seasonManager, manifest)
-    logger.info(f"PROSPECT SALE: {seller.name} sent {prospect.name} (last window) to "
+    logger.info(f"PROSPECT SALE: {seller.name} sent {prospect.name} ({listing.trigger}) to "
                 f"{buyer.name}")
     return manifest
 

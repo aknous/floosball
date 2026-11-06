@@ -337,7 +337,8 @@ def _rebuild(row, teamManager):
         if prospect is None:
             return None
         listing = ProspectListing(seller, prospect, lj.get('ask', 0), lj.get('floor', 0),
-                                  why=lj.get('why'))
+                                  why=lj.get('why'),
+                                  trigger=lj.get('trigger') or 'last_window_prospect')
     else:
         player = _findRostered(seller, lj.get('playerId'))
         if player is None:

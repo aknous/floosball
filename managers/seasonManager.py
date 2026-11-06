@@ -8271,7 +8271,7 @@ class SeasonManager:
                 self.playerManager, teamManager, brain, season, None,
                 draftOrder=self._draftOrderIds(),
                 excludeTeamIds=tradeVotes.openTeamIds() if votes else None,
-                pickTrades=not postFa)
+                pickTrades=not postFa, afterFaDraft=postFa)
             if votes:
                 if postFa:
                     tradeVotes.propose(self, entries, season, None, tradeVotes.PHASE_POST_FA,
@@ -9678,11 +9678,14 @@ class SeasonManager:
         self._saveProspectCommitments(commitments)
 
     def _addTradedProspectCommitments(self, commitments: dict, teamManager) -> None:
-        """A team that traded for a last-window prospect this season bought him to promote
-        him (`tradeManager.ProspectListing`), so he is a commitment too, read from the
-        trades table so a restart cannot lose it. Without it, 2 of 9 such buys on the
+        """A team that traded for a prospect its seller would not promote bought him to
+        promote him (`tradeManager.ProspectListing`), so he is a commitment too, read from
+        the trades table so a restart cannot lose it. Without it, 2 of 9 such buys on the
         season-13 snapshot washed out at the buyer's own last look and were signed by
-        another team in the FA draft."""
+        another team in the FA draft.
+        ⚠️ LAST SEASON'S ROWS COUNT TOO: a sale in the pass after the FA draft is stored
+        under the season that offseason follows, one before this step 3. A stale row is
+        harmless, since a prospect no longer on the buyer's pipeline is skipped."""
         season = getattr(self.currentSeason, 'seasonNumber', None)
         if season is None:
             return
@@ -9693,8 +9696,9 @@ class SeasonManager:
             session = get_session()
             try:
                 rows = (session.query(Trade)
-                        .filter(Trade.season == int(season),
-                                Trade.trigger == 'last_window_prospect').all())
+                        .filter(Trade.season.in_([int(season), int(season) - 1]),
+                                Trade.trigger.in_(['last_window_prospect',
+                                                   'surplus_prospect'])).all())
                 found = [(r.team_b_id, (r.assets_json or {}).get('aGave') or []) for r in rows]
             finally:
                 session.close()

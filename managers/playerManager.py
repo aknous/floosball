@@ -4846,7 +4846,12 @@ class PlayerManager:
                 - int(contractShift)
             prospects.append([pr, max(1, left), False])
         if extra is not None:
-            prospects.append([extra, int(PROSPECT_DEVELOPMENT_WINDOW), False])
+            window = int(PROSPECT_DEVELOPMENT_WINDOW)
+            if getattr(extra, 'is_prospect', False) and not getattr(extra, 'is_upcoming_rookie', False):
+                # a prospect another team is selling brings his clock with him
+                window = max(1, window - int(getattr(extra, 'prospect_seasons', 0) or 0)
+                             - int(contractShift))
+            prospects.append([extra, window, False])
 
         plan = []
         signed = []     # free agents this plan signs this offseason who win a slot: they stay
