@@ -8145,10 +8145,15 @@ class SeasonManager:
             brain.season, brain.week = season, int(week or 1)
             from managers import tradeVotes
             votes = tradeVotesEnabled()
+            try:
+                resignIntent = self.projectedResigns()
+            except Exception:
+                resignIntent = {}
             accepted = tradeManager.runWeeklyPass(
                 self.playerManager, teamManager, brain, season, week,
                 draftOrder=self._draftOrderIds(),
-                excludeTeamIds=tradeVotes.openTeamIds() if votes else None)
+                excludeTeamIds=tradeVotes.openTeamIds() if votes else None,
+                resignIntent=resignIntent)
             if votes:
                 # Fans vote until the deadline day's first kickoff, then
                 # `_resolveDeadlineTradeVotes` settles what they approved.
@@ -8162,8 +8167,7 @@ class SeasonManager:
                 # and that prospect may be the asset another club is buying, and two
                 # accepted trades can target the same roster slot. `settleTrade` re-checks
                 # and returns None rather than executing an illegal move.
-                result = tradeManager.settleTrade(
-                    self, entry['listing'], entry['winner'], season, week)
+                result = tradeVotes.settleEntry(self, entry, season, week)
                 if result is not None:
                     settled.append(result)
             if settled:
@@ -9646,7 +9650,44 @@ class SeasonManager:
                     f"{p.name}({getattr(p, 'playerRating', 0)})" for p, _s in cuts))
 
         logger.info(f"GM brain sweep complete: {cutTally} upgrade cut(s) league-wide")
+        self._addTradedProspectCommitments(commitments, teamManager)
         self._saveProspectCommitments(commitments)
+
+    def _addTradedProspectCommitments(self, commitments: dict, teamManager) -> None:
+        """A team that traded for a last-window prospect this season bought him to promote
+        him (`tradeManager.ProspectListing`), so he is a commitment too, read from the
+        trades table so a restart cannot lose it. Without it, 2 of 9 such buys on the
+        season-13 snapshot washed out at the buyer's own last look and were signed by
+        another team in the FA draft."""
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        if season is None:
+            return
+        teams = {getattr(t, 'id', None): t for t in (getattr(teamManager, 'teams', None) or [])}
+        try:
+            from database.connection import get_session
+            from database.models import Trade
+            session = get_session()
+            try:
+                rows = (session.query(Trade)
+                        .filter(Trade.season == int(season),
+                                Trade.trigger == 'last_window_prospect').all())
+                found = [(r.team_b_id, (r.assets_json or {}).get('aGave') or []) for r in rows]
+            finally:
+                session.close()
+        except Exception as e:
+            logger.debug(f"traded prospect commitments unavailable: {e}")
+            return
+        for buyerId, gave in found:
+            buyer = teams.get(buyerId)
+            for piece in gave:
+                if piece.get('kind') != 'prospect':
+                    continue
+                prospect = next((p for p in (getattr(buyer, 'prospects', None) or [])
+                                 if getattr(p, 'id', None) == piece.get('id')), None)
+                if prospect is None:
+                    continue
+                commitments.setdefault(buyerId, {})[prospect.id] = prospect.position.value
+                logger.info(f"Team plan: {buyer.name} bought {prospect.name} to promote him")
 
     def _saveProspectCommitments(self, commitments: dict) -> None:
         """Record this offseason's team plan commitments ({teamId: {playerId:
