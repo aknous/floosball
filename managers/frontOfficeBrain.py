@@ -121,6 +121,32 @@ def _atLeastOneSurvives(upgrades: int, trials: int, p: float) -> float:
     return _clamp(total, 0.0, 1.0)
 
 
+def sideNeedTilt(team, teams) -> float:
+    """How badly this team needs DEFENSE rather than offense, -1 .. +1: positive means its
+    defense lags its offense against the league's, negative the reverse, 0 for a balanced
+    team (and for one simply bad at both, which has no particular need).
+
+    ONE definition, read by the trade market (`TradeMarket.needTilt`) and the team plan
+    (`FrontOfficeBrain.sideTilt`). Measured relative to the league so a weak team does not
+    read a phantom need; scaled by TRADE_NEED_SENSITIVITY, capped at TRADE_NEED_MAX_TILT."""
+    from constants import TRADE_NEED_SENSITIVITY, TRADE_NEED_MAX_TILT
+    offs = [float(getattr(t, 'offenseRating', 0) or 0) for t in teams or []]
+    defs = [float(getattr(t, 'defenseRating', 0) or 0) for t in teams or []]
+    offs = [o for o in offs if o > 0]
+    defs = [dv for dv in defs if dv > 0]
+    if not offs or not defs:
+        return 0.0
+    meanOff, meanDef = sum(offs) / len(offs), sum(defs) / len(defs)
+    myOff = float(getattr(team, 'offenseRating', 0) or 0)
+    myDef = float(getattr(team, 'defenseRating', 0) or 0)
+    if meanOff <= 0 or meanDef <= 0 or myOff <= 0 or myDef <= 0:
+        return 0.0
+    offGap = (meanOff - myOff) / meanOff
+    defGap = (meanDef - myDef) / meanDef
+    return max(-TRADE_NEED_MAX_TILT,
+               min(TRADE_NEED_MAX_TILT, (defGap - offGap) * TRADE_NEED_SENSITIVITY))
+
+
 def isScoutable(player) -> bool:
     """Is this player a draft prospect — someone every club is GUESSING about?
 
@@ -521,8 +547,22 @@ class FrontOfficeBrain:
         vision = 0.0
         if team is not None:
             vision = self.scoutingVision(coach if coach is not None else getattr(team, 'coach', None), team)
+        # Cached for the brain's life, keyed on what the projection reads, like
+        # `_nextSeasonRatingPastPeak`: the team plan asks for the same players' projections
+        # thousands of times a pass (a profiled in-season trade pass spent 7s here).
+        key = (getattr(player, 'id', None) or id(player), round(float(vision), 4),
+               getattr(player, 'playerRating', None), getattr(player, 'offensiveRating', None),
+               getattr(player, 'defensiveRating', None), getattr(player, 'seasonsPlayed', None),
+               getattr(player, 'prospect_seasons', None),
+               # development luck moves true skill and potential, not always the rating
+               getattr(getattr(player, 'attributes', None), 'potentialSkillRating', None),
+               getattr(player, 'talentShift', getattr(player, 'talent_shift', None)))
+        cache = self.__dict__.setdefault('_projectionCache', {})
+        if key in cache:
+            return cache[key]
         e, c = fn(vision)
-        return float(e), float(c)
+        cache[key] = (float(e), float(c))
+        return cache[key]
 
     # ------------------------------------------------------------- value
 
@@ -861,6 +901,115 @@ class FrontOfficeBrain:
             return 0.0
         return points * positionValue(starter, venueBiasFor(team))
 
+    # ------------------------------------------------------------ team plan
+
+    def projectedRating(self, player, seasonsAhead: int, coach=None, team=None) -> float:
+        """The rating this team expects from the player `seasonsAhead` seasons from now
+        (0 = today), for the team plan (docs/TEAM_PLAN.md).
+
+        Past his peak: the sim's aging at its average (`_nextSeasonRatingPastPeak`),
+        extended at that rate and seen as `seenForward` sees it, which understates a
+        steepening decline rather than inventing a curve. Developing: each season
+        realises the same share f = FO_CEILING_CREDIT x development lean of what is left
+        to this team's read of his ceiling, the compounding `_growthBeyondNextSeason`
+        uses, so season 1 is `trueForwardRating` and it never passes the ceiling. Prime:
+        flat."""
+        current = float(getattr(player, 'playerRating', 0) or 0)
+        k = max(0, int(seasonsAhead or 0))
+        if k == 0 or player is None:
+            return current
+        key = (getattr(player, 'id', None) or id(player), k, getattr(team, 'id', None),
+               id(coach) if coach is not None else None, current,
+               getattr(player, 'seasonsPlayed', None), getattr(player, 'prospect_seasons', None))
+        cache = self.__dict__.setdefault('_projectedRatingCache', {})
+        if key not in cache:
+            cache[key] = self._projectedRatingUncached(player, k, current, coach, team)
+        return cache[key]
+
+    def _projectedRatingUncached(self, player, k, current, coach, team) -> float:
+        nextSeason = self._nextSeasonRatingPastPeak(player, coach, team)
+        if nextSeason is not None:
+            step = float(nextSeason) - current
+            if step >= 0:
+                return float(nextSeason)       # the peak season's overshoot, once
+            return current + step * k * self.agingSeen(coach, team)
+        try:
+            if self.classifyArc(player) != ARC_DEVELOPING:
+                return current
+            ceiling = float(self._ceilingRating(player, team))
+        except Exception:
+            return current
+        if ceiling <= current:
+            return current
+        f = _clamp(FO_CEILING_CREDIT * self.developmentLean(coach, team), 0.0, 1.0)
+        return ceiling - (ceiling - current) * (1.0 - f) ** k
+
+    def _leagueTeams(self):
+        teams = getattr(self, 'leagueTeams', None)
+        if teams:
+            return teams
+        try:
+            tm = self.playerManager.serviceContainer.getService('team_manager')
+            return list(getattr(tm, 'teams', None) or [])
+        except Exception:
+            return []
+
+    def sideTilt(self, team, coach=None) -> float:
+        """How much this team weighs DEFENSE over offense when it judges a player, -1 ..
+        +1 (owner, 2026-11-06: "teams need to be looking at both ratings, not just the
+        overall. and coaches should have a preference"). Its need (`sideNeedTilt`, its
+        offense and defense against the league's) plus the coach's lean: defensiveMind
+        against offensiveMind over FO_SIDE_COACH_SPAN, times FO_SIDE_COACH_WEIGHT. A
+        balanced team with a balanced coach reads 0, i.e. plain overall ratings."""
+        from constants import FO_SIDE_COACH_SPAN, FO_SIDE_COACH_WEIGHT, TRADE_NEED_MAX_TILT
+        if team is None:
+            return 0.0
+        cache = self.__dict__.setdefault('_sideTiltCache', {})
+        key = getattr(team, 'id', None)
+        key = id(team) if key is None else key
+        if key in cache:
+            return cache[key]
+        need = sideNeedTilt(team, self._leagueTeams())
+        coach = coach if coach is not None else getattr(team, 'coach', None)
+        lean = 0.0
+        if coach is not None:
+            gap = (float(getattr(coach, 'defensiveMind', 80) or 80)
+                   - float(getattr(coach, 'offensiveMind', 80) or 80))
+            lean = _clamp(gap / float(FO_SIDE_COACH_SPAN), -1.0, 1.0) * FO_SIDE_COACH_WEIGHT
+        tilt = _clamp(need + lean, -TRADE_NEED_MAX_TILT, TRADE_NEED_MAX_TILT)
+        cache[key] = tilt
+        return tilt
+
+    def sideRating(self, player, rating: float, tilt: float) -> float:
+        """`rating` read through a side tilt: rating + tilt x (defense - offense) / 2, the
+        trade market's `ratingFor`. A player with no split (a kicker) is unchanged."""
+        off = float(getattr(player, 'offensiveRating', 0) or 0)
+        dfn = float(getattr(player, 'defensiveRating', 0) or 0)
+        if off <= 0 or dfn <= 0 or not tilt:
+            return float(rating)
+        return float(rating) + float(tilt) * (dfn - off) / 2.0
+
+    def freeAgentValue(self, player, coach=None, rng=None, team=None) -> float:
+        """A free agent's value when he is weighed against a team's own player:
+        `decisionValue` plus the same aging term a starter's standing carries
+        (`_agingDrag` over FO_STANDING_HORIZON_SEASONS, position-weighted).
+
+        ⚠️ BOTH SIDES OF A KEEP-OR-REPLACE CALL COUNT AGE (owner, 2026-11-06: "teams do
+        need to take player age into account"). The incumbent's side has carried his
+        decline through `starterStanding` since 2026-10-10, while the free agent was
+        priced on next season alone, so an aging free agent always looked better than
+        he would play over the deal. Prod snapshot, season 13: the Melons planned to let
+        TeeTee Moonshine (86 QB, his fourth season) walk for Riverdale Dreamcast, an 81
+        in his 13th, who led by under a point before his own decline (-1.4) was counted.
+        A rising or prime free agent is unchanged."""
+        value = self.decisionValue(player, coach, rng=rng, team=team)
+        if not FO_STANDING_ENABLED or player is None:
+            return value
+        drag = self._agingDrag(player, coach, team)
+        if not drag:
+            return value
+        return value + drag * positionValue(player, venueBiasFor(team))
+
     def _agingDrag(self, starter, coach=None, team=None) -> float:
         """Rating points (<= 0) for a past-peak starter's decline beyond next season.
 
@@ -1172,7 +1321,7 @@ class FrontOfficeBrain:
                 continue
             if team is not None and not self.willSignWith(fa, team):
                 continue
-            values.append(self.decisionValue(fa, coach, rng=rng, team=team))
+            values.append(self.freeAgentValue(fa, coach, rng=rng, team=team))
         if not values:
             return 0.0
         values.sort(reverse=True)
@@ -1343,7 +1492,7 @@ class FrontOfficeBrain:
             pid = getattr(fa, 'id', None)
             if pid is None:
                 continue
-            board[pid] = self.decisionValue(fa, coach, rng=rng, team=team)
+            board[pid] = self.freeAgentValue(fa, coach, rng=rng, team=team)
         for p in alsoValue or []:
             pid = getattr(p, 'id', None)
             if p is None or pid is None:
@@ -1415,7 +1564,7 @@ class FrontOfficeBrain:
                 continue
             if team is not None and not self.willSignWith(fa, team):
                 continue
-            if self.decisionValue(fa, coach, rng=rng, team=team) - incumbent >= margin:
+            if self.freeAgentValue(fa, coach, rng=rng, team=team) - incumbent >= margin:
                 upgrades += 1
         if upgrades <= 0:
             return 0.0
@@ -1452,6 +1601,53 @@ class FrontOfficeBrain:
             return 0
         return int(index * FO_FA_CONTENTION)
 
+    def _planResignRead(self, player, team, coach=None):
+        """(gain, coverer) for a walk-year starter from the team plan (docs/TEAM_PLAN.md,
+        stage 2), or None when there is no plan context (`planContext`, set by
+        `SeasonManager._resignDecision`). `gain` is what keeping him adds to his
+        position's outlook over the horizon (the plan with him re-signed minus without),
+        plus his results credit for the seasons he holds the slot, position-weighted:
+        the same units as `starterStanding`. `coverer` is the prospect or expected rookie
+        who takes his slot in the plan without him (None when it goes to the market)."""
+        ctx = getattr(self, 'planContext', None)
+        pm = self.playerManager
+        plan = getattr(pm, 'positionPlan', None)
+        if not ctx or team is None or player is None or not callable(plan):
+            return None
+        pid = getattr(player, 'id', None)
+        posValue = getattr(getattr(player, 'position', None), 'value', None)
+        base = dict(ctx.get('intent') or {})
+        extra = next((r for r in ctx.get('draftees') or []
+                      if getattr(getattr(r, 'position', None), 'value', None) == posValue), None)
+        shift, order = ctx.get('shift', 1), ctx.get('faOrder')
+        try:
+            pm._planMarketCache = {}
+            withPlan = plan(self, team, player.position, {**base, pid: True}, shift,
+                            extra=extra, faOrder=order)
+            pm._planMarketCache = {}
+            without = plan(self, team, player.position, {**base, pid: False}, shift,
+                           extra=extra, faOrder=order)
+        except Exception:
+            return None
+        gain = sum(sum(h['rating'] for h in a) - sum(h['rating'] for h in b)
+                   for a, b in zip(withPlan, without))
+        held = sum(1 for season in withPlan if any(h['player'] is player for h in season))
+        try:
+            gain += self._resultsCredit(player, team, coach) * held
+        except Exception:
+            pass
+        coverer = None
+        for a, b in zip(withPlan, without):
+            inWith = {id(h['player']) for h in a if h['player'] is not None}
+            for h in b:
+                if h['source'] in ('prospect', 'rookie') and h['player'] is not None \
+                        and id(h['player']) not in inWith:
+                    coverer = h['player']
+                    break
+            if coverer is not None:
+                break
+        return gain * positionValue(player, venueBiasFor(team)), coverer
+
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
                              pickDepth=0, team=None, teamsAhead=0, internal=None,
                              lastChance=None):
@@ -1466,7 +1662,18 @@ class FrontOfficeBrain:
 
         Returns [(player, surplus)] sorted best-first, already filtered to
         those clearing FO_RESIGN_SURPLUS_MARGIN.
+
+        ⚠️ WITH A PLAN CONTEXT THE TEAM PLAN DECIDES (stage 2, docs/TEAM_PLAN.md): a
+        player's priority is what keeping him adds to his position's plan
+        (`_planResignRead`), which already holds every alternative (prospects and when
+        they would be promoted, an expected rookie, the free agent left at the pick,
+        aging and growth, the offense/defense tilt), so the internal-coverage pass and
+        the free-agent survival odds below are not used. Fan verdicts and the star floor
+        still apply first. Without a context (a bare call) the comparison below runs.
         """
+        if (getattr(self, 'planContext', None) and team is not None
+                and callable(getattr(getattr(self, 'playerManager', None), 'positionPlan', None))):
+            return self._rankResignsByPlan(expiring, coach, team, rng)
         # ⚠️ THE CLUB'S OWN REPLACEMENTS COME FIRST (owner, 2026-10-02). `internal` is its
         # prospects plus the rookies it expects to draft before free agency. One that beats
         # a walk-year player by the margin makes him certainly replaceable: the club does
@@ -1475,6 +1682,9 @@ class FrontOfficeBrain:
         # for three seasons, which then left the rookie no slot to be promoted into. Each
         # alternative covers ONE incumbent at his position, the weakest first.
         coveredIds = set()
+        # {incumbent id: the internal alternative covering him}, read by the re-sign step
+        # to record the team plan's commitment (docs/TEAM_PLAN.md, stage 3).
+        self.lastCoverage = {}
         byPos = {}
         for alt in internal or []:
             posV = getattr(getattr(alt, 'position', None), 'value', None)
@@ -1509,6 +1719,7 @@ class FrontOfficeBrain:
                               and self.ratedAtLeast(alt, pl, coach))
                 if covers:
                     coveredIds.add(id(pl))
+                    self.lastCoverage[getattr(pl, 'id', None)] = alt
 
         from managers.playerManager import fanVerdict
         ranked = []
@@ -1557,6 +1768,35 @@ class FrontOfficeBrain:
             priority = incumbent * (1.0 - replaceable)
             if priority >= FO_RESIGN_SURPLUS_MARGIN:
                 ranked.append((player, priority))
+        ranked.sort(key=lambda pair: -pair[1])
+        return ranked
+
+    def _rankResignsByPlan(self, expiring, coach, team, rng=None):
+        """`rankResignCandidates` read from the team plan. Records `lastCoverage` for
+        every walk-year starter whose slot the plan gives to a prospect or rookie, which
+        the re-sign step turns into a commitment if he walks."""
+        from managers.playerManager import fanVerdict
+        self.lastCoverage = {}
+        ranked = []
+        bar = self.moveOnBar(coach, FO_RESIGN_SURPLUS_MARGIN, floor=0.0)
+        for player in expiring:
+            read = self._planResignRead(player, team, coach)
+            gain, coverer = read if read is not None else (None, None)
+            if coverer is not None:
+                self.lastCoverage[getattr(player, 'id', None)] = coverer
+            verdict = fanVerdict(player, getattr(self, 'sentimentMap', None) or {})
+            if verdict == 'walk':
+                continue
+            if verdict == 'keep':
+                ranked.append((player, FAN_KEEP_PRIORITY
+                               + self.decisionValue(player, coach, rng=rng, team=team)))
+                continue
+            if not self.worthResigningOnStars(player, coach, team):
+                continue
+            if gain is None:
+                continue
+            if gain > bar:
+                ranked.append((player, gain))
         ranked.sort(key=lambda pair: -pair[1])
         return ranked
 

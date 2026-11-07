@@ -152,6 +152,10 @@ def _assetsOf(entry) -> dict:
         aGave = [{'kind': 'pick', 'id': pick.get('id'),
                   'name': f"S{pick.get('season')} R{pick.get('round')} pick",
                   'detail': f"slot {pick.get('slot')}"}]
+    elif entry.get('kind') == 'prospect':
+        p = listing.prospect
+        aGave = [{'kind': 'prospect', 'id': getattr(p, 'id', None), 'name': p.name,
+                  'detail': getattr(getattr(p, 'position', None), 'name', '')}]
     else:
         p = listing.player
         aGave = [{'kind': 'player', 'id': getattr(p, 'id', None), 'name': p.name,
@@ -171,12 +175,14 @@ def _assetsOf(entry) -> dict:
 
 def _serialize(entry) -> tuple:
     listing, winner = entry['listing'], entry['winner']
-    kind = 'pick' if entry.get('kind') == 'pick' else 'player'
+    kind = entry.get('kind') if entry.get('kind') in ('pick', 'prospect') else 'player'
     listingJson = {'trigger': getattr(listing, 'trigger', None),
                    'ask': float(listing.ask or 0), 'floor': float(listing.floor or 0),
                    'why': getattr(listing, 'why', None)}
     if kind == 'pick':
         listingJson['pick'] = dict(listing.pick)
+    elif kind == 'prospect':
+        listingJson['prospectId'] = getattr(listing.prospect, 'id', None)
     else:
         listingJson['playerId'] = getattr(listing.player, 'id', None)
     bidJson = {'pieces': [dict(p) for p in (winner.pieces or [])],
@@ -308,13 +314,16 @@ def settleEntry(seasonManager, entry, season: int, week, fillHoles: bool = None,
     if entry.get('kind') == 'pick':
         return tradeManager.settlePickTrade(seasonManager, entry['listing'], entry['winner'],
                                             season, dryRun=dryRun)
+    if entry.get('kind') == 'prospect':
+        return tradeManager.settleProspectTrade(seasonManager, entry['listing'], entry['winner'],
+                                                season, week, dryRun=dryRun)
     return tradeManager.settleTrade(seasonManager, entry['listing'], entry['winner'], season,
                                     week, fillHoles=fillHoles, dryRun=dryRun)
 
 
 def _rebuild(row, teamManager):
     """The market entry a proposal was made from, against the live rosters, or None."""
-    from managers.tradeManager import Listing, PickListing, Bid, _findRostered
+    from managers.tradeManager import Listing, PickListing, ProspectListing, Bid, _findRostered, _findProspect
     teams = {getattr(t, 'id', None): t for t in (getattr(teamManager, 'teams', None) or [])}
     seller, buyer = teams.get(row.team_a_id), teams.get(row.team_b_id)
     if seller is None or buyer is None:
@@ -323,6 +332,13 @@ def _rebuild(row, teamManager):
     if row.kind == 'pick':
         listing = PickListing(seller, dict(lj.get('pick') or {}), lj.get('ask', 0),
                               lj.get('floor', 0), why=lj.get('why'))
+    elif row.kind == 'prospect':
+        prospect = _findProspect(seller, lj.get('prospectId'))
+        if prospect is None:
+            return None
+        listing = ProspectListing(seller, prospect, lj.get('ask', 0), lj.get('floor', 0),
+                                  why=lj.get('why'),
+                                  trigger=lj.get('trigger') or 'last_window_prospect')
     else:
         player = _findRostered(seller, lj.get('playerId'))
         if player is None:

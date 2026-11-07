@@ -3354,7 +3354,9 @@ def clear_db():
         # The salary start markers name seasons of the league being dropped: kept, a fresh
         # league would charge salaries from season 1 instead of after its first season.
         from managers.payroll import FIRST_FUNDED_KEY, SALARIES_FROM_KEY
-        seasonScoped = (COMPLETE_SNAPSHOT_SETTING, FIRST_FUNDED_KEY, SALARIES_FROM_KEY)
+        from constants import PROSPECT_COMMITMENTS_SETTING
+        seasonScoped = (COMPLETE_SNAPSHOT_SETTING, FIRST_FUNDED_KEY, SALARIES_FROM_KEY,
+                        PROSPECT_COMMITMENTS_SETTING)
         with engine.connect() as conn:
             for key in seasonScoped:
                 conn.execute(_text("DELETE FROM app_settings WHERE key = :k"), {"k": key})

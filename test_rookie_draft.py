@@ -97,23 +97,35 @@ class Harness:
     forfeitPayoutFor = PlayerManager.forfeitPayoutFor
     payForfeitedSlot = PlayerManager.payForfeitedSlot
     rookieCeiling = PlayerManager.rookieCeiling
-    bpaChoice = PlayerManager.bpaChoice
+    blockedByOwnProspect = PlayerManager.blockedByOwnProspect
+    committedRookie = PlayerManager.committedRookie
     chooseRookiePick = PlayerManager.chooseRookiePick
     prospectRanking = PlayerManager.prospectRanking
     superstarLockedPositions = PlayerManager.superstarLockedPositions
     keptStarPositions = PlayerManager.keptStarPositions
     preferClearNeed = PlayerManager.preferClearNeed
     rookieBoardValue = PlayerManager.rookieBoardValue
-    rookieNeedValue = PlayerManager.rookieNeedValue
     _rookieNeedBar = PlayerManager._rookieNeedBar
-    rookieNeedMargin = PlayerManager.rookieNeedMargin
-    rookieNeedWeight = staticmethod(PlayerManager.rookieNeedWeight)
+    _planRating = PlayerManager._planRating
+    _planMarket = PlayerManager._planMarket
+    _planMarketUncached = PlayerManager._planMarketUncached
+    _planSlotHolders = staticmethod(PlayerManager._planSlotHolders)
+    _planOpenSlots = PlayerManager._planOpenSlots
+    _likelyResigned = PlayerManager._likelyResigned
+    projectedMarketPool = PlayerManager.projectedMarketPool
+    positionOutlook = PlayerManager.positionOutlook
+    positionPlan = PlayerManager.positionPlan
+    _planPromotes = PlayerManager._planPromotes
+    teamPlanSummary = PlayerManager.teamPlanSummary
+    rookiePlanValue = PlayerManager.rookiePlanValue
+    rookiePlanMargin = PlayerManager.rookiePlanMargin
 
 
-def _run(rookies, teams, brain=None):
+def _run(rookies, teams, brain=None, resignIntent=None):
     h = Harness(rookies)
     events = list(h.rookieDraftPickGenerator(rookies, teams,
-                                             brain=brain or StubBrain()))
+                                             brain=brain or StubBrain(),
+                                             resignIntent=resignIntent))
     return h, events
 
 
@@ -209,18 +221,20 @@ def test_a_tie_goes_to_the_thinner_position():
     print("PASS a tie breaks toward the position the club is thin at")
 
 
-def test_a_top_pick_takes_the_best_prospect_whatever_the_position():
-    """Owner, 2026-10-01: a top-3 pick takes the best player available, by ceiling,
-    position value and need ignored. Production's season-7 #2 took a 75-ceiling QB while
-    a 99-ceiling QB and the class's only 100 (a TE) were still on the board."""
+def test_with_every_position_open_the_pick_is_the_ceiling_above_replacement():
+    """With nothing at any position, need is each rookie's ceiling above replacement times
+    his position's weight. A QB barely above replacement goes last (production's season-7
+    #2 was a 75-ceiling QB while a 99-ceiling QB and a 100 TE were still on the board),
+    and position weight now counts at the top too: a 96 WR (0.72) beats a 100 TE (0.60).
+    Until 2026-11-06 the top two picks ranked by raw ceiling and took the TE."""
     rookies = [FakePlayer(1, 72, Position.QB, 'Low Ceiling QB'),
                FakePlayer(2, 82, Position.TE, 'Hundred TE'),
                FakePlayer(3, 70, Position.WR, 'Ninety Six WR')]
     ceilings = {'Low Ceiling QB': 75, 'Hundred TE': 100, 'Ninety Six WR': 96}
     _, events = _run(rookies, _teams(3), StubBrain(lambda p, team: ceilings[p.name]))
     picks = [e['playerName'] for e in events if e['type'] == 'pick']
-    assert picks == ['Hundred TE', 'Ninety Six WR', 'Low Ceiling QB'], picks
-    print("PASS the top picks go by ceiling, not by the QB multiplier")
+    assert picks == ['Ninety Six WR', 'Hundred TE', 'Low Ceiling QB'], picks
+    print("PASS an open roster takes the ceiling above replacement, position weighted")
 
 
 def test_a_top_pick_passes_on_a_kicker():
@@ -261,17 +275,21 @@ def test_after_the_top_five_the_board_prices_the_ceiling_above_replacement():
     print("PASS pick 6 values a 90-ceiling TE over a 75-ceiling QB")
 
 
-def test_need_weight_ramps_from_the_end_of_the_best_available_picks():
-    """owner, 2026-10-17: need "outside of the top couple picks", pure need by
-    ROOKIE_DRAFT_NEED_FULL_SLOT rather than only at the last pick."""
-    from constants import ROOKIE_DRAFT_BPA_SLOTS as B, ROOKIE_DRAFT_NEED_FULL_SLOT as F
-    w = PlayerManager.rookieNeedWeight
-    assert B == 2 and F == 8
-    assert w(1, 32) == 0.0 and w(B, 32) == 0.0, "the best-available picks ignore need"
-    assert 0.0 < w(B + 1, 32) < w(F - 1, 32) < 1.0, "need grows pick by pick"
-    assert w(F, 32) == 1.0 and w(20, 32) == 1.0, "pure need from pick 8 on"
-    assert w(32, 32) == 1.0, "the last pick is pure need"
-    assert w(4, 4) == 1.0, "a short draft reaches pure need at its last pick"
+def test_the_first_pick_drafts_by_need_too():
+    """Owner, 2026-11-06: "teams just need to be picking by need at all picks". The #1
+    pick, with a 90 QB under contract and no RB, takes the 85-ceiling RB over a
+    92-ceiling QB who would sit behind its starter. It used to take the QB (the best
+    prospect available, need ignored)."""
+    starter = FakePlayer(99, 90, Position.QB, 'Starter QB')
+    starter.termRemaining = 3
+    rookies = [FakePlayer(1, 80, Position.QB, 'Better QB'),
+               FakePlayer(2, 75, Position.RB, 'Needed RB')]
+    ceilings = {'Better QB': 92, 'Needed RB': 85}
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'qb': starter}
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Needed RB'
+    print("PASS the #1 pick takes the RB the club is missing")
 
 
 def test_a_late_pick_fills_a_hole_over_a_better_asset():
@@ -300,6 +318,53 @@ def test_a_walk_year_starter_is_a_hole_coming():
     print("PASS a walk-year starter does not block the QB")
 
 
+def test_a_walk_year_starter_the_team_will_re_sign_still_blocks_the_position():
+    """Fixed 2026-11-06: the need bar counted every walk-year starter as gone, so a team
+    drafted behind one it planned to keep (prod snapshot, season 13: the Exoticos took a
+    79-ceiling QB while planning to re-sign their 82). With the GM's re-sign intent he
+    counts at his rating; without it (or intending to let him go) the slot is a hole."""
+    for keep, expected in ((True, 'Needed RB'), (False, 'Better QB')):
+        starter = FakePlayer(99, 90, Position.QB, 'Walk Year QB')
+        starter.termRemaining = 1
+        filler = [FakePlayer(10 + i, 60, Position.QB, f'Filler {i}') for i in range(5)]
+        rookies = filler + [FakePlayer(20, 80, Position.QB, 'Better QB'),
+                            FakePlayer(21, 75, Position.RB, 'Needed RB')]
+        ceilings = {'Better QB': 92, 'Needed RB': 85}
+        ceilings.update({f'Filler {i}': 99 - i for i in range(5)})
+        clubs = _teams(6)
+        clubs[5].rosterDict = {'qb': starter}
+        _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]),
+                         resignIntent={starter.id: keep})
+        picks = [e for e in events if e['type'] == 'pick']
+        assert picks[5]['playerName'] == expected, (keep, picks[5])
+    print("PASS a walk-year starter the GM is keeping blocks the position")
+
+
+def test_a_rookie_his_teams_own_prospect_matches_is_not_drafted():
+    """Owner, 2026-11-06: a team does not draft a rookie at a position where it already
+    has a prospect projected as good or better, while anyone else is on the board. Here
+    neither rookie fills a need (the QB is under the 90-ceiling prospect, the RB under an
+    85 starter), and the tie-break alone would take the QB, who comes closer to what he
+    must beat (-2 against -5)."""
+    starter = FakePlayer(98, 85, Position.RB, 'Starter RB'); starter.termRemaining = 3
+    prospect = FakePlayer(97, 75, Position.QB, 'Prospect QB')
+    rookies = [FakePlayer(1, 80, Position.QB, 'Matched QB'),
+               FakePlayer(2, 70, Position.RB, 'Blocked RB')]
+    ceilings = {'Matched QB': 88, 'Blocked RB': 80, 'Prospect QB': 90}
+    clubs = _teams(1)
+    clubs[0].rosterDict = {'rb': starter}
+    clubs[0].prospects.append(prospect)
+    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Blocked RB'
+    # ...but with nobody else left he is still drafted rather than the pick wasted.
+    clubs = _teams(1)
+    clubs[0].prospects.append(prospect)
+    _, events = _run([FakePlayer(1, 80, Position.QB, 'Matched QB')], clubs,
+                     StubBrain(lambda p, team: ceilings[p.name]))
+    assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Matched QB'
+    print("PASS a rookie his own prospect matches is passed over while others remain")
+
+
 def _star(rating=94, term=3, position=Position.QB, name='Star'):
     p = FakePlayer(900 + rating, rating, position, name)
     p.termRemaining = term
@@ -324,22 +389,28 @@ def test_a_top_pick_skips_a_position_a_superstar_holds():
 
 def test_a_star_who_is_leaving_or_fading_does_not_lock_the_position():
     """A walk-year star, a retiring one, one past his longevity, or a 4-star leaves the
-    position open, so the best available is still taken there."""
+    position unlocked. Whether the team then drafts there is need's call: a walk-year or
+    retiring star is a hole coming, so the 99 QB is the pick; an aging or 4-star starter
+    under contract still has to be beaten, so need takes the open-position WR."""
     class ArcBrain(StubBrain):
         def classifyArc(self, player):
             return 'regressing' if getattr(player, 'name', '') == 'Old Star' else 'prime'
     retiring = _star(name='Retiring Star'); retiring.willRetire = True
-    for starter in (_star(term=1, name='Walk Year Star'), retiring,
-                    _star(name='Old Star'), _star(rating=88, name='Four Star')):
+    for starter, expected in ((_star(term=1, name='Walk Year Star'), 'Ninety Nine QB'),
+                              (retiring, 'Ninety Nine QB'),
+                              (_star(name='Old Star'), 'Ninety WR'),
+                              (_star(rating=88, name='Four Star'), 'Ninety WR')):
         rookies = [FakePlayer(1, 80, Position.QB, 'Ninety Nine QB'),
                    FakePlayer(2, 75, Position.WR, 'Ninety WR')]
         ceilings = {'Ninety Nine QB': 99, 'Ninety WR': 90}
         clubs = _teams(1)
         clubs[0].rosterDict = {'qb': starter}
-        _, events = _run(rookies, clubs, ArcBrain(lambda p, team: ceilings[p.name]))
+        brain = ArcBrain(lambda p, team: ceilings[p.name])
+        h, events = _run(rookies, clubs, brain)
+        assert not h.superstarLockedPositions(brain, clubs[0], {}), starter.name
         first = next(e for e in events if e['type'] == 'pick')
-        assert first['playerName'] == 'Ninety Nine QB', (starter.name, first)
-    print("PASS a leaving, fading or 4-star starter leaves the position open")
+        assert first['playerName'] == expected, (starter.name, first)
+    print("PASS a leaving, fading or 4-star starter leaves the position unlocked")
 
 
 def test_a_walk_year_star_the_team_will_re_sign_still_locks_the_position():
@@ -362,28 +433,39 @@ def test_a_walk_year_star_the_team_will_re_sign_still_locks_the_position():
     print("PASS a walk-year star locks the position only if he will be re-signed")
 
 
-def _clearNeedDraft(needCeiling, starRating=88, needStarter=70):
-    """One pick: the best available is a 95-ceiling QB behind a kept QB rated
-    `starRating`; the team's RB starts at `needStarter`; an RB with `needCeiling`."""
-    rookies = [FakePlayer(1, 80, Position.QB, 'Best QB'),
-               FakePlayer(2, 75, Position.RB, 'Need RB')]
-    ceilings = {'Best QB': 95, 'Need RB': needCeiling}
-    rb = _star(rating=needStarter, position=Position.RB, name='Weak RB')
+def test_need_takes_the_clear_need_over_a_qb_behind_a_kept_star():
+    """Owner, 2026-11-04 (the clear-need rule): behind a kept 4-star QB with a 2-star RB,
+    the RB is the pick. Need alone now gets there at every gap the rule used to cover and
+    beyond (a 95-ceiling QB over an 88 starter is a 7-point upgrade; an 88 RB over a 70
+    one is 18)."""
+    for needCeiling in (92, 88):
+        rookies = [FakePlayer(1, 80, Position.QB, 'Best QB'),
+                   FakePlayer(2, 75, Position.RB, 'Need RB')]
+        ceilings = {'Best QB': 95, 'Need RB': needCeiling}
+        clubs = _teams(1)
+        clubs[0].rosterDict = {'qb': _star(rating=88),
+                               'rb': _star(rating=70, position=Position.RB, name='Weak RB')}
+        _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
+        assert next(e for e in events if e['type'] == 'pick')['playerName'] == 'Need RB'
+    print("PASS need takes the clear need behind a kept star")
+
+
+def test_the_clear_need_rule_still_moves_a_need_pick_off_a_kept_star():
+    """When need itself lands behind a kept 4-star and a clear-need rookie of comparable
+    ceiling exists, `preferClearNeed` takes him. Under need-based picks that happens
+    only across position weights: a 99-ceiling QB over an 85 starter (14 points at 1.00)
+    outscores a 96 TE over a 74 (22 points at 0.60)."""
+    h = Harness([])
     clubs = _teams(1)
-    clubs[0].rosterDict = {'qb': _star(rating=starRating), 'rb': rb}
-    _, events = _run(rookies, clubs, StubBrain(lambda p, team: ceilings[p.name]))
-    return next(e for e in events if e['type'] == 'pick')['playerName']
-
-
-def test_a_top_pick_takes_comparable_upside_at_a_clear_need():
-    """Owner, 2026-11-04: behind a kept 4-star QB, with a 2-star RB, the #1 pick takes
-    an RB of comparable upside over the best available QB, unless he is far below."""
-    assert _clearNeedDraft(92) == 'Need RB'      # 3 points below: comparable
-    assert _clearNeedDraft(91) == 'Need RB'      # the edge of the gap
-    assert _clearNeedDraft(88) == 'Best QB'      # 7 below: too far
-    assert _clearNeedDraft(92, starRating=80) == 'Best QB'   # the QB is no star
-    assert _clearNeedDraft(92, needStarter=78) == 'Best QB'  # a 3-star RB is no clear need
-    print("PASS a clear need with comparable upside beats the best available")
+    clubs[0].rosterDict = {'qb': _star(rating=85),
+                           'te': _star(rating=74, position=Position.TE, name='Weak TE')}
+    ceilings = {'Best QB': 99, 'Need TE': 96}
+    brain = StubBrain(lambda p, team: ceilings[p.name])
+    qb, rb = FakePlayer(1, 80, Position.QB, 'Best QB'), FakePlayer(2, 75, Position.TE, 'Need TE')
+    plain = h.chooseRookiePick(brain, clubs[0], [qb, rb], 5, preferNeed=False)
+    assert plain is qb, "need alone should take the QB here, or this tests nothing"
+    assert h.chooseRookiePick(brain, clubs[0], [qb, rb], 5) is rb
+    print("PASS the clear-need rule moves a need pick off a kept 4-star")
 
 
 def test_one_superstar_receiver_does_not_lock_the_position():
@@ -510,7 +592,8 @@ def test_re_sign_intent_follows_the_limit_then_the_budget():
 
     kept, walked = P(1), P(2)
 
-    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True):
+    def fakeDecision(self, team, brain, faOrder, slotOwners, limit, afford=True, pool=None,
+                     planIntent=None):
         calls.append((slotOwners, limit))
         return [kept, walked], [], [kept], 0, 0
 
