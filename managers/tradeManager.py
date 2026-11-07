@@ -1275,6 +1275,16 @@ class TradeMarket:
         return any(getattr(h.get('player'), 'id', None) == pid
                    for season in (plan or []) for h in (season or []))
 
+    def _isCommittedProspect(self, team, prospect) -> bool:
+        """Has this team's plan committed to him (it let a starter go at step 3 because he
+        covers the slot)? Such a prospect is neither listed nor used as payment: trading him
+        empties a slot the team already gave up its starter for."""
+        committedFn = getattr(self.playerManager, 'committedProspect', None)
+        try:
+            return callable(committedFn) and committedFn(team, [prospect]) is not None
+        except Exception:
+            return False
+
     def _boughtInProspectSale(self, team, prospect) -> bool:
         """Did this team buy the prospect in a prospect sale this season or last? It
         bought him to promote him (a commitment at the next step 3), so it does not sell
@@ -1324,18 +1334,14 @@ class TradeMarket:
                 return []
         elif not self.hasClarity():
             return []
-        committedFn = getattr(self.playerManager, 'committedProspect', None)
         out = []
         for prospect in getattr(team, 'prospects', None) or []:
             seasons = int(getattr(prospect, 'prospect_seasons', 0) or 0)
             finalWindow = seasons >= int(PROSPECT_DEVELOPMENT_WINDOW) - 1
             if wasAcquiredThisSeason(prospect, self.season) or self._boughtInProspectSale(team, prospect):
                 continue
-            try:
-                if callable(committedFn) and committedFn(team, [prospect]) is not None:
-                    continue
-            except Exception:
-                pass
+            if self._isCommittedProspect(team, prospect):
+                continue
             if self._believedCeiling(team, prospect) <= REPLACEMENT_RATING:
                 continue        # nobody pays for a prospect barely above replacement
             pos = getattr(getattr(prospect, 'position', None), 'name', '')
@@ -2570,6 +2576,10 @@ class TradeMarket:
             # Caddies bought Jaems Cherrycola and paid with him in the next season's window)
             if wasAcquiredThisSeason(prospect, self.season) or self._boughtInProspectSale(team, prospect):
                 continue        # pass-the-parcel, one asset class down
+            # nor one the plan let a starter walk for (step 3, docs/TEAM_PLAN.md stage 3):
+            # paying with him empties a slot the team already gave its starter up for
+            if self._isCommittedProspect(team, prospect):
+                continue
             # ⚠️ READ BY THE CLUB VALUING HIM, NOT THE ONE HOLDING HIM (2026-11-02). The seller
             # used to price a prospect it was being offered through the BUYER's scouting,
             # so a good scout could never spot a dud and a poor one could never be sold

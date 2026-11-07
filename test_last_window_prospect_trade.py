@@ -252,3 +252,15 @@ def test_a_prospect_bought_in_a_sale_is_not_sold_on():
     market._prospectBuys = {(seller.id, kid.id)}
     assert market.prospectListingsFor(seller) == []
     print("PASS a prospect bought in a sale is not sold on")
+
+
+def test_a_committed_prospect_is_not_used_as_payment():
+    """A team that let a starter walk at step 3 because a prospect covers the slot must
+    not pay with that prospect before the draft: the slot would be empty and the starter
+    already gone."""
+    market, _s, buyer, _kid, _pm = _earlySetup(week=None)
+    assert 21 in [a['id'] for a in market._tradeableAssets(buyer) if a['kind'] == 'prospect']
+    market, _s, buyer, _kid, _pm = _earlySetup(week=None, committed={21})
+    assert 21 not in [a['id'] for a in market._tradeableAssets(buyer) if a['kind'] == 'prospect']
+    print("PASS a committed prospect is not used as payment")
+
