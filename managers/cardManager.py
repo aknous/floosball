@@ -1039,6 +1039,28 @@ class CardManager:
                     "baseMult": "baseDelta", "enhancedMult": "enhancedDelta",
                     "maxMult": "maxDelta", "q4MultFactor": "q4MultDelta",
                 }
+                # ⚠️ STAT-LADDER CARDS ARE SIZED PER POSITION, NOT BY EDITION, so the 2x
+                # probe above moves none of their params and their text stayed at tier I
+                # while the calculator paid the tier (about 48 effects: Paydirt, End Zone,
+                # Slippery, ...). Scale their payouts by name. Their FPx params are bare
+                # DELTAS (Paydirt's cap is 0.30, not 1.30), so they scale straight by the
+                # tier; thresholds, gates, chances and counts do not move.
+                if not any(scaled.get(k) != primary.get(k) for k in baseR):
+                    for k, sv in primary.items():
+                        if isinstance(sv, bool) or not isinstance(sv, (int, float)):
+                            continue
+                        isFp = bool(_re.match(r'^per\w*(FP|Floobits)$', k)) or k in ("bonusFP", "baseFP", "gateFP")
+                        isFpx = (bool(_re.match(r'^per\w*Mult$', k)) or k in (
+                            "bonusMult", "gateMult", "cleanSheetMult", "ratioMult", "maxMult",
+                            "growthPerTick")) and 0 < sv < 1
+                        if isFp or isFpx:
+                            scaled[k] = _fmt(sv * tierMult)
+                    if effectName == "odometer":
+                        from constants import ODOMETER_GATE_FP_BY_POSITION
+                        pays = [_fmt(p * tierMult) for p in ODOMETER_GATE_FP_BY_POSITION.get(template.position) or ()]
+                        if pays:
+                            scaled["gatePayText"] = " / ".join(f"+{p}" for p in pays)
+                            scaled["gateMaxFP"] = _fmt(sum(p * tierMult for p in ODOMETER_GATE_FP_BY_POSITION[template.position]))
                 for fk, dk in _FULL_MULT.items():
                     if isinstance(scaled.get(fk), (int, float)):
                         scaled[dk] = round(scaled[fk] - 1, 2)
@@ -1059,8 +1081,11 @@ class CardManager:
                 _rebuildTemplates(scaled)
                 # If nothing in the text changed (Copycat copies dynamically,
                 # Odometer lists yard thresholds), spell out the multiplier.
+                # Say WHAT is scaled: on an FPx card it is the bonus above 1.0, never the
+                # player's own points (a user read "x1.15 output" as the latter).
                 if (effectConfig.get("detail") or "") == baseDetail:
-                    tierNote = f"Tier {tierRoman}: ×{tierMult:g} output"
+                    what = {"mult": "FPx bonus", "floobits": "Floobits"}.get(outputType, "FP")
+                    tierNote = f"Tier {tierRoman}: ×{tierMult:g} {what}"
 
         # Edition secondary bonuses removed — edition now determines effect tier only
         effectConfig.pop("secondary", None)
