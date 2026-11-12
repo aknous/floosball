@@ -97,20 +97,23 @@ def tally(session, proposal) -> dict:
 
 
 def activeFanCounts(session, proposal) -> dict:
-    """{teamId: ACTIVE fans} for the proposal's two teams (owner, 2026-10-30): users who
-    favorite the team and signed in within `SUPPORTER_ACTIVITY_WINDOW_DAYS`, the window
-    `anomalyManager._countActiveUsers` uses. A fan who voted on this proposal counts
-    whenever they last signed in, so a yes vote can never outnumber the fans it is
-    measured against. A team whose fans have all drifted away counts as fanless.
+    """{teamId: ACTIVE fans} for the proposal's two teams: users who favorite the team and
+    signed in during the trade's season (`activitySince`; owner, 2026-11-11). An offseason
+    trade runs under the number of the season that just ended, so its fans are the ones
+    active in that season. A fan who voted on this proposal counts whenever they last signed
+    in, so a yes vote can never outnumber the fans it is measured against. A team whose fans
+    have all drifted away counts as fanless.
+
+    ⚠️ It was signed in within `SUPPORTER_ACTIVITY_WINDOW_DAYS` (14). A season is about a
+    week of real time, so that window took in fans who had stopped playing a season ago, and
+    a team with lapsed fans needed more yes votes than its real fanbase could give.
 
     Counted fresh rather than through `sentiment_repository.teamFanCounts`, which caches
     for a minute and counts every favoriter: a vote is decided once, against the fanbase
     as it is when it closes."""
-    from datetime import timedelta
     from sqlalchemy import or_
-    from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
     from database.models import TradeVote, User
-    cutoff = datetime.utcnow() - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+    cutoff = activitySince(session, proposal.season)
     voters = session.query(TradeVote.user_id).filter(TradeVote.proposal_id == proposal.id)
     teamIds = (proposal.team_a_id, proposal.team_b_id)
     fans = {}
@@ -119,6 +122,28 @@ def activeFanCounts(session, proposal) -> dict:
                            or_(User.last_login_at >= cutoff, User.id.in_(voters))).all()):
         fans[int(tid)] = fans.get(int(tid), 0) + 1
     return fans
+
+
+def activitySince(session, season) -> datetime:
+    """When a fan must have signed in since to count for a trade in `season`: the season's
+    start (`seasons.start_date`, naive UTC, the rollover anchor). `last_login_at` is the most
+    recent sign-in, so any sign-in since then passes. Falls back to the last
+    `SUPPORTER_ACTIVITY_WINDOW_DAYS` when the season has no start recorded, or its start is
+    still ahead (a season created by an early rollover before its anchor)."""
+    from datetime import timedelta
+    from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+    from database.models import Season
+    now = datetime.utcnow()
+    try:
+        row = session.get(Season, int(season)) if season is not None else None
+        start = row.start_date if row is not None else None
+    except Exception:
+        start = None
+    if start is not None and getattr(start, 'tzinfo', None) is not None:
+        start = start.replace(tzinfo=None)
+    if start is None or start > now:
+        return now - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+    return start
 
 
 # ─── proposals ──────────────────────────────────────────────────────────────────────────

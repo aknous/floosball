@@ -857,6 +857,12 @@ ONSIDE_AGGR_K = 0.8               # log-odds swing from a timid (-1) to a bold (
 # kicker to the NFL's 52-58 yard cliff.
 FOURTH_KICK_MID = 0.61
 FOURTH_KICK_SCALE = 0.043
+# A kick the coach's curve takes at least FOURTH_KICK_NO_PUNT_AT of the time is never a
+# punt (the go-rate remainder goes to the kick); at FOURTH_KICK_NO_PUNT_FROM or less the
+# go / kick / punt mix is unchanged; linear between. At the default midpoint that is a
+# ~76% make and a ~70% make. Owner 2026-11-12: no punting in range unless the kick is poor.
+FOURTH_KICK_NO_PUNT_FROM = 0.90
+FOURTH_KICK_NO_PUNT_AT = 0.97
 # The sim's median kicker's make curve (measured over the harness league), and the range
 # beyond which he cannot kick at all. Used to recover the kick share the NFL go table
 # implicitly assumes, so the go rate can be conditioned on THIS team's kicker.
@@ -3660,8 +3666,9 @@ def tradingEnabled(session=None) -> bool:
 #   - the league-wide vote has more yes than no, and
 #   - each team involved with fans gets at least `TRADE_VOTE_FAN_FRACTION` of its fans
 #     (minimum 1) voting yes, and its own fans do not vote it down (more no than yes).
-# "Fans" means ACTIVE fans (owner, 2026-10-30): signed in within
-# SUPPORTER_ACTIVITY_WINDOW_DAYS, or voted on this trade (`tradeVotes.activeFanCounts`).
+# "Fans" means ACTIVE fans: signed in since the trade's season started (an offseason trade
+# runs under the season that just ended), or voted on this trade (`tradeVotes.activeFanCounts`,
+# owner 2026-11-11; was the 14-day SUPPORTER_ACTIVITY_WINDOW_DAYS, which spans two seasons).
 # A team with no active fans needs no fan approvals of its own: the league-wide yes it already
 # needs is the "anyone can approve it" the owner asked for. No vote, or too few fan
 # approvals, and the trade fails.

@@ -112,6 +112,27 @@ class TheKick(unittest.TestCase):
     def testOutOfRangeIsNeverAKick(self):
         self.assertEqual(self._share(45, 55), 0.0)          # 62 yards, range 55
 
+    def _fourthDown(self, ballOn, leg):
+        s = Scenario()
+        s.situation(quarter=3, clock=576, down=4, distance=9, ballOn=ballOn,
+                    offScore=17, defScore=21)
+        s.home.coach.aggressiveness = 92
+        s.setKickerLeg('home', leg)
+        return s, s.fourthDownPlay()
+
+    def testAKickTheCoachTrustsIsNeverAPunt(self):
+        """Prod game 6362: 4th & 9 at the opponent's 33, a 77% kick, punted for a
+        touchback. The go-rate remainder used to fall to the punt."""
+        for _ in range(200):
+            s, kind = self._fourthDown(33, 57)
+            self.assertNotEqual(kind, PlayType.Punt)
+        self.assertEqual(s.game.play.insights['fourthDown']['puntProbability'], 0.0)
+
+    def testALongKickCanStillBeAPunt(self):
+        """The 52-58 yard cliff is a real kick-or-punt call and is left alone."""
+        s, _ = self._fourthDown(40, 62)
+        self.assertGreater(s.game.play.insights['fourthDown']['puntProbability'], 30.0)
+
     def testAFutileKickIsNeverTaken(self):
         s = Scenario()
         s.situation(quarter=2, clock=600, down=4, distance=8, ballOn=20)
