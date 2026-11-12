@@ -3666,8 +3666,9 @@ def tradingEnabled(session=None) -> bool:
 #   - the league-wide vote has more yes than no, and
 #   - each team involved with fans gets at least `TRADE_VOTE_FAN_FRACTION` of its fans
 #     (minimum 1) voting yes, and its own fans do not vote it down (more no than yes).
-# "Fans" means ACTIVE fans (owner, 2026-10-30): signed in within
-# SUPPORTER_ACTIVITY_WINDOW_DAYS, or voted on this trade (`tradeVotes.activeFanCounts`).
+# "Fans" means ACTIVE fans: signed in since the trade's season started (an offseason trade
+# runs under the season that just ended), or voted on this trade (`tradeVotes.activeFanCounts`,
+# owner 2026-11-11; was the 14-day SUPPORTER_ACTIVITY_WINDOW_DAYS, which spans two seasons).
 # A team with no active fans needs no fan approvals of its own: the league-wide yes it already
 # needs is the "anyone can approve it" the owner asked for. No vote, or too few fan
 # approvals, and the trade fails.

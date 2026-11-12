@@ -16,7 +16,7 @@ _tmp = tempfile.mkdtemp(prefix='floos_tradevotes_')
 os.environ['DATABASE_DIR'] = _tmp
 
 from database.connection import init_db, get_session                 # noqa: E402
-from database.models import User, TradeProposal, TradeVote            # noqa: E402
+from database.models import User, TradeProposal, TradeVote, Season    # noqa: E402
 from managers import tradeVotes, tradeManager                         # noqa: E402
 from managers.tradeManager import Listing, Bid                        # noqa: E402
 
@@ -84,6 +84,7 @@ class ProposalLifecycleTests(unittest.TestCase):
             for model in (TradeVote, TradeProposal):
                 s.query(model).delete()
             s.query(User).delete()
+            s.query(Season).filter(Season.season_number == 5).delete()
             s.commit()
         finally:
             s.close()
@@ -118,6 +119,7 @@ class ProposalLifecycleTests(unittest.TestCase):
 
     def addFans(self, teamId, n, start, lastLogin='now'):
         seen = {'now': datetime.utcnow(), 'gone': datetime.utcnow() - timedelta(days=60),
+                'lastSeason': datetime.utcnow() - timedelta(days=10),
                 'never': None}[lastLogin]
         s = get_session()
         try:
@@ -181,6 +183,33 @@ class ProposalLifecycleTests(unittest.TestCase):
             s.close()
         self.assertEqual((t['teams'][B]['fans'], t['teams'][B]['need']), (1, 1))
         self.assertTrue(t['passed'])
+
+    def testActiveMeansSignedInDuringTheTradesSeason(self):
+        """A fan who signed in 10 days ago (inside the old 14-day window) but before this
+        season started does not count; with no season start recorded, the 14 days apply."""
+        made = tradeVotes.propose(self.sm, [self.entry(self.seller, self.buyer)], 5, None,
+                                  tradeVotes.PHASE_OFFSEASON, tradeVotes.CLOSE_ROOKIE_DRAFT)
+        self.addFans(B, 3, 100, lastLogin='lastSeason')
+        b = self.addFans(B, 1, 110)
+
+        def bFans():
+            s = get_session()
+            try:
+                return tradeVotes.tally(s, s.get(TradeProposal, made[0]['id']))['teams'][B]['fans']
+            finally:
+                s.close()
+
+        self.assertEqual(bFans(), 4)                          # no season row: 14-day fallback
+        s = get_session()
+        try:
+            s.add(Season(season_number=5, start_date=datetime.utcnow() - timedelta(days=4)))
+            s.commit()
+        finally:
+            s.close()
+        self.assertEqual(bFans(), 1)                          # only this season's fan
+        self.vote(made[0]['id'], self.addFans(A, 1, 120) + b)
+        out = tradeVotes.resolve(self.sm, tradeVotes.CLOSE_ROOKIE_DRAFT)
+        self.assertEqual([o['status'] for o in out], ['approved'])
 
     def testAVoterCountsAsActiveAndLapsedFansLeaveATeamFanless(self):
         made = tradeVotes.propose(self.sm, [self.entry(self.seller, self.buyer)], 5, None,
