@@ -857,6 +857,12 @@ ONSIDE_AGGR_K = 0.8               # log-odds swing from a timid (-1) to a bold (
 # kicker to the NFL's 52-58 yard cliff.
 FOURTH_KICK_MID = 0.61
 FOURTH_KICK_SCALE = 0.043
+# A kick the coach's curve takes at least FOURTH_KICK_NO_PUNT_AT of the time is never a
+# punt (the go-rate remainder goes to the kick); at FOURTH_KICK_NO_PUNT_FROM or less the
+# go / kick / punt mix is unchanged; linear between. At the default midpoint that is a
+# ~76% make and a ~70% make. Owner 2026-11-12: no punting in range unless the kick is poor.
+FOURTH_KICK_NO_PUNT_FROM = 0.90
+FOURTH_KICK_NO_PUNT_AT = 0.97
 # The sim's median kicker's make curve (measured over the harness league), and the range
 # beyond which he cannot kick at all. Used to recover the kick share the NFL go table
 # implicitly assumes, so the go rate can be conditioned on THIS team's kicker.

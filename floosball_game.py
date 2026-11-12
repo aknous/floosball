@@ -4407,7 +4407,23 @@ class Game:
             pKick = (1.0 - goProb) * kickShare
             goShare = goProb / max(1e-6, 1.0 - (1.0 - goProb) * typKick)
             pGo = min(1.0, goShare) * (1.0 - pKick)
+            # ⚠️ A KICK THE COACH TRUSTS IS NEVER A PUNT. Rescaling the go rate leaves a
+            # remainder that falls to the punt, because the NFL's non-kick calls at this
+            # spot include punts by teams with a weak kicker or wind; applied to a good
+            # kicker that is a punt nobody would call. Prod game 6362: 4th & 9 at the BUF
+            # 33, a 77% kick, punted (1.3%) for a touchback. Once the coach's own curve
+            # takes the kick FOURTH_KICK_NO_PUNT_AT of the time, the whole remainder is the
+            # kick; at FOURTH_KICK_NO_PUNT_FROM or less (a long or poor kick, the NFL's
+            # 52-58 yard cliff) the mix is unchanged; linear between.
+            from constants import FOURTH_KICK_NO_PUNT_FROM, FOURTH_KICK_NO_PUNT_AT
+            if kickShare > FOURTH_KICK_NO_PUNT_FROM:
+                trust = min(1.0, (kickShare - FOURTH_KICK_NO_PUNT_FROM)
+                            / (FOURTH_KICK_NO_PUNT_AT - FOURTH_KICK_NO_PUNT_FROM))
+                pKick += max(0.0, 1.0 - pGo - pKick) * trust
             self.play.insights['fourthDown']['goProbability'] = round(pGo * 100, 1)
+            self.play.insights['fourthDown']['kickProbability'] = round(pKick * 100, 1)
+            self.play.insights['fourthDown']['puntProbability'] = round(
+                max(0.0, 1.0 - pGo - pKick) * 100, 1)
             roll = _random.random()
             goes = roll < pGo
             kicks = (not goes) and roll < pGo + pKick
