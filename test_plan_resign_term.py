@@ -107,6 +107,21 @@ def test_a_re_sign_is_sized_on_rating_plus_results_credit():
     print("PASS the deal's tier reads the GM's read of him")
 
 
+def test_a_walkers_record_does_not_follow_him_to_a_new_team():
+    """A record is for the team that re-signed him. Signing anywhere else (the FA draft
+    after he walked) reads his ordinary roll."""
+    beans, waffles = SimpleNamespace(id=7), SimpleNamespace(id=19)
+    p = _player()
+    p.team = beans
+    rec = _pm({1: (14, 1, 3, 0.0, 7)})
+    assert payroll.planFittedTerm(rec, p, 14, roll=2) == 1
+    p.team = waffles
+    assert payroll.planFittedTerm(rec, p, 14, roll=2) == 2
+    p.team = 'Free Agent'
+    assert payroll.planFittedTerm(rec, p, 14, roll=2) == 2
+    print("PASS a record applies only on the team that re-signed him")
+
+
 def test_contract_term_reads_the_plan():
     class PM:
         _planResignTerms = {1: (14, 1, 3)}

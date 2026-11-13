@@ -9452,13 +9452,22 @@ class SeasonManager:
                 terms = self.playerManager._planResignTerms = {}
             season = getattr(self.currentSeason, 'seasonNumber', 0)
             planned = getattr(brain, 'planResignTerms', None) or {}
+            # ⚠️ ONLY FOR PLAYERS RE-SIGNED, AND TAGGED WITH THE TEAM. A walker's record
+            # would otherwise follow him to whoever signs him in the FA draft and size that
+            # deal off his old team's plan (`payroll._planEntry` also checks the team).
+            keptIds = {getattr(p, 'id', None) for p in kept}
             for p in expiring:
                 pid = getattr(p, 'id', None)
                 terms.pop(pid, None)
-                if pid in planned:
-                    terms[pid] = (season,) + tuple(planned[pid])
+                if pid in planned and pid in keptIds:
+                    terms[pid] = (season,) + tuple(planned[pid]) + (getattr(team, 'id', None),)
         if afford:
             kept = self._affordableResigns(team, expiring, kept)
+            if shift == 1:
+                final = {getattr(p, 'id', None) for p in kept}
+                for p in expiring:
+                    if getattr(p, 'id', None) not in final:
+                        terms.pop(getattr(p, 'id', None), None)
         return expiring, forcedWalk, kept, pickDepth, teamsAhead
 
     def _affordableResigns(self, team, expiring, kept, salaryFor=None, seasons=None) -> list:

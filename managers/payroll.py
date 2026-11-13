@@ -468,10 +468,17 @@ def contractTerm(playerManager, player, season: int) -> int:
 
 
 def _planEntry(playerManager, player, season: int):
-    """This offseason's plan record for a re-sign, `(season, held, horizon, credit)`, or
-    None (`SeasonManager._resignDecision`)."""
+    """This offseason's plan record for a re-sign, `(season, held, horizon, credit,
+    teamId)`, or None (`SeasonManager._resignDecision`). A record from another season, or
+    for a team the player is no longer with (he walked and is signing elsewhere), is
+    ignored: it describes his old team's plan, not this deal."""
     entry = (getattr(playerManager, '_planResignTerms', None) or {}).get(getattr(player, 'id', None))
-    return entry if entry and entry[0] == season else None
+    if not entry or entry[0] != season:
+        return None
+    if len(entry) > 4 and entry[4] is not None:
+        if getattr(getattr(player, 'team', None), 'id', None) != entry[4]:
+            return None
+    return entry
 
 
 def planFittedTerm(playerManager, player, season: int, roll: int) -> int:
