@@ -62,7 +62,6 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
-    _refitResignTermsS14()
     _backfillHomeTeams()
     _backfillFacilityRankings()
     _backfillTradeMoves()
@@ -4015,53 +4014,6 @@ def _backfillFacilityRankings():
 
 
 _PROSPECT_CONTRACT_MARKER = 'prospect_contracts_backfilled'
-
-
-_RESIGN_TERMS_S14_MARKER = 'resign_terms_refit_s14'
-
-# (player id, name, team id, term the old roll signed, term the plan rule signs)
-_RESIGN_TERMS_S14 = (
-    (241, 'Dew Stone', 7, 2, 1),        # Beans: the plan hands RB to Zeal Fletcher after one
-    (345, 'Tuck Marberry', 19, 1, 3),   # Waffles: QB 76 performing 94-98, read as a 4-star
-)
-
-
-def _refitResignTermsS14():
-    """ONE-SHOT (marker `resign_terms_refit_s14`, owner 2026-11-13): re-term two season-14
-    re-signs signed before re-sign terms followed the team plan (`payroll.planFittedTerm`).
-    Their terms are what that rule signs in a replay of this offseason's step 3. Runs at
-    boot, before players load: the sim writes `term` back from memory at every offseason
-    step, so an edit to a running league would be overwritten.
-
-    Each player changes only if he is exactly where the re-sign left him (same team, the
-    old term with all of it remaining); otherwise he is left alone and logged. Also fixes
-    the `resign` recap row's "N season(s)". Remove once it has run on prod."""
-    from sqlalchemy import text as _text
-    try:
-        with engine.connect() as conn:
-            if conn.execute(_text("SELECT 1 FROM app_settings WHERE key=:k"),
-                            {'k': _RESIGN_TERMS_S14_MARKER}).first():
-                return
-            done = []
-            for pid, name, teamId, was, now in _RESIGN_TERMS_S14:
-                row = conn.execute(_text("SELECT name, team_id, term, term_remaining FROM players "
-                                         "WHERE id=:id"), {'id': pid}).first()
-                if row is None or row[0] != name or row[1] != teamId or row[2] != was or row[3] != was:
-                    logger.warning(f"Re-sign term refit: {name} not as re-signed ({row}), left alone")
-                    continue
-                conn.execute(_text("UPDATE players SET term=:t, term_remaining=:t WHERE id=:id"),
-                             {'t': now, 'id': pid})
-                conn.execute(_text("UPDATE season_recap_events SET detail=:d WHERE player_id=:id "
-                                   "AND season=14 AND event_type='resign'"),
-                             {'d': f"{now} season(s)", 'id': pid})
-                done.append(f"{name} {was} -> {now}")
-            conn.execute(_text("INSERT INTO app_settings (key, value, updated_at) "
-                               "VALUES (:k, :v, CURRENT_TIMESTAMP)"),
-                         {'k': _RESIGN_TERMS_S14_MARKER, 'v': '; '.join(done) or 'none'})
-            conn.commit()
-            logger.info(f"Re-sign term refit: {', '.join(done) or 'nothing changed'}")
-    except Exception as e:
-        logger.warning(f"Re-sign term refit skipped: {e}")
 
 
 def _backfillHomeTeams():
