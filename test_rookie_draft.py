@@ -101,6 +101,7 @@ class Harness:
     committedRookie = PlayerManager.committedRookie
     chooseRookiePick = PlayerManager.chooseRookiePick
     prospectRanking = PlayerManager.prospectRanking
+    averageStarterByPosition = PlayerManager.averageStarterByPosition
     superstarLockedPositions = PlayerManager.superstarLockedPositions
     keptStarPositions = PlayerManager.keptStarPositions
     preferClearNeed = PlayerManager.preferClearNeed
@@ -630,3 +631,26 @@ def test_the_prospect_ranking_is_the_public_read_and_kickers_fall():
     assert ranked.index('Big Leg') > ranked.index('Public Favorite'), ranked
     assert all(r.is_upcoming_rookie for r in (a, b, k)), "the ranking changed the class"
     print("PASS the ranking reads the public consensus, and kickers fall")
+
+
+def test_the_prospect_ranking_measures_against_the_starters_teams_have():
+    """Owner, 2026-11-13: against a flat replacement level the top six of the season-14
+    class were all QBs, while league QB starters average 81 and TEs 78. A prospect who
+    beats the average starter at his position ranks first, by how far; the rest follow by
+    the old value. Here an 86 QB barely beats 84 starters while a 92 TE beats 74s by a
+    lot, so the TE leads (against 67 the QB did); an 80 QB who beats nobody ranks below
+    both, and a kicker below the kicker starters still falls under him."""
+    qb = FakePlayer(1, 86, Position.QB, 'Steady QB')
+    te = FakePlayer(2, 92, Position.TE, 'Big TE')
+    backup = FakePlayer(3, 80, Position.QB, 'Backup QB')
+    k = FakePlayer(4, 75, Position.K, 'Short Leg')
+    clubs = _teams(2)
+    for c in clubs:
+        c.rosterDict = {'qb': _star(rating=84, name='QB'), 'te': _star(rating=74, position=Position.TE, name='TE'),
+                        'k': _star(rating=80, position=Position.K, name='K')}
+    h = Harness([qb, te, backup, k])
+    ranked = [r.name for r in h.prospectRanking(StubBrain(lambda p, team: p.playerRating), teams=clubs)]
+    assert ranked == ['Big TE', 'Steady QB', 'Backup QB', 'Short Leg'], ranked
+    flat = [r.name for r in h.prospectRanking(StubBrain(lambda p, team: p.playerRating), teams=[])]
+    assert flat[0] == 'Steady QB', flat
+    print("PASS the prospect ranking measures against the starters teams have")

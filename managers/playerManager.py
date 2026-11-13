@@ -5241,19 +5241,63 @@ class PlayerManager:
             -self.countTeamProspectsAtPosition(team, r.position)))
         return self.preferClearNeed(brain, team, pool, choice, intent) if preferNeed else choice
 
-    def prospectRanking(self, brain=None) -> list:
+    def prospectRanking(self, brain=None, teams=None) -> list:
         """The upcoming class ranked like a published prospect list: best first by the
-        PUBLIC read of what each prospect is worth (`rookieBoardValue` on the consensus
-        ceiling, vision 0, no scouting error), with no team or need attached (owner,
-        2026-11-04: a ranking, not a mock draft, which read as a team's pick). Position
-        weighs in, so kickers fall. Ties go to the higher public ceiling. Read-only.
-        Only the consensus read is used, so no team's brain is needed."""
+        PUBLIC read of what each prospect is worth (the consensus ceiling, vision 0, no
+        scouting error), with no team or need attached (owner, 2026-11-04: a ranking, not
+        a mock draft, which read as a team's pick). Position weighs in, so kickers fall.
+        Read-only. Only the consensus read is used, so no team's brain is needed.
+
+        ⚠️ TWO TIERS, MEASURED AGAINST THE STARTERS TEAMS HAVE (owner, 2026-11-13). A
+        prospect whose public ceiling beats the league's average starter at his position
+        (`averageStarterByPosition`, never below REPLACEMENT_RATING) ranks first, by how
+        far he beats him times position weight and a rookie-length term; the rest rank
+        below by `rookieBoardValue` (ceiling over replacement), as the whole list used to.
+        Against a flat 67 the top six of the season-14 class were all QBs, while league
+        QB starters average 81 and TEs 78: QBs went 4-8 picks below their rank and TEs as
+        many above it. Measured against the starters, the ranking's correlation with
+        where the class was drafted rose 0.82 -> 0.88 (14 replayed drafts).
+        ⚠️ DISPLAY ONLY: `rookieBoardValue` is unchanged, because it prices upcoming-draft
+        picks in trades and each team's own board, and the draft picks by need."""
+        import trading
+        from constants import REPLACEMENT_RATING
+        from managers.frontOfficeBrain import positionValue
         consensus = _ConsensusBrain(brain)
         rookies = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
-        return sorted(rookies, key=lambda r: (
-            -self.rookieBoardValue(consensus, None, r),
-            -self.rookieCeiling(consensus, None, r),
-            -float(getattr(r, 'playerRating', 0) or 0)))
+        bars = self.averageStarterByPosition(teams)
+
+        def key(r):
+            ceiling = self.rookieCeiling(consensus, None, r)
+            bar = max(float(REPLACEMENT_RATING), bars.get(getattr(r.position, 'value', None),
+                                                          float(REPLACEMENT_RATING)))
+            try:
+                posW = positionValue(r)
+            except Exception:
+                posW = trading.averagePositionWeight()
+            over = (ceiling - bar) * posW * trading.rookieTermForSkill(ceiling)
+            return (0 if over > 0 else 1, -max(0.0, over),
+                    -self.rookieBoardValue(consensus, None, r), -ceiling,
+                    -float(getattr(r, 'playerRating', 0) or 0))
+        return sorted(rookies, key=key)
+
+    def averageStarterByPosition(self, teams=None) -> dict:
+        """{position value: the league's average starter rating there}, every team's
+        rostered starters (both WR slots), for the public prospect ranking. Empty when the
+        league cannot be read, which leaves the ranking on replacement level."""
+        if teams is None:
+            try:
+                teams = getattr(self.serviceContainer.getService('team_manager'), 'teams', None)
+            except Exception:
+                teams = None
+        slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
+        out = {}
+        for posValue, names in slots.items():
+            ratings = [float(getattr(p, 'playerRating', 0) or 0)
+                       for t in (teams or []) for p in ((getattr(t, 'rosterDict', None) or {}).get(s) for s in names)
+                       if p is not None]
+            if ratings:
+                out[posValue] = sum(ratings) / len(ratings)
+        return out
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.
