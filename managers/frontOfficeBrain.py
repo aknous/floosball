@@ -1686,10 +1686,25 @@ class FrontOfficeBrain:
         gain = sum(sum(h['rating'] for h in a) - sum(h['rating'] for h in b)
                    for a, b in zip(withPlan, without))
         held = sum(1 for season in withPlan if any(h['player'] is player for h in season))
+        credit = 0.0
         try:
-            gain += self._resultsCredit(player, team, coach) * held
+            credit = float(self._resultsCredit(player, team, coach))
+            gain += credit * held
         except Exception:
             pass
+        # How long the plan wants him: the seasons he holds the slot from next season on,
+        # until someone in the plan takes it, and his results credit, which sizes the deal
+        # (`planResignTerms`, read by `payroll.contractTerm`).
+        run = 0
+        for season in withPlan:
+            if not any(h['player'] is player for h in season):
+                break
+            run += 1
+        if pid is not None:
+            terms = getattr(self, 'planResignTerms', None)
+            if terms is None:
+                terms = self.planResignTerms = {}
+            terms[pid] = (run, len(withPlan), credit)
         coverer = None
         for a, b in zip(withPlan, without):
             inWith = {id(h['player']) for h in a if h['player'] is not None}
@@ -1831,6 +1846,7 @@ class FrontOfficeBrain:
         the re-sign step turns into a commitment if he walks."""
         from managers.playerManager import fanVerdict
         self.lastCoverage = {}
+        self.planResignTerms = {}
         ranked = []
         bar = self.moveOnBar(coach, FO_RESIGN_SURPLUS_MARGIN, floor=0.0)
         for player in expiring:

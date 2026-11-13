@@ -1236,18 +1236,35 @@ class PlayerManager:
         left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
         return max(1, int(base), left)
 
-    def _getPlayerTerm(self, player, rng=None) -> int:
+    @staticmethod
+    def tierForRating(rating):
+        """The star tier a rating reads as (the thresholds `sortPlayersByPosition` uses)."""
+        r = float(rating or 0)
+        if r >= 92:
+            return FloosPlayer.PlayerTier.TierS
+        if r >= 84:
+            return FloosPlayer.PlayerTier.TierA
+        if r >= 76:
+            return FloosPlayer.PlayerTier.TierB
+        if r >= 68:
+            return FloosPlayer.PlayerTier.TierC
+        return FloosPlayer.PlayerTier.TierD
+
+    def _getPlayerTerm(self, player, rng=None, tierRating=None) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
         Rookies (seasonsPlayed == 0) get a standard prove-it contract keyed to
         tier. Otherwise the term is a tier-random range, capped by how much
         useful career the player likely has left — we never offer a deal that
         runs well past their expected retirement (longevity - seasonsPlayed).
+
+        `tierRating`: read the tier off this rating instead of his own (a re-sign sizes
+        the deal on the GM's read of him, rating plus results credit; `payroll.contractTerm`).
         """
         from random import randint
         if rng is not None:
             randint = rng.randint   # a seeded roll (`payroll.contractTerm`)
-        tier = player.playerTier
+        tier = player.playerTier if tierRating is None else self.tierForRating(tierRating)
         seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
 
         # First contract: fixed rookie deal so diamond prospects/rookies don't
