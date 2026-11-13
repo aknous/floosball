@@ -421,17 +421,7 @@ class FrontOfficeBrain:
         compute = getattr(player, 'projectedRatingPastPeak', None)
         if not callable(compute):
             return None
-        # The same devBias the offseason applies for this coach (it only moves the
-        # overshoot chance at the peak season; decline ignores it).
-        devRating = getattr(coach, 'playerDevelopment', None) or 80
-        from player_development import PlayerDevelopment as _PD
-        training = 0.0
-        if team is not None:
-            try:
-                training = float(team.facilityEffect('dev_bonus') or 0.0)
-            except Exception:
-                training = 0.0
-        devBias = int(round(_PD.developmentBias(devRating, training)))
+        devBias = self._devBiasFor(coach, team)
         # Cached for the brain's life (one offseason): every team values every player,
         # several passes over, and a projection costs ~50us against the old formula's
         # near-nothing. Keyed on what it reads, so a player whose rating or clock moved
@@ -448,6 +438,39 @@ class FrontOfficeBrain:
             result = None
         cache[key] = result
         return result
+
+    @staticmethod
+    def _devBiasFor(coach, team) -> int:
+        """The devBias the offseason applies for this coach and Training Facility (it only
+        moves the overshoot chance at the peak season; decline ignores it)."""
+        devRating = getattr(coach, 'playerDevelopment', None) or 80
+        from player_development import PlayerDevelopment as _PD
+        training = 0.0
+        if team is not None:
+            try:
+                training = float(team.facilityEffect('dev_bonus') or 0.0)
+            except Exception:
+                training = 0.0
+        return int(round(_PD.developmentBias(devRating, training)))
+
+    def _ratingAfterSeasons(self, player, seasons: int, coach=None, team=None):
+        """The sim's expected rating `seasons` offseasons from now
+        (`Player.projectedRatingAfterSeasons`), cached like `_nextSeasonRatingPastPeak`.
+        None when it cannot be projected."""
+        compute = getattr(player, 'projectedRatingAfterSeasons', None)
+        if not callable(compute):
+            return None
+        devBias = self._devBiasFor(coach, team)
+        key = (getattr(player, 'id', None) or id(player), devBias, int(seasons),
+               getattr(player, 'playerRating', None), getattr(player, 'seasonsPlayed', None),
+               getattr(player, 'prospect_seasons', None))
+        cache = self.__dict__.setdefault('_ratingAfterSeasonsCache', {})
+        if key not in cache:
+            try:
+                cache[key] = compute(int(seasons), devBias)
+            except Exception:
+                cache[key] = None
+        return cache[key]
 
     def agingSeen(self, coach, team=None) -> float:
         """The share of a past-peak player's projected decline this GM credits: half
@@ -907,13 +930,14 @@ class FrontOfficeBrain:
         """The rating this team expects from the player `seasonsAhead` seasons from now
         (0 = today), for the team plan (docs/TEAM_PLAN.md).
 
-        Past his peak: the sim's aging at its average (`_nextSeasonRatingPastPeak`),
-        extended at that rate and seen as `seenForward` sees it, which understates a
-        steepening decline rather than inventing a curve. Developing: each season
+        Past his peak: the sim's aging at its average, season by season
+        (`_ratingAfterSeasons`: a decline steepens as it does in the sim), seen as
+        `agingSeen` sees it. Prime: flat until his peak season passes, then the same
+        aging (decline only, since the sim's growth would reveal hidden talent).
+        Developing: each season
         realises the same share f = FO_CEILING_CREDIT x development lean of what is left
         to this team's read of his ceiling, the compounding `_growthBeyondNextSeason`
-        uses, so season 1 is `trueForwardRating` and it never passes the ceiling. Prime:
-        flat."""
+        uses, so season 1 is `trueForwardRating` and it never passes the ceiling."""
         current = float(getattr(player, 'playerRating', 0) or 0)
         k = max(0, int(seasonsAhead or 0))
         if k == 0 or player is None:
@@ -930,19 +954,49 @@ class FrontOfficeBrain:
         nextSeason = self._nextSeasonRatingPastPeak(player, coach, team)
         if nextSeason is not None:
             step = float(nextSeason) - current
-            if step >= 0:
-                return float(nextSeason)       # the peak season's overshoot, once
-            return current + step * k * self.agingSeen(coach, team)
+            if k == 1:
+                if step >= 0:
+                    return float(nextSeason)   # the peak season's overshoot, once
+                return current + step * self.agingSeen(coach, team)
+            # ⚠️ THE SIM'S AGING SEASON BY SEASON, NOT NEXT SEASON'S STEP REPEATED (owner,
+            # 2026-11-13: teams should know who is rising, falling or steady). A decline
+            # steepens each season past the peak, and next season's step held flat
+            # understates it more the further out a plan looks.
+            later = self._ratingAfterSeasons(player, k, coach, team)
+            if later is None:
+                return float(nextSeason) if step >= 0 else current + step * k * self.agingSeen(coach, team)
+            delta = float(later) - current
+            return current + (delta * self.agingSeen(coach, team) if delta < 0 else delta)
+        # Still rising: grows (developing) or holds (prime) until his peak season, then
+        # declines. ⚠️ THE PEAK COMES INSIDE THE PLAN (owner, 2026-11-13: teams should
+        # know who is rising, falling or steady). A developing player was projected to
+        # climb toward his ceiling every season, and a prime one held flat, however close
+        # their peak was, so a receiver two seasons from it read as still rising in season
+        # 5 where the sim has him declining.
+        growSeasons, decline = k, 0.0
+        try:
+            from player_development import PlayerDevelopment as _PD
+            throughPeak = int(_PD.peakSeason(player)) - int(_PD.careerSeasons(player)) + 1
+            if k > throughPeak >= 1:
+                growSeasons = throughPeak - 1
+                later = self._ratingAfterSeasons(player, k, coach, team)
+                atPeak = self._ratingAfterSeasons(player, throughPeak, coach, team)
+                if later is not None and atPeak is not None:
+                    # Only the decline is read off the sim (its growth would reveal hidden
+                    # talent), seen as aging is.
+                    decline = min(0.0, float(later) - float(atPeak)) * self.agingSeen(coach, team)
+        except Exception:
+            growSeasons, decline = k, 0.0
         try:
             if self.classifyArc(player) != ARC_DEVELOPING:
-                return current
+                return current + decline
             ceiling = float(self._ceilingRating(player, team))
         except Exception:
             return current
         if ceiling <= current:
-            return current
+            return current + decline
         f = _clamp(FO_CEILING_CREDIT * self.developmentLean(coach, team), 0.0, 1.0)
-        return ceiling - (ceiling - current) * (1.0 - f) ** k
+        return ceiling - (ceiling - current) * (1.0 - f) ** growSeasons + decline
 
     def _leagueTeams(self):
         teams = getattr(self, 'leagueTeams', None)

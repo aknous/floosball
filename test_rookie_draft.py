@@ -111,6 +111,8 @@ class Harness:
     _planMarketUncached = PlayerManager._planMarketUncached
     _planSlotHolders = staticmethod(PlayerManager._planSlotHolders)
     _planOpenSlots = PlayerManager._planOpenSlots
+    _prospectsTakingOpenSlots = PlayerManager._prospectsTakingOpenSlots
+    committedProspect = PlayerManager.committedProspect
     _likelyResigned = PlayerManager._likelyResigned
     projectedMarketPool = PlayerManager.projectedMarketPool
     positionOutlook = PlayerManager.positionOutlook
@@ -453,11 +455,12 @@ def test_need_takes_the_clear_need_over_a_qb_behind_a_kept_star():
 def test_the_clear_need_rule_still_moves_a_need_pick_off_a_kept_star():
     """When need itself lands behind a kept 4-star and a clear-need rookie of comparable
     ceiling exists, `preferClearNeed` takes him. Under need-based picks that happens
-    only across position weights: a 99-ceiling QB over an 85 starter (14 points at 1.00)
-    outscores a 96 TE over a 74 (22 points at 0.60)."""
+    only across position weights: a 99-ceiling QB over an 84 starter (15 points a season
+    at 1.00, seasons 4-5 at half: 60) outscores a 96 TE over a 74 who is gone after his
+    deal (57 at 0.60)."""
     h = Harness([])
     clubs = _teams(1)
-    clubs[0].rosterDict = {'qb': _star(rating=85),
+    clubs[0].rosterDict = {'qb': _star(rating=84),
                            'te': _star(rating=74, position=Position.TE, name='Weak TE')}
     ceilings = {'Best QB': 99, 'Need TE': 96}
     brain = StubBrain(lambda p, team: ceilings[p.name])

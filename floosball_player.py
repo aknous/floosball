@@ -736,6 +736,27 @@ class Player:
             return None
         return self.computeNextSeasonRating(devBias)
 
+    def projectedRatingAfterSeasons(self, seasons: int, devBias: int = 0) -> float:
+        """Rating expected after `seasons` offseasons of development at its average: each
+        season this offseason's rules (`PlayerDevelopment.expectedAttributes`) applied to
+        a private copy, his career clock advanced one season between them, so a player
+        peaks when the sim says and a decline steepens as it does in the sim. One season
+        is `computeNextSeasonRating`. Leaves the player untouched.
+        ⚠️ The expected development grows a player toward his TRUE skill, hidden talent
+        included, so a front office reads only the DECLINE from this; growth is read off
+        its own scouted ceiling (`FrontOfficeBrain.projectedRating`)."""
+        if getattr(self, 'attributes', None) is None:
+            return float(getattr(self, 'playerRating', 0) or 0)
+        twin = self._ratingTwin()
+        for _ in range(max(0, int(seasons))):
+            expected = PlayerDevelopment.expectedAttributes(twin, devBias)
+            if expected:
+                for name, value in expected.items():
+                    setattr(twin.attributes, name, value)
+            twin.seasonsPlayed = int(getattr(twin, 'seasonsPlayed', 0) or 0) + 1
+        twin.updateRating()
+        return float(getattr(twin, 'playerRating', 0) or 0)
+
     def computeNextSeasonRating(self, devBias: int = 0) -> int:
         """Rating this player is expected to carry next season: this offseason's
         development applied at its average (`PlayerDevelopment.expectedAttributes`,
