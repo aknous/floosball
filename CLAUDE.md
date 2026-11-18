@@ -552,16 +552,16 @@ MVP and HoF are **fan-voted**; the value-metric MVP and the HoF-points induction
 - `_seedAchievements()` upserts templates on every startup (refreshes name/description/category/scope/target/sort_order/reward_config/retired without wiping `UserAchievement` progress). `backfillOnboardingAchievements()` runs on first `/api/achievements` visit.
 
 ### Powerups (`constants.POWERUP_CATALOG`)
-Tracked in `ShopPurchase` with `expires_at_week`. Display names differ from slugs:
+Tracked in `ShopPurchase` with `expires_at_week`. Only slugs in `POWERUP_CATALOG` can be bought or claimed; a retired def stays in `constants.py` for historical display. Display names differ from slugs:
 
 | Slug | Display | Price | Effect | Limit |
 |------|---------|-------|--------|-------|
-| `extra_swap` | Dispensation | 50F | +1 roster swap | — |
-| `modifier_nullifier` | Annulment | 60F | Cards run under Steady this week | — |
-| `temp_flex` | Conscription | 200F | +FLEX roster slot (4 wks) | 2/season |
+| `extra_swap` | Dispensation | 50F | RETIRED (fusion): +1 roster swap | — |
+| `modifier_nullifier` | Annulment | 60F | RETIRED 2026-11-18: cards run under Steady this week | — |
+| `temp_flex` | Conscription | 200F | RETIRED (fusion): +FLEX roster slot (4 wks) | 2/season |
 | `temp_card_slot` | Accession | 200F | +6th card slot (4 wks) | 2/season |
 | `fortunes_favor` | Patronage | 125F | +10% chance-card trigger (3 wks) | 2/season |
-| `income_boost` | Endowment | 100F | Flatter FP→Floobit curve (4 wks) | 2/season |
+| `income_boost` | Endowment | 100F | +25% on all Floobit income (4 wks) | 2/season |
 
 ### Front Office (`frontOfficeBrain.py`, `gmTurnover.py`)
 **The sim decides; fans express sentiment.** `gmManager.py` and the binding fan-vote system are **DELETED** — there are no longer sign/cut/re-sign/fire/hire votes, and no FA or rookie ballots. Plan: `docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`.

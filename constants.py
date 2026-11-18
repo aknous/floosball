@@ -5416,6 +5416,9 @@ POWERUP_EXTRA_SWAP = {
     "description": "+1 roster swap to make an additional player change.",
     "price": 50,
 }
+# RETIRED (owner, 2026-11-18): Annulment is no longer needed. Removed from
+# POWERUP_CATALOG so it can't be bought; kept for display of historical purchases.
+# Overrides already written still apply to the week they were bought for.
 POWERUP_MODIFIER_NULLIFIER = {
     "slug": "modifier_nullifier",
     "displayName": "Annulment",
@@ -5454,7 +5457,7 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "+25% on all Floobit income for 4 weeks — fantasy, pick-em, showcase, and supporter dividends.",
+    "description": "+25% on all Floobit income (fantasy, pick-em, showcase, and supporter dividends) for 4 weeks.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
@@ -5463,10 +5466,10 @@ POWERUP_INCOME_BOOST = {
     "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
-# extra_swap + temp_flex retired in the fantasy/cards fusion (see notes above) — not
-# listed here so the shop never offers them; their defs remain for historical display.
+# extra_swap + temp_flex retired in the fantasy/cards fusion, modifier_nullifier
+# (Annulment) on 2026-11-18 (see notes above). Not listed here so the shop never
+# offers them; their defs remain for historical display.
 POWERUP_CATALOG = {
-    "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
     "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
     "fortunes_favor": POWERUP_FORTUNES_FAVOR,
     "income_boost": POWERUP_INCOME_BOOST,
