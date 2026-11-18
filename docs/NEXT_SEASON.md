@@ -40,6 +40,31 @@ What the game is for. Check features against this before building them.
   → This vetoed the 498b→498c letter-burn as a mechanic (it implied a restart). The lore survives
   as the Cores' own fear — motive for the opponent, never a thing that happens to your league.
 
+## QUEUED — replacement level per position, measured (owner, 2026-11-13)
+
+`REPLACEMENT_RATING` is a flat **67.0** from the trade market's design (`docs/TRADING_PLAN.md`,
+2026-09-15: "a club can always sign from the FA pool, currently ~67"). It was a one-time
+snapshot. Its comment says "measured off the pool rather than guessed", but nothing
+re-measures it.
+
+**Why it matters:** with trading on in prod (admin switch), every surplus-over-replacement
+number prices against it: trade valuation (`trading.playerValue` / `askAndFloor`), cut fees
+(`frontOfficeBrain.cutFeeFor`), prospect values (`trading.prospectValue`) and upcoming-draft
+pick prices (`rookieBoardValue` via `TradeMarket._pickValueTo`). Prod's free-agent pool at the
+end of the season-14 regular season averaged **70-71.5 at every position** (QB 70.3, RB 71.5,
+WR 69.9, TE 70.0, K 71.0), so the market slightly overstates every surplus, cut fees run high,
+and one number hides real differences by position.
+
+**The work:**
+1. Measure replacement per position off the free-agent pool AFTER the re-sign step (step 3),
+   when it reflects who is really available. The end-of-season pool is not that pool.
+2. Decide live (recomputed each offseason) or a measured per-position constant.
+3. Run `trade_market_check.py` and `trade_shape_check.py` before and after (compare arms
+   within one league; see the harness warnings in CLAUDE.md's Trading section).
+
+Not done for season 14 because it reprices every trade decision; the public draft ranking was
+fixed separately and display-only (`prospectRanking`, 2026-11-13).
+
 ## The list (owner, 2026-08-07)
 
 Eleven items for the next cutover, in the owner's order. Each is annotated with what

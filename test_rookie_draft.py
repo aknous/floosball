@@ -101,6 +101,7 @@ class Harness:
     committedRookie = PlayerManager.committedRookie
     chooseRookiePick = PlayerManager.chooseRookiePick
     prospectRanking = PlayerManager.prospectRanking
+    averageStarterByPosition = PlayerManager.averageStarterByPosition
     superstarLockedPositions = PlayerManager.superstarLockedPositions
     keptStarPositions = PlayerManager.keptStarPositions
     preferClearNeed = PlayerManager.preferClearNeed
@@ -111,6 +112,8 @@ class Harness:
     _planMarketUncached = PlayerManager._planMarketUncached
     _planSlotHolders = staticmethod(PlayerManager._planSlotHolders)
     _planOpenSlots = PlayerManager._planOpenSlots
+    _prospectsTakingOpenSlots = PlayerManager._prospectsTakingOpenSlots
+    committedProspect = PlayerManager.committedProspect
     _likelyResigned = PlayerManager._likelyResigned
     projectedMarketPool = PlayerManager.projectedMarketPool
     positionOutlook = PlayerManager.positionOutlook
@@ -453,11 +456,12 @@ def test_need_takes_the_clear_need_over_a_qb_behind_a_kept_star():
 def test_the_clear_need_rule_still_moves_a_need_pick_off_a_kept_star():
     """When need itself lands behind a kept 4-star and a clear-need rookie of comparable
     ceiling exists, `preferClearNeed` takes him. Under need-based picks that happens
-    only across position weights: a 99-ceiling QB over an 85 starter (14 points at 1.00)
-    outscores a 96 TE over a 74 (22 points at 0.60)."""
+    only across position weights: a 99-ceiling QB over an 84 starter (15 points a season
+    at 1.00, seasons 4-5 at half: 60) outscores a 96 TE over a 74 who is gone after his
+    deal (57 at 0.60)."""
     h = Harness([])
     clubs = _teams(1)
-    clubs[0].rosterDict = {'qb': _star(rating=85),
+    clubs[0].rosterDict = {'qb': _star(rating=84),
                            'te': _star(rating=74, position=Position.TE, name='Weak TE')}
     ceilings = {'Best QB': 99, 'Need TE': 96}
     brain = StubBrain(lambda p, team: ceilings[p.name])
@@ -627,3 +631,26 @@ def test_the_prospect_ranking_is_the_public_read_and_kickers_fall():
     assert ranked.index('Big Leg') > ranked.index('Public Favorite'), ranked
     assert all(r.is_upcoming_rookie for r in (a, b, k)), "the ranking changed the class"
     print("PASS the ranking reads the public consensus, and kickers fall")
+
+
+def test_the_prospect_ranking_measures_against_the_starters_teams_have():
+    """Owner, 2026-11-13: against a flat replacement level the top six of the season-14
+    class were all QBs, while league QB starters average 81 and TEs 78. A prospect who
+    beats the average starter at his position ranks first, by how far; the rest follow by
+    the old value. Here an 86 QB barely beats 84 starters while a 92 TE beats 74s by a
+    lot, so the TE leads (against 67 the QB did); an 80 QB who beats nobody ranks below
+    both, and a kicker below the kicker starters still falls under him."""
+    qb = FakePlayer(1, 86, Position.QB, 'Steady QB')
+    te = FakePlayer(2, 92, Position.TE, 'Big TE')
+    backup = FakePlayer(3, 80, Position.QB, 'Backup QB')
+    k = FakePlayer(4, 75, Position.K, 'Short Leg')
+    clubs = _teams(2)
+    for c in clubs:
+        c.rosterDict = {'qb': _star(rating=84, name='QB'), 'te': _star(rating=74, position=Position.TE, name='TE'),
+                        'k': _star(rating=80, position=Position.K, name='K')}
+    h = Harness([qb, te, backup, k])
+    ranked = [r.name for r in h.prospectRanking(StubBrain(lambda p, team: p.playerRating), teams=clubs)]
+    assert ranked == ['Big TE', 'Steady QB', 'Backup QB', 'Short Leg'], ranked
+    flat = [r.name for r in h.prospectRanking(StubBrain(lambda p, team: p.playerRating), teams=[])]
+    assert flat[0] == 'Steady QB', flat
+    print("PASS the prospect ranking measures against the starters teams have")

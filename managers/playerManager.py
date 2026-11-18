@@ -1236,18 +1236,35 @@ class PlayerManager:
         left = int(PROSPECT_DEVELOPMENT_WINDOW) - int(getattr(player, 'prospect_seasons', 0) or 0)
         return max(1, int(base), left)
 
-    def _getPlayerTerm(self, player, rng=None) -> int:
+    @staticmethod
+    def tierForRating(rating):
+        """The star tier a rating reads as (the thresholds `sortPlayersByPosition` uses)."""
+        r = float(rating or 0)
+        if r >= 92:
+            return FloosPlayer.PlayerTier.TierS
+        if r >= 84:
+            return FloosPlayer.PlayerTier.TierA
+        if r >= 76:
+            return FloosPlayer.PlayerTier.TierB
+        if r >= 68:
+            return FloosPlayer.PlayerTier.TierC
+        return FloosPlayer.PlayerTier.TierD
+
+    def _getPlayerTerm(self, player, rng=None, tierRating=None) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
         Rookies (seasonsPlayed == 0) get a standard prove-it contract keyed to
         tier. Otherwise the term is a tier-random range, capped by how much
         useful career the player likely has left — we never offer a deal that
         runs well past their expected retirement (longevity - seasonsPlayed).
+
+        `tierRating`: read the tier off this rating instead of his own (a re-sign sizes
+        the deal on the GM's read of him, rating plus results credit; `payroll.contractTerm`).
         """
         from random import randint
         if rng is not None:
             randint = rng.randint   # a seeded roll (`payroll.contractTerm`)
-        tier = player.playerTier
+        tier = player.playerTier if tierRating is None else self.tierForRating(tierRating)
         seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
 
         # First contract: fixed rookie deal so diamond prospects/rookies don't
@@ -4702,7 +4719,14 @@ class PlayerManager:
             taken = sum(self._planOpenSlots(brain, t, posValue, k, contractShift, intent)
                         for t in ahead)
             candidates = [fa for fa in leftover + walkers if signsHere(fa)]
-        candidates.sort(key=lambda fa: -brain.decisionValue(fa, getattr(team, 'coach', None), team=team))
+        # ⚠️ THE FA BOARD'S OWN VALUE (`freeAgentValue`: decisionValue plus aging), not
+        # plain decisionValue (fixed 2026-11-13). With decisionValue the plan counted on a
+        # declining free agent the board ranks below a younger one: at pick 1 of the
+        # season-14 draft the Exoticos planned on TeeTee Moonshine (86, declining), passed
+        # on Bleeb Refurb for it, and then took the MVP Ocean Emerson (77) with the first
+        # FA pick, as their board ranks them.
+        valueFn = getattr(brain, 'freeAgentValue', None) or brain.decisionValue
+        candidates.sort(key=lambda fa: -valueFn(fa, getattr(team, 'coach', None), team=team))
         picked = candidates[taken:taken + count]
         return picked + [None] * (count - len(picked))
 
@@ -4759,7 +4783,60 @@ class PlayerManager:
                     n += 1
             elif left <= 0 or (left < k and not self._likelyResigned(brain, p, left, intent)):
                 n += 1
+        if n and int(k) <= 1:
+            n -= self._prospectsTakingOpenSlots(brain, team, posValue, n)
         return n
+
+    def _prospectsTakingOpenSlots(self, brain, team, posValue, nOpen) -> int:
+        """How many of this team's `nOpen` open slots at the position its own prospects
+        will take in this offseason's FA draft, by the draft's own rule: a committed
+        prospect takes his slot, any other takes one unless a free agent he would face
+        is better today and this season (`brain.prospectTakesSlot`).
+
+        ⚠️ A PROSPECT FILLS A SLOT THE MARKET WOULD OTHERWISE (owner, 2026-11-13: teams
+        must revise their plan after the rookie draft to take into account the prospect
+        they just drafted). Counting every empty slot as a free-agent signing had a team
+        picking ahead take the best free agent at a position it had just drafted for, so
+        the teams behind it planned on a weaker market than the FA draft gave them: at
+        pick 5 of the season-14 draft the Strangers expected a 74 TE because the Curd,
+        a pick ahead in the FA draft, were counted as signing Trixie Tectonic (80) right
+        after drafting Velvet Blowtorch (88). The Curd promoted Blowtorch, the Strangers
+        signed Trixie and the TE they drafted for the hole sat behind her."""
+        prospects = [pr for pr in (getattr(team, 'prospects', None) or [])
+                     if getattr(getattr(pr, 'position', None), 'value', None) == posValue
+                     and getattr(pr, 'is_prospect', False)]
+        if not prospects or nOpen <= 0:
+            return 0
+        coach = getattr(team, 'coach', None)
+        committed = self.committedProspect(team, prospects)
+
+        def seasonOf(pr):
+            fn = getattr(brain, 'seasonRating', None)
+            try:
+                return float(fn(pr, coach, team)) if callable(fn) else float(pr.playerRating)
+            except Exception:
+                return float(getattr(pr, 'playerRating', 0) or 0)
+        prospects.sort(key=lambda pr: (pr is not committed, -seasonOf(pr)))
+        signFn = getattr(brain, 'willSignWith', None)
+        fas = sorted((fa for fa in (getattr(self, 'freeAgents', None) or [])
+                      if fa is not None and getattr(getattr(fa, 'position', None), 'value', None) == posValue
+                      and getattr(fa, 'team', 'Free Agent') in ('Free Agent', None)
+                      and not getattr(fa, 'willRetire', False)
+                      and (not callable(signFn) or signFn(fa, team))),
+                     key=lambda fa: -float(getattr(fa, 'playerRating', 0) or 0))
+        takes = getattr(brain, 'prospectTakesSlot', None)
+        filled = 0
+        for i, pr in enumerate(prospects[:nOpen]):
+            if pr is committed:
+                filled += 1
+                continue
+            fa = fas[i] if i < len(fas) else None
+            try:
+                if not callable(takes) or takes(pr, fa, coach, team):
+                    filled += 1
+            except Exception:
+                pass
+        return filled
 
     def _likelyResigned(self, brain, player, seasonsLeft: int, intent: dict = None) -> bool:
         """Will this player's team keep him when his deal runs out? For a deal ending
@@ -4786,15 +4863,15 @@ class PlayerManager:
         return True
 
     def positionOutlook(self, brain, team, position, intent: dict = None, contractShift: int = 0,
-                        extra=None, faOrder=None) -> list:
+                        extra=None, faOrder=None, horizon: int = None) -> list:
         """[level, ...] season 1 first: the sum of the holders' ratings in each season of
         `positionPlan`."""
         return [sum(h['rating'] for h in season)
                 for season in self.positionPlan(brain, team, position, intent, contractShift,
-                                                extra, faOrder)]
+                                                extra, faOrder, horizon=horizon)]
 
     def positionPlan(self, brain, team, position, intent: dict = None, contractShift: int = 0,
-                     extra=None, faOrder=None, settled: bool = False) -> list:
+                     extra=None, faOrder=None, settled: bool = False, horizon: int = None) -> list:
         """This team's level at `position` for each of the next FO_STANDING_HORIZON_SEASONS
         seasons (docs/TEAM_PLAN.md): the sum of its slot holders' projected ratings (WR has
         two slots), from
@@ -4819,7 +4896,8 @@ class PlayerManager:
         'typical' (a free agent of this offseason's quality at its pick, no one named)."""
         from constants import (FO_STANDING_HORIZON_SEASONS, PROSPECT_DEVELOPMENT_WINDOW,
                                REPLACEMENT_RATING)
-        horizon = max(1, int(FO_STANDING_HORIZON_SEASONS))
+        standard = max(1, int(FO_STANDING_HORIZON_SEASONS))
+        horizon = max(1, int(horizon)) if horizon else standard
         known = intent if intent is not None else (getattr(self, '_walkYearResignIntent', None) or {})
         posValue = getattr(position, 'value', position)
         slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}.get(posValue, [])
@@ -4835,6 +4913,13 @@ class PlayerManager:
                 continue
             covered = int(getattr(p, 'termRemaining', 0) or 0) - int(contractShift)
             if covered <= 1 and known.get(getattr(p, 'id', None), False):
+                covered = horizon
+            elif 2 <= covered < horizon and horizon > standard \
+                    and self._likelyResigned(brain, p, covered, known):
+                # Past the standard horizon nobody has decided yet: a starter whose deal
+                # ends there is kept by the rule the plan's market applies to every other
+                # team's players (rated FO_MARKET_KEEP_RATING or better, not past his
+                # longevity), or a rookie behind a star reads as filling a hole.
                 covered = horizon
             if covered > 0:
                 starters.append((p, covered))
@@ -5004,22 +5089,30 @@ class PlayerManager:
 
     def rookiePlanValue(self, brain, team, rookie, intent: dict = None, contractShift: int = 0,
                         faOrder=None) -> float:
-        """What a rookie adds to this team's plan at his position: the sum over the horizon
-        of its outlook with him minus without him (`positionOutlook`), times his
-        position's weight. A position the team has covered (a kept starter, a prospect
+        """What a rookie adds to this team's plan at his position: the sum over
+        ROOKIE_PLAN_HORIZON_SEASONS of its outlook with him minus without him
+        (`positionOutlook`), seasons past FO_STANDING_HORIZON_SEASONS at
+        ROOKIE_PLAN_LATE_SEASON_WEIGHT, times his position's weight. The longer view is
+        what lets a rookie the team expects to grow beat a starter who is aging or
+        holding steady (owner, 2026-11-13). A position the team has covered (a kept starter, a prospect
         due to take over, a deep market for an open slot) shows little; an opening hole
         a lot (owner, 2026-11-06: teams need to know their whole situation)."""
         from managers.frontOfficeBrain import positionValue
         import trading
+        from constants import (FO_STANDING_HORIZON_SEASONS, ROOKIE_PLAN_HORIZON_SEASONS,
+                               ROOKIE_PLAN_LATE_SEASON_WEIGHT)
+        horizon = max(int(FO_STANDING_HORIZON_SEASONS), int(ROOKIE_PLAN_HORIZON_SEASONS))
         cache = self.__dict__.setdefault('_planCache', {})
-        key = (id(team), getattr(rookie.position, 'value', None), id(intent), contractShift)
+        key = (id(team), getattr(rookie.position, 'value', None), id(intent), contractShift, horizon)
         if key not in cache:
             cache[key] = self.positionOutlook(brain, team, rookie.position, intent,
-                                              contractShift, faOrder=faOrder)
+                                              contractShift, faOrder=faOrder, horizon=horizon)
         base = cache[key]
         withRookie = self.positionOutlook(brain, team, rookie.position, intent, contractShift,
-                                          extra=rookie, faOrder=faOrder)
-        gain = sum(max(0.0, w - b) for w, b in zip(withRookie, base))
+                                          extra=rookie, faOrder=faOrder, horizon=horizon)
+        weights = [1.0 if k <= int(FO_STANDING_HORIZON_SEASONS) else float(ROOKIE_PLAN_LATE_SEASON_WEIGHT)
+                   for k in range(1, horizon + 1)]
+        gain = sum(wt * max(0.0, w - b) for wt, w, b in zip(weights, withRookie, base))
         try:
             posW = positionValue(rookie)
         except Exception:
@@ -5165,19 +5258,63 @@ class PlayerManager:
             -self.countTeamProspectsAtPosition(team, r.position)))
         return self.preferClearNeed(brain, team, pool, choice, intent) if preferNeed else choice
 
-    def prospectRanking(self, brain=None) -> list:
+    def prospectRanking(self, brain=None, teams=None) -> list:
         """The upcoming class ranked like a published prospect list: best first by the
-        PUBLIC read of what each prospect is worth (`rookieBoardValue` on the consensus
-        ceiling, vision 0, no scouting error), with no team or need attached (owner,
-        2026-11-04: a ranking, not a mock draft, which read as a team's pick). Position
-        weighs in, so kickers fall. Ties go to the higher public ceiling. Read-only.
-        Only the consensus read is used, so no team's brain is needed."""
+        PUBLIC read of what each prospect is worth (the consensus ceiling, vision 0, no
+        scouting error), with no team or need attached (owner, 2026-11-04: a ranking, not
+        a mock draft, which read as a team's pick). Position weighs in, so kickers fall.
+        Read-only. Only the consensus read is used, so no team's brain is needed.
+
+        ⚠️ TWO TIERS, MEASURED AGAINST THE STARTERS TEAMS HAVE (owner, 2026-11-13). A
+        prospect whose public ceiling beats the league's average starter at his position
+        (`averageStarterByPosition`, never below REPLACEMENT_RATING) ranks first, by how
+        far he beats him times position weight and a rookie-length term; the rest rank
+        below by `rookieBoardValue` (ceiling over replacement), as the whole list used to.
+        Against a flat 67 the top six of the season-14 class were all QBs, while league
+        QB starters average 81 and TEs 78: QBs went 4-8 picks below their rank and TEs as
+        many above it. Measured against the starters, the ranking's correlation with
+        where the class was drafted rose 0.82 -> 0.88 (14 replayed drafts).
+        ⚠️ DISPLAY ONLY: `rookieBoardValue` is unchanged, because it prices upcoming-draft
+        picks in trades and each team's own board, and the draft picks by need."""
+        import trading
+        from constants import REPLACEMENT_RATING
+        from managers.frontOfficeBrain import positionValue
         consensus = _ConsensusBrain(brain)
         rookies = [r for r in self.activePlayers if getattr(r, 'is_upcoming_rookie', False)]
-        return sorted(rookies, key=lambda r: (
-            -self.rookieBoardValue(consensus, None, r),
-            -self.rookieCeiling(consensus, None, r),
-            -float(getattr(r, 'playerRating', 0) or 0)))
+        bars = self.averageStarterByPosition(teams)
+
+        def key(r):
+            ceiling = self.rookieCeiling(consensus, None, r)
+            bar = max(float(REPLACEMENT_RATING), bars.get(getattr(r.position, 'value', None),
+                                                          float(REPLACEMENT_RATING)))
+            try:
+                posW = positionValue(r)
+            except Exception:
+                posW = trading.averagePositionWeight()
+            over = (ceiling - bar) * posW * trading.rookieTermForSkill(ceiling)
+            return (0 if over > 0 else 1, -max(0.0, over),
+                    -self.rookieBoardValue(consensus, None, r), -ceiling,
+                    -float(getattr(r, 'playerRating', 0) or 0))
+        return sorted(rookies, key=key)
+
+    def averageStarterByPosition(self, teams=None) -> dict:
+        """{position value: the league's average starter rating there}, every team's
+        rostered starters (both WR slots), for the public prospect ranking. Empty when the
+        league cannot be read, which leaves the ranking on replacement level."""
+        if teams is None:
+            try:
+                teams = getattr(self.serviceContainer.getService('team_manager'), 'teams', None)
+            except Exception:
+                teams = None
+        slots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
+        out = {}
+        for posValue, names in slots.items():
+            ratings = [float(getattr(p, 'playerRating', 0) or 0)
+                       for t in (teams or []) for p in ((getattr(t, 'rosterDict', None) or {}).get(s) for s in names)
+                       if p is not None]
+            if ratings:
+                out[posValue] = sum(ratings) / len(ratings)
+        return out
 
     def expectedDraftees(self, brain, team, slotOwners) -> list:
         """The rookies this club will take with its top picks in the upcoming draft.

@@ -129,6 +129,55 @@ class AgingProjectionTests(unittest.TestCase):
         self.assertIsNone(p.projectedRatingPastPeak(2))
         self.assertIsNone(brain._nextSeasonRatingPastPeak(p))
 
+    def testSeveralSeasonsOutMatchesTrainingThatManyTimes(self):
+        """`projectedRatingAfterSeasons` is the sim's development at its average, season
+        by season, so a past-peak decline steepens as the sim's does (2026-11-13)."""
+        checked = 0
+        for i, cls in enumerate([FP.PlayerQB, FP.PlayerRB, FP.PlayerWR]):
+            p = _player(cls, 940 + i, 86, 10, 7)
+            if PlayerDevelopment.careerContext(p, 0).phase == CareerPhase.RISING:
+                continue
+            projected = p.projectedRatingAfterSeasons(3, 2)
+            saved = {k: getattr(p.attributes, k) for k in vars(p.attributes)}
+            total, trials = 0.0, 300
+            for t in range(trials):
+                random.seed(20_000 + t)
+                for season in range(3):
+                    p.seasonsPlayed = 7 + season
+                    p.offseasonTraining(coachDevRating=80, fundingDevBonus=0)
+                total += p.playerRating
+                for k, v in saved.items():
+                    setattr(p.attributes, k, v)
+                p.seasonsPlayed = 7
+                p.updateRating()
+            self.assertLess(abs(projected - total / trials), 2.0,
+                            f'{cls.__name__}: projected {projected}, trained to {total / trials:.2f}')
+            checked += 1
+        self.assertGreater(checked, 0)
+
+    def testARisingPlayerDeclinesInThePlanOnceHisPeakPasses(self):
+        """Owner, 2026-11-13: teams should know who is rising, falling or steady. A player
+        two seasons from his peak used to be projected rising for as far as the plan
+        looked; now he peaks and then takes the sim's decline. Next season is untouched."""
+        brain = FrontOfficeBrain(_PM())
+        coach = types.SimpleNamespace(playerDevelopment=80, scouting=80)
+        p = _player(FP.PlayerWR, 910, 86, 10, 1)
+        p.seasonsPlayed = PlayerDevelopment.peakSeason(p) - 2
+        for base, tru in FP._TRUESKILL_ATTR_PAIRS:
+            if hasattr(p.attributes, tru):
+                setattr(p.attributes, base, getattr(p.attributes, tru))
+        p.updateRating()
+        seasons = [brain.projectedRating(p, k, coach) for k in range(1, 6)]
+        self.assertGreater(seasons[2], seasons[4], seasons)
+        self.assertLess(seasons[4], p.playerRating + 1, seasons)
+        self.assertEqual(seasons[0], brain.trueForwardRating(p, coach))
+
+    def testProjectingSeveralSeasonsLeavesThePlayerUntouched(self):
+        p = _player(FP.PlayerQB, 903, 88, 10, 9)
+        before = (p.playerRating, p.seasonsPlayed, dict(vars(p.attributes)))
+        p.projectedRatingAfterSeasons(4, 2)
+        self.assertEqual(before, (p.playerRating, p.seasonsPlayed, dict(vars(p.attributes))))
+
     def testTheOldDeclineConstantsAreGone(self):
         import constants
         self.assertFalse(hasattr(constants, 'FO_DECLINE_PER_YEAR_PAST'))

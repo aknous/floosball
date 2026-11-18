@@ -3492,6 +3492,15 @@ FO_STANDING_ENABLED = True
 # decline is extended over the rest of this horizon. A developing starter needs no such
 # term, because his value already credits growth toward his ceiling.
 FO_STANDING_HORIZON_SEASONS = 3
+# A rookie pick looks further ahead than the rest of the plan (owner, 2026-11-13: teams
+# "have a ceiling expectation for their prospects, so they should be able to see that
+# after 3 seasons theres probably more upside than an ageing or holding steady veteran").
+# `rookiePlanValue` sums its gain over ROOKIE_PLAN_HORIZON_SEASONS, each season past
+# FO_STANDING_HORIZON_SEASONS counted at ROOKIE_PLAN_LATE_SEASON_WEIGHT: those seasons
+# fall past the prospect window, the ceiling read, the veteran's aging and the market are
+# all further from today, and a season further out is worth less to a GM now.
+ROOKIE_PLAN_HORIZON_SEASONS = 5
+ROOKIE_PLAN_LATE_SEASON_WEIGHT = 0.5
 # Free agents are priced over the contract they would sign, not next season alone
 # (`FrontOfficeBrain.contractValue`, owner 2026-11-01): the average projected value across
 # its seasons, so a veteran's declining years cost and a rising player's later years count.
@@ -5407,6 +5416,9 @@ POWERUP_EXTRA_SWAP = {
     "description": "+1 roster swap to make an additional player change.",
     "price": 50,
 }
+# RETIRED (owner, 2026-11-18): Annulment is no longer needed. Removed from
+# POWERUP_CATALOG so it can't be bought; kept for display of historical purchases.
+# Overrides already written still apply to the week they were bought for.
 POWERUP_MODIFIER_NULLIFIER = {
     "slug": "modifier_nullifier",
     "displayName": "Annulment",
@@ -5445,7 +5457,7 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "+25% on all Floobit income for 4 weeks — fantasy, pick-em, showcase, and supporter dividends.",
+    "description": "+25% on all Floobit income (fantasy, pick-em, showcase, and supporter dividends) for 4 weeks.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
@@ -5454,10 +5466,10 @@ POWERUP_INCOME_BOOST = {
     "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
-# extra_swap + temp_flex retired in the fantasy/cards fusion (see notes above) — not
-# listed here so the shop never offers them; their defs remain for historical display.
+# extra_swap + temp_flex retired in the fantasy/cards fusion, modifier_nullifier
+# (Annulment) on 2026-11-18 (see notes above). Not listed here so the shop never
+# offers them; their defs remain for historical display.
 POWERUP_CATALOG = {
-    "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
     "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
     "fortunes_favor": POWERUP_FORTUNES_FAVOR,
     "income_boost": POWERUP_INCOME_BOOST,

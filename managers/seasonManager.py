@@ -9423,13 +9423,15 @@ class SeasonManager:
         # draft-time read of next offseason's walkers). `planIntent` is what the sweep has
         # decided for other teams so far; teams not yet decided fall back to the rough
         # rule in the plan's market.
+        shift = 0 if (getattr(self, '_offseasonFlowPhase', None)
+                      and self._isOffseasonStepComplete('frontoffice_decisions')) else 1
         brain.planContext = {
             'faOrder': list(faOrder or []),
             'intent': dict(planIntent or {}),
             'draftees': [r for r in internal if getattr(r, 'is_upcoming_rookie', False)],
-            'shift': 0 if (getattr(self, '_offseasonFlowPhase', None)
-                           and self._isOffseasonStepComplete('frontoffice_decisions')) else 1,
+            'shift': shift,
         }
+        brain.planResignTerms = {}
         try:
             kept = brain.chooseResigns(expiring, limit, coach=coach, pool=pool,
                                        pickDepth=pickDepth, team=team,
@@ -9437,8 +9439,35 @@ class SeasonManager:
                                        lastChance=lastChance)
         finally:
             brain.planContext = None
+        # ⚠️ A RE-SIGN RUNS AS LONG AS THE PLAN WANTS HIM (owner, 2026-11-13). The term was
+        # a tier roll, so the Beans re-signed Dew Stone for two seasons while their plan
+        # had Zeal Fletcher taking the slot after one, which meant cutting him (and paying
+        # the fee) a year into the deal. Recorded for this offseason's re-sign (`shift` 1:
+        # step 3 and the desk projecting it) and read by `payroll.contractTerm`, so the
+        # budget check, the desk and the contract step price the same deal. The
+        # draft-time read (`shift` 0) is next offseason's decision, so it records nothing.
+        if shift == 1:
+            terms = getattr(self.playerManager, '_planResignTerms', None)
+            if terms is None:
+                terms = self.playerManager._planResignTerms = {}
+            season = getattr(self.currentSeason, 'seasonNumber', 0)
+            planned = getattr(brain, 'planResignTerms', None) or {}
+            # ⚠️ ONLY FOR PLAYERS RE-SIGNED, AND TAGGED WITH THE TEAM. A walker's record
+            # would otherwise follow him to whoever signs him in the FA draft and size that
+            # deal off his old team's plan (`payroll._planEntry` also checks the team).
+            keptIds = {getattr(p, 'id', None) for p in kept}
+            for p in expiring:
+                pid = getattr(p, 'id', None)
+                terms.pop(pid, None)
+                if pid in planned and pid in keptIds:
+                    terms[pid] = (season,) + tuple(planned[pid]) + (getattr(team, 'id', None),)
         if afford:
             kept = self._affordableResigns(team, expiring, kept)
+            if shift == 1:
+                final = {getattr(p, 'id', None) for p in kept}
+                for p in expiring:
+                    if getattr(p, 'id', None) not in final:
+                        terms.pop(getattr(p, 'id', None), None)
         return expiring, forcedWalk, kept, pickDepth, teamsAhead
 
     def _affordableResigns(self, team, expiring, kept, salaryFor=None, seasons=None) -> list:

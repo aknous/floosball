@@ -447,10 +447,59 @@ def contractTerm(playerManager, player, season: int) -> int:
     import random
     seed = int(hashlib.md5(f"contract:{getattr(player, 'id', id(player))}:{season}".encode())
                .hexdigest()[:12], 16)
+    # ⚠️ A PLAN RE-SIGN IS SIZED ON THE GM'S READ OF HIM, NOT HIS RATING (owner,
+    # 2026-11-13). The tier roll read the rating alone, so the Waffles re-signed Tuck
+    # Marberry (QB, rated 76, performance 94-98 four seasons running) on a coin flip of
+    # one to three seasons and got one. The re-sign decision already credits how he
+    # played (`_resultsCredit`, rating points); the deal's tier reads rating + credit.
+    entry = _planEntry(playerManager, player, season)
+    tierRating = None
+    if entry is not None and len(entry) > 3:
+        tierRating = float(getattr(player, 'playerRating', 0) or 0) + float(entry[3] or 0)
     try:
-        return int(playerManager._getPlayerTerm(player, rng=random.Random(seed)))
+        if tierRating is not None:
+            roll = int(playerManager._getPlayerTerm(player, rng=random.Random(seed),
+                                                    tierRating=tierRating))
+        else:
+            roll = int(playerManager._getPlayerTerm(player, rng=random.Random(seed)))
     except TypeError:
-        return int(playerManager._getPlayerTerm(player))    # a term roll with no seed hook
+        roll = int(playerManager._getPlayerTerm(player))    # a term roll with no seed hook
+    return planFittedTerm(playerManager, player, season, roll)
+
+
+def _planEntry(playerManager, player, season: int):
+    """This offseason's plan record for a re-sign, `(season, held, horizon, credit,
+    teamId)`, or None (`SeasonManager._resignDecision`). A record from another season, or
+    for a team the player is no longer with (he walked and is signing elsewhere), is
+    ignored: it describes his old team's plan, not this deal."""
+    entry = (getattr(playerManager, '_planResignTerms', None) or {}).get(getattr(player, 'id', None))
+    if not entry or entry[0] != season:
+        return None
+    if len(entry) > 4 and entry[4] is not None:
+        if getattr(getattr(player, 'team', None), 'id', None) != entry[4]:
+            return None
+    return entry
+
+
+def planFittedTerm(playerManager, player, season: int, roll: int) -> int:
+    """A re-sign's term fitted to the team plan (owner, 2026-11-13: "teams should re-sign
+    players for the amount of time that fits their plans"). The re-sign decision records
+    how many seasons, from next season, the plan with him re-signed keeps him in his slot
+    (`SeasonManager._resignDecision` -> `playerManager._planResignTerms`). The deal runs
+    the smaller of that and the tier roll: the plan only ever SHORTENS a deal, so a player
+    it replaces is not signed past the season he is replaced, while one it keeps signs for
+    his usual roll (longer deals would thin the walk years the trade market runs on;
+    owner, 2026-11-13), however long, since the plan cannot see past its horizon. No record (not a plan re-sign, or another season's), or no
+    seasons in the plan (kept on a fan verdict against it): the tier roll."""
+    entry = _planEntry(playerManager, player, season)
+    if entry is None:
+        return roll
+    held, horizon = int(entry[1]), int(entry[2])
+    # ⚠️ Kept through the whole horizon means the plan sees no replacement, not that it
+    # wants him for exactly that long: capping there cut every 4-6 season star deal to 3.
+    if held <= 0 or held >= horizon:
+        return roll
+    return max(1, min(int(roll), held))
 
 
 # ─── When a team can't make payroll (plan §5) ───────────────────────────────────────────

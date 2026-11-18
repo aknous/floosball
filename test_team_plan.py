@@ -322,3 +322,102 @@ def test_a_protected_starter_is_never_displaced():
     plan = _planWith(_starter(70, term=3), kid, {'Kid': 95, 'Starter': 70}, harness=h)
     assert all(s[0]['source'] == 'starter' for s in plan), plan
     print("PASS a protected starter is never displaced")
+
+
+class _SlotBrain(PlanBrain):
+    """PlanBrain plus the FA draft's prospect-or-free-agent rule, a season rating from the
+    projection map, and an aging-aware free agent value (`fav` per name, else rating)."""
+
+    def __init__(self, ratings, teams=None, fav=None):
+        super().__init__(ratings, teams=teams)
+        self.fav = fav or {}
+
+    def seasonRating(self, player, coach=None, team=None):
+        return self.projectedRating(player, 1)
+
+    def freeAgentValue(self, player, coach=None, rng=None, team=None):
+        return float(self.fav.get(player.name, player.playerRating))
+
+    prospectTakesSlot = FrontOfficeBrain.prospectTakesSlot
+
+
+def _teamProspect(pid, rating, position, name):
+    p = FakePlayer(pid, rating, position, name)
+    p.is_prospect = True
+    p.is_upcoming_rookie = False
+    p.prospect_seasons = 0
+    return p
+
+
+def test_a_team_ahead_promotes_the_prospect_it_just_drafted():
+    """Owner, 2026-11-13: teams must revise their plan after the rookie draft for the
+    prospect they just drafted. Season 14: the Curd drafted Velvet Blowtorch (TE 88) a pick
+    ahead of the Strangers, who still planned as if the Curd would sign Trixie Tectonic
+    (80) and left them a 74, so they drafted a TE for a hole that was not there. A team
+    ahead whose prospect takes its open slot leaves the best free agent for the next team;
+    one whose prospect would lose the slot to a free agent still signs him."""
+    ahead, me = FakeTeam(1, 'Curd'), FakeTeam(2, 'Strangers')
+    for t in (ahead, me):
+        t.rosterDict = {}
+    h = Harness([])
+    h.freeAgents = [_freeAgent(800, 80, Position.TE, 'Trixie'), _freeAgent(801, 74, Position.TE, 'Tuggenay')]
+    order = [ahead, me]
+
+    ahead.prospects = [_teamProspect(700, 88, Position.TE, 'Blowtorch')]
+    brain = _SlotBrain({}, teams=order)
+    assert h.positionPlan(brain, me, Position.TE, faOrder=order)[0][0]['player'].name == 'Trixie'
+
+    h._planMarketCache = {}
+    ahead.prospects = [_teamProspect(701, 68, Position.TE, 'Lunchbox')]
+    brain = _SlotBrain({'Lunchbox': 72}, teams=order)
+    assert h.positionPlan(brain, me, Position.TE, faOrder=order)[0][0]['player'].name == 'Tuggenay'
+    print("PASS a team ahead promotes the prospect it just drafted")
+
+
+def test_the_market_ranks_free_agents_as_the_fa_board_does():
+    """Season 14: the Exoticos' plan counted on TeeTee Moonshine (86, declining) and passed
+    on Bleeb Refurb for him, then their FA board, which counts aging (`freeAgentValue`),
+    took the MVP Ocean Emerson (77). The plan's market uses the board's own value."""
+    me = FakeTeam(1, 'Exoticos'); me.rosterDict = {}
+    h = Harness([])
+    h.freeAgents = [_freeAgent(800, 86, Position.QB, 'Moonshine'), _freeAgent(801, 77, Position.QB, 'Emerson')]
+    brain = _SlotBrain({}, teams=[me], fav={'Moonshine': 70.0, 'Emerson': 78.0})
+    assert h.positionPlan(brain, me, Position.QB, faOrder=[me])[0][0]['player'].name == 'Emerson'
+    print("PASS the market ranks free agents as the FA board does")
+
+
+def test_a_rookie_pick_looks_five_seasons_ahead_the_last_two_at_half():
+    """Owner, 2026-11-13: teams should see that after 3 seasons a prospect has more upside
+    than an aging or steady veteran. A rookie's gain counts over ROOKIE_PLAN_HORIZON_SEASONS,
+    seasons past FO_STANDING_HORIZON_SEASONS at ROOKIE_PLAN_LATE_SEASON_WEIGHT. Open slot,
+    nobody in the market (replacement 67), a flat 80 rookie: 13 a season."""
+    from constants import (FO_STANDING_HORIZON_SEASONS, ROOKIE_PLAN_HORIZON_SEASONS,
+                           ROOKIE_PLAN_LATE_SEASON_WEIGHT, REPLACEMENT_RATING)
+    from managers.frontOfficeBrain import positionValue
+    team = FakeTeam(1, 'Club'); team.rosterDict = {}; team.prospects = []
+    h = Harness([]); h.freeAgents = []
+    rookie = FakePlayer(1, 80, Position.QB, 'Kid')
+    brain = PlanBrain({}, teams=[team])
+    gain = 80 - float(REPLACEMENT_RATING)
+    expected = gain * (FO_STANDING_HORIZON_SEASONS
+                       + ROOKIE_PLAN_LATE_SEASON_WEIGHT * (ROOKIE_PLAN_HORIZON_SEASONS - FO_STANDING_HORIZON_SEASONS))
+    assert abs(h.rookiePlanValue(brain, team, rookie, faOrder=[team]) - expected * positionValue(rookie)) < 1e-6
+    print("PASS a rookie pick looks five seasons ahead")
+
+
+def test_a_star_whose_deal_ends_in_the_long_view_is_assumed_kept():
+    """Past the standard horizon nobody has decided: a starter the market rule would keep
+    (84+, not regressing) holds his slot to the end of a rookie's view, so a rookie behind
+    a star does not read as filling a hole. A regressing one leaves when his deal ends."""
+    team = FakeTeam(1, 'Club'); team.prospects = []
+    star = _starter(88, Position.QB, name='Star', term=2)
+    team.rosterDict = {'qb': star}
+    h = Harness([]); h.freeAgents = []
+    brain = PlanBrain({}, teams=[team])
+    plan = h.positionPlan(brain, team, Position.QB, faOrder=[team], horizon=5)
+    assert all(s[0]['player'] is star for s in plan), plan
+    assert h.positionPlan(brain, team, Position.QB, faOrder=[team])[2][0]['player'] is not star
+    brain = PlanBrain({}, teams=[team], arcs={'Star': 'regressing'})
+    plan = h.positionPlan(brain, team, Position.QB, faOrder=[team], horizon=5)
+    assert plan[2][0]['player'] is not star, plan
+    print("PASS a star whose deal ends in the long view is assumed kept")
