@@ -2452,9 +2452,28 @@ class Game:
         need = LAST_SNAP_LIVE_SECS + huddle + DEAD_BALL_ADMIN_SECONDS + FINAL_SNAP_SECS
         return self._offenseEffectiveSecs() < need
 
+    def _tiedWinInReach(self) -> bool:
+        """Tied at the end of the game (regulation, not overtime) with a winning kick in
+        reach: inside this kicker's range plus a completion (the end-of-half push's reach).
+
+        ⚠️ TIED, IT IS THE WIN THAT IS AT STAKE (owner, 2026-11-19: "teams should try to go
+        for the win"). A play that runs out regulation sends the game to overtime rather
+        than losing it, so a tied team only plays to stop the clock while the kick that
+        wins is still reachable. Harness games 5131 / 5838 / 10107: tied, no timeouts, 5-7s
+        left just outside range; a run or an in-bounds catch got them into range at 0:01
+        with no snap left."""
+        if self._periodEnd()[0] != 'game' or self._clockMargin() != 0:
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is None:
+            return False
+        reach = kicker.maxFgDistance - self.gameRules.fgSnapDistance + 25
+        return self.yardsToEndzone <= reach
+
     def _runEndsTheGame(self) -> bool:
-        """Behind at the end of the game, no timeout, and too little time for a run tackled
-        in bounds to be followed by another snap: a run that does not score loses the game.
+        """Behind (or tied with a winning kick in reach) at the end of the game, no timeout,
+        and too little time for a run tackled in bounds to be followed by another snap: a
+        run that does not score loses the game (or, tied, throws away the win).
         A pass stops the clock when it falls incomplete or the receiver gets out of bounds,
         so the throw is the only call that keeps another snap alive (owner, 2026-10-29).
 
@@ -2471,7 +2490,10 @@ class Game:
         kind, _ = self._periodEnd()
         if kind != 'game' or not self._deadBallStopsClock():
             return False
-        if self._clockMargin() >= 0:
+        margin = self._clockMargin()
+        if margin > 0:
+            return False
+        if margin == 0 and not self._tiedWinInReach():
             return False
         timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
                         else self.awayTimeoutsRemaining)
@@ -5541,8 +5563,8 @@ class Game:
         # clock-IQ judgment, so flat.
         if self._runSpendsTheHalf():
             _flat('run', 0.1)
-        # Behind at the end of the game, a run that does not score loses it
-        # (`_runEndsTheGame`): pass only. Zero also keeps the audible from checking into one.
+        # Behind at the end of the game, a run that does not score loses it, and tied it
+        # throws away the win (`_runEndsTheGame`): pass only. Zero also keeps the audible from checking into one.
         if self._runEndsTheGame():
             _flat('run', 0.0)
 
@@ -19938,6 +19960,15 @@ class Play():
         iq = max(0.0, min(1.0, (getattr(carrier.gameAttributes, 'instinct', 80) - 60) / 40.0))
         aware = batched_randint(1, 100) <= 40 + iq * 60          # IQ gates situational awareness
 
+        # Tied with the winning kick in reach (`_tiedWinInReach`), no timeout, and too
+        # little clock for a tackle in bounds to leave the kick a snap (a 7s play, then
+        # the administration and 1s to snap): get out like a trailing team, or the catch
+        # that gets the kicker in range runs out regulation. With more clock, a tied team
+        # wants it running so it scores last.
+        if scoreDiff == 0 and g._tiedWinInReach():
+            _tos = (g.homeTimeoutsRemaining if offHome else g.awayTimeoutsRemaining)
+            if _tos == 0 and g._offenseEffectiveSecs() <= 7 + DEAD_BALL_ADMIN_SECONDS + 1:
+                scoreDiff = -1
         if scoreDiff < 0:  # trailing late — WANT the clock stopped: get out
             if not nearSideline or not aware:
                 return (batched_randint(1, 100) > baseOobChance, None, 0)
