@@ -24,6 +24,9 @@ class StubGame:
         self.down = down
         self.gameRules = GameRules()
 
+    def _isFinalDown(self):
+        return self.down == self.gameRules.downsPerSeries
+
     # ⚠️ `kneel` runs the clock through `self.game.format.consumeTime`, so a stub without
     # a format raises AttributeError before reaching a single assertion. Resolved the
     # same way `Game.format` does (from gameRules.gameFormat, defaulting to standard,

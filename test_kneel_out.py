@@ -8,8 +8,10 @@ opponent out of timeouts. It kicked a 50-yarder 100% of the time. The kneel ends
 as a win; the kick can miss, and either way hands the ball back with time on it.
 
 The rule is `_kneelOutDetail`: leading THE MATCH in Q4/OT, safe field position, and enough
-drain in hand to reach 0:00. On a final down there is exactly one kneel and it is only
-safe BECAUSE the clock dies on it — otherwise the down, and the ball, are gone.
+drain in hand to reach 0:00. On a final down there is exactly one kneel, and it is a
+turnover on downs, which STOPS THE CLOCK after the ~4s snap: no play-clock runoff, so it
+ends the game only when the snap itself reaches 0:00 (prod game 6867: WAS up 15, 4th & 4
+at its own 26, 0:15 left, knelt, NYS took over at 0:11 and scored).
 
 Run: .venv/bin/python test_kneel_out.py
 """
@@ -39,20 +41,24 @@ def calls(*, trials=40, seed=4, **situation):
 REPORTED = dict(quarter=4, clock=28, offense='home', offScore=21, defScore=20,
                 down=4, distance=5, ballOn=33, offTimeouts=2, clockRunning=True)
 
-print("1. The reported case — a kneel ends it, so it is taken over a makeable FG")
-c = calls(defTimeouts=0, **REPORTED)
-expect(f"opponent out of timeouts -> kneel every time ({c[PlayType.Kneel]}/40)",
+print("1. A final-down kneel ends it only when the snap itself runs the clock out")
+c = calls(defTimeouts=0, **{**REPORTED, 'clock': 4})
+expect(f"0:04 -> kneel every time ({c[PlayType.Kneel]}/40)", c[PlayType.Kneel] == 40)
+c = calls(defTimeouts=2, **{**REPORTED, 'clock': 4})
+expect(f"0:04, opponent holding timeouts -> still kneel ({c[PlayType.Kneel]}/40)",
        c[PlayType.Kneel] == 40)
 
-print("\n2. ...but only when the opponent cannot stop the clock")
-c = calls(defTimeouts=2, **REPORTED)
-expect(f"opponent holding timeouts -> never kneel ({c[PlayType.Kneel]}/40)",
+print("\n2. With more on the clock it is a turnover on downs, so it is not taken")
+c = calls(defTimeouts=0, **REPORTED)
+expect(f"0:28, opponent out of timeouts -> never kneel ({c[PlayType.Kneel]}/40)",
        c[PlayType.Kneel] == 0)
 expect("...and the end-of-half field goal is taken instead",
        c[PlayType.FieldGoal] > 0)
+c = calls(defTimeouts=2, **REPORTED)
+expect(f"0:28, opponent holding timeouts -> never kneel ({c[PlayType.Kneel]}/40)",
+       c[PlayType.Kneel] == 0)
 
 print("\n3. Not enough drain in hand is not a kneel — it would surrender the down")
-# One kneel drains ~40s; 90s left cannot be run out from a final down.
 c = calls(defTimeouts=0, **{**REPORTED, 'clock': 90})
 expect(f"0:90 with one kneel available -> never kneel ({c[PlayType.Kneel]}/40)",
        c[PlayType.Kneel] == 0)
@@ -74,17 +80,36 @@ expect(f"own goal line -> never kneel ({c[PlayType.Kneel]}/40)", c[PlayType.Knee
 
 print("\n7. The helper itself, read directly")
 s = Scenario(); random.seed(4)
-s.situation(defTimeouts=0, **REPORTED)
+s.situation(defTimeouts=0, **{**REPORTED, 'clock': 4})
 detail = s.g._kneelOutDetail(s.g.offensiveTeam is s.g.homeTeam)
 expect("returns the drain numbers when a kneel-out is on", bool(detail))
 expect(f"one kneel is available on a final down ({(detail or {}).get('availableKneels')})",
        (detail or {}).get('availableKneels') == 1)
-expect(f"and it outlasts the clock ({(detail or {}).get('drainableSeconds')}s vs 28s)",
-       (detail or {}).get('drainableSeconds', 0) >= 28)
+expect(f"and a final-down kneel drains only its snap ({(detail or {}).get('drainableSeconds')}s)",
+       (detail or {}).get('drainableSeconds') == 4)
+s.situation(defTimeouts=0, **REPORTED)
+expect("returns None on a final down with 0:28 left",
+       s.g._kneelOutDetail(s.g.offensiveTeam is s.g.homeTeam) is None)
 
 s.situation(defTimeouts=0, **{**REPORTED, 'offScore': 20, 'defScore': 21})
 expect("returns None when trailing",
        s.g._kneelOutDetail(s.g.offensiveTeam is s.g.homeTeam) is None)
+
+print("\n8. The reported case: a big lead does not make a final-down kneel a kneel-out")
+# Prod game 6867: up 15, 4th & 4 on the own 26, 0:15, opponent holding two timeouts.
+GAME_6867 = dict(quarter=4, clock=15, offense='home', offScore=24, defScore=9,
+                 down=4, distance=4, ballOn=74, offTimeouts=0, clockRunning=False)
+c = calls(defTimeouts=2, **GAME_6867)
+expect(f"opponent holding timeouts -> never kneel ({c[PlayType.Kneel]}/40)",
+       c[PlayType.Kneel] == 0)
+expect(f"...it punts instead ({c[PlayType.Punt]}/40)", c[PlayType.Punt] == 40)
+c = calls(defTimeouts=0, **GAME_6867)
+expect(f"opponent out of timeouts -> still never kneel ({c[PlayType.Kneel]}/40)",
+       c[PlayType.Kneel] == 0)
+s.situation(defTimeouts=2, **{**GAME_6867, 'down': 2})
+detail = s.g._kneelOutDetail(s.g.offensiveTeam is s.g.homeTeam)
+expect("an earlier down still kneels it out (another kneel follows a timeout)",
+       detail is not None)
 
 print()
 if fails:

@@ -102,19 +102,20 @@ expect(f"at 0:30 short of comfortable range, timeout fires almost always ({short
 
 
 # ── 5. Kneel on 4th down only when it ends the game ──────────────────────
-print("5. 4th-down kneel only when the opponent can't stop the clock")
+# A final-down kneel is a turnover on downs, which stops the clock after the ~4s snap,
+# so it ends the game only when the snap itself reaches 0:00 (prod game 6867).
+print("5. 4th-down kneel only when the snap runs the clock out")
 s = Scenario()
 random.seed(4)
-# Leading, 4th down, 28s left, ball at the opponent's 33 (the reported spot).
-def kneels(defTimeouts):
-    return sum(s.situation(quarter=4, clock=28, offense='home', offScore=21, defScore=20,
+# Leading, 4th down, ball at the opponent's 33.
+def kneels(defTimeouts, clock=28):
+    return sum(s.situation(quarter=4, clock=clock, offense='home', offScore=21, defScore=20,
                            down=4, distance=5, ballOn=33, offTimeouts=2, defTimeouts=defTimeouts,
                            clockRunning=True).fourthDownPlay() is PlayType.Kneel
                for _ in range(40))
-oppHasTO = kneels(2)   # opponent could stop the clock -> never kneel into a turnover
-oppNoTO  = kneels(0)   # opponent can't stop it -> kneel runs out the clock (game-ender)
-expect("opponent has timeouts -> never kneel (0/40)", oppHasTO == 0)
-expect("opponent out of timeouts -> kneel to end it (>0/40)", oppNoTO > 0)
+expect("0:28, opponent has timeouts -> never kneel (0/40)", kneels(2) == 0)
+expect("0:28, opponent out of timeouts -> never kneel (0/40)", kneels(0) == 0)
+expect("0:04 -> kneel to end it (40/40)", kneels(0, clock=4) == 40)
 
 
 # ── 6. OT walk-off: a defensive score ends the game ──────────────────────

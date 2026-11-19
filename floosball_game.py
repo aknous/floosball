@@ -3703,6 +3703,18 @@ class Game:
         _comebackDiff = self._frameScoreDiff()
         _comebackDiff = _comebackDiff if _comebackDiff is not None else scoreDiff
         effectiveOppTos = oppTimeouts if _comebackDiff <= maxComebackPts else 0
+        # ⚠️ A FINAL-SNAP KNEEL DRAINS ONLY ITS SNAP. It is a turnover on downs, which
+        # stops the clock, so there is no play-clock runoff after it whatever the
+        # opponent's timeouts (`Play.kneel`, `kneelEndsPossession`). It ends the game only
+        # when the ~4s snap itself reaches 0:00. Prod game 6867: WAS up 15 on 4th & 4 at
+        # its own 26 with 0:15 left; read as 40s of drain, it knelt, the ball changed hands
+        # at 0:11 and NYS scored a touchdown off the short field.
+        if remaining <= 0 or self._isFinalDown():
+            drainableSeconds = 4
+            if drainableSeconds < self.gameClockSeconds:
+                return None
+            return {'drainableSeconds': drainableSeconds, 'oppTimeouts': oppTimeouts,
+                    'availableKneels': 1}
         # A timed-out kneel drains only the ~4s snap; a free one drains the full ~40s
         # (snap plus the play-clock runoff before the next snap or the game ending).
         toadKneels = min(effectiveOppTos, availableKneels)
@@ -11624,7 +11636,12 @@ class Game:
                     lastPlayFormatted = True
 
                     # After kneel: defense gets a chance to call timeout before play clock drains
-                    if self.play.playType is PlayType.Kneel:
+                    if (self.play.playType is PlayType.Kneel
+                            and getattr(self.play, 'kneelEndsPossession', False)):
+                        # Turnover on downs: the clock stops at the end of the snap.
+                        self._timeoutCalled = False
+                        self.clockRunning = False
+                    elif self.play.playType is PlayType.Kneel:
                         self._timeoutCalled = False
                         self._checkDefensiveTimeout()
                         if self._timeoutCalled and self.timingManager:
@@ -11664,7 +11681,8 @@ class Game:
                 # been snapped since. Re-deriving the clock from the kneel restarted it, so the
                 # defense's next check called a SECOND timeout in the same dead ball (prod
                 # season 12 week 1: Bees, twice at 0:25).
-                if self.play.playType is PlayType.Kneel and self._timeoutCalled:
+                if self.play.playType is PlayType.Kneel and (
+                        self._timeoutCalled or getattr(self.play, 'kneelEndsPossession', False)):
                     self.clockRunning = False
 
                 # Check for two-minute warning
@@ -18351,6 +18369,10 @@ class Play():
         AFTER the defense gets a chance to call timeout."""
         self.playType = PlayType.Kneel
         self.yardage = -1
+        # A kneel on the series' last snap is a turnover on downs: the clock stops after
+        # the snap, with no play-clock runoff and nothing for the defense to call a timeout
+        # for. Read here, at the call, before the snap ticks a plays drive clock.
+        self.kneelEndsPossession = self.game._isFinalDown()
         # A kneel snaps the ball dead immediately (~4s below) and leaves the clock
         # RUNNING — so the ~36s play-clock runoff before the next snap (or the game
         # ending) is drained post-play in the game loop, unless the defense calls a
