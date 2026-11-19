@@ -110,7 +110,7 @@ r, n = runRate(quarter=2, clock=15, down=1, distance=10, ballOn=82, offScore=10,
 expect(f"Q2 0:15 at its own 18: nothing in reach, the half is played out ({r:.0%} runs, n={n})",
        r >= 0.25)
 
-print("\n-- 5. behind at the end, a run that does not score loses the game --")
+print("\n-- 5. behind at the end (or tied, the win in reach), a run that does not score loses it --")
 def goRunShare(**kw):
     runs = goes = 0
     for i in range(TRIALS):
@@ -132,6 +132,34 @@ r, n = goRunShare(quarter=4, clock=11, down=4, distance=2, ballOn=2, offScore=20
                   offTimeouts=0, clockRunning=False)
 expect(f"down 4, 4th & goal at the 2, 0:11: converting is scoring, a run is allowed ({r:.0%}, n={n})",
        r > 0)
+# Tied, the WIN is what a run throws away (owner 2026-11-19: "teams should try to go for
+# the win"), but only while the winning kick is in reach (`_tiedWinInReach`: kick range
+# plus 25). Harness games 5131 / 5838 / 10107: tied, no timeouts, 5-7s left just outside
+# range, the run reached range at 0:01 with no snap left.
+r, n = goRunShare(quarter=4, clock=8, down=1, distance=10, ballOn=45, offScore=20, defScore=20,
+                  offTimeouts=0, clockRunning=False)
+expect(f"tied, 1st & 10 at the 45, 0:08, no timeouts: never run ({r:.0%}, n={n})", n > 0 and r == 0)
+_s = Scenario().situation(quarter=4, clock=8, down=1, distance=10, ballOn=85, offScore=20,
+                          defScore=20, offTimeouts=0, clockRunning=False)
+expect("tied at its own 15: no winning kick in reach, the rule is off",
+       not _s.g._tiedWinInReach() and not _s.g._runEndsTheGame())
+_s = Scenario().situation(quarter=4, clock=8, down=1, distance=10, ballOn=45, offScore=21,
+                          defScore=20, offTimeouts=0, clockRunning=False)
+expect("leading: the rule is off", not _s.g._tiedWinInReach())
+def oobRate(**kw):
+    out = 0
+    for i in range(TRIALS):
+        random.seed(i); np.random.seed(i)
+        s = Scenario().situation(**kw)
+        inb, _note, _b = s.g.play._sidelineDecision(s.g.offensiveTeam.rosterDict['wr1'], 50)
+        out += not inb
+    return out / TRIALS
+_tied = oobRate(quarter=4, clock=9, down=1, distance=10, ballOn=45, offScore=20, defScore=20,
+                offTimeouts=0, clockRunning=False)
+_toLeft = oobRate(quarter=4, clock=9, down=1, distance=10, ballOn=45, offScore=20, defScore=20,
+                  offTimeouts=1, clockRunning=False)
+expect(f"tied, 0:09, no timeouts: the carrier gets out of bounds ({_tied:.0%} vs {_toLeft:.0%} with a timeout)",
+       _tied >= _toLeft + 0.1)
 r, n = goRunShare(quarter=4, clock=90, down=4, distance=1, ballOn=60, offScore=17, defScore=20,
                   offTimeouts=1, clockRunning=False)
 expect(f"down 3, 4th & 1 at its own 40, 1:30: the go play is called, not fixed ({r:.0%} runs)",
