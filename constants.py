@@ -5143,6 +5143,10 @@ LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 # time to get lined up and get the ball off. Was implicitly ~7s (a full play), which
 # undercounted the last snap in tight windows.
 FINAL_SNAP_SECS = 2
+# An end-of-game field goal that ties or takes the lead snaps with about this much left
+# (`_classifyTempoIntent` 'setupFG'; the coach's clock IQ moves it up to 2s either way).
+# The kick takes 4-6s and a kickoff takes no time, so the kick ends the game.
+FG_DRAIN_SNAP_TARGET_SECS = 3
 
 # "There is no snap after this one" — the window `_lastSnapBeforeBreak` uses to take a
 # makeable end-of-half field goal on ANY down (`downsPerSeries` is mutable, 3 to 5, so

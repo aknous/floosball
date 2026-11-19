@@ -1769,9 +1769,13 @@ class Game:
         self._fgSecureRead = (driveKey, read)
         return read
 
-    def _isFgDrainMode(self) -> bool:
+    def _isFgDrainMode(self, forKick: bool = False) -> bool:
         """True when the offense should drain clock to set up an end-of-game FG.
         Late Q2/Q4, scoring within 3 (trailing or tied), in chip-shot FG range.
+
+        `forKick=True` asks about the kick ALREADY CALLED: a kick that ties or takes the
+        lead lets the clock run before its snap whatever its odds, so the range and
+        make-probability gates (which decide whether to settle for the kick) are skipped.
 
         When True:
           - Sideline pass targeting is suppressed (clock should keep running)
@@ -1803,6 +1807,8 @@ class Game:
             return False
         if self._isGarbageTime(scoreDiff):
             return False
+        if forKick:
+            return True
         kicker = self.offensiveTeam.rosterDict.get('k')
         if kicker is None:
             return False
@@ -2309,6 +2315,48 @@ class Game:
                 # therefore cannot be charged it.
                 secs -= 18 + DEAD_BALL_ADMIN_SECONDS
         return plays
+
+    def _snapFitsBeforeKick(self, playsAvailable: int) -> bool:
+        """At the end of a game with a kick that ties or takes the lead in hand: does one
+        more snap fit before it? Running another play is worth it only on a STOPPED clock,
+        because a kick snapped from a stopped clock cannot drain and leaves the opponent
+        whatever the kick does not use (a kickoff takes no time here).
+
+        ⚠️ `_estimateAvailablePlays` already holds back the kick's snap, so 1 means one
+        more play AND the kick still fit; the callers read `<= 1` as "this is the last
+        play" and kicked a play early (fixed 2026-11-19): 1st down, clock stopped at 0:13
+        with two timeouts, the kick left the opponent 0:09.
+
+        The cost: the worst-case live ball (a completion in bounds, 7s), then the kick's
+        snap (1s after a timeout; with none left, the dead-ball administration the running
+        clock is charged first, plus 1s).
+
+        ⚠️ ON A RUNNING CLOCK THE NEXT SNAP'S OWN PRE-SNAP IS PAID TOO (fixed 2026-11-19).
+        This used to defer to the play count, which treats a snap as free whenever a
+        timeout is in hand, as if the offense would call one before it. A team draining for
+        the kick does not, and `_maybeCallTimeoutToSaveSnap` declines whenever the snap
+        itself fits: tied at 0:15 with a timeout, the play count read 2, the offense took
+        2s of administration and a 7s no-huddle set, snapped at 0:06 and ran out the clock.
+        The worst case is charged (no-huddle: base + IQ + jitter; a huddle: its base + 6),
+        since kicking a snap early costs nothing here (the kick drains the clock itself).
+        Chess clock keeps the play count."""
+        if getattr(self.format, 'key', '') == 'chess_clock':
+            return playsAvailable >= 2
+        timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                        else self.awayTimeoutsRemaining)
+        need = 7 + (1 if timeoutsLeft > 0 else DEAD_BALL_ADMIN_SECONDS + 1)
+        if self.clockRunning:
+            from constants import NO_HUDDLE_PRESNAP_SECS, NO_HUDDLE_IQ_SPREAD, NO_HUDDLE_JITTER
+            if self._isNoHuddle():
+                preSnap = NO_HUDDLE_PRESNAP_SECS + NO_HUDDLE_IQ_SPREAD // 2 + NO_HUDDLE_JITTER
+            else:
+                try:
+                    _intent, _base = self._classifyTempoIntent()
+                except Exception:
+                    _base = 12
+                preSnap = max(8, (_base or 12) + 6)
+            need += DEAD_BALL_ADMIN_SECONDS + preSnap
+        return self._offenseEffectiveSecs() >= need
 
     def _isNoHuddle(self) -> bool:
         """Is the offense staying at the line instead of huddling?
@@ -2819,6 +2867,15 @@ class Game:
             return
         if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
             return  # not trying to preserve time for a score
+        # ⚠️ A KICK THAT TIES OR TAKES THE LEAD WANTS THE CLOCK TO RUN (fixed 2026-11-19).
+        # The pre-snap clamp in `calculatePreSnapTime` always gets a field goal off with
+        # time on the clock, so a timeout here only hands the opponent the seconds it saves:
+        # a tied team kicking at 0:14 stopped the clock and gave back ~9. It is still
+        # spent when the dead-ball administration alone would run the clock out.
+        if (self.play.playType is PlayType.FieldGoal
+                and self._isFgDrainMode(forKick=True)
+                and self.gameClockSeconds > DEAD_BALL_ADMIN_SECONDS + 1):
+            return
         # ⚠️ CHECK NO-HUDDLE BEFORE SPENDING A TIMEOUT. Standing at the line is the cheaper
         # way to save a snap, and it is free. Without this the offense burns its timeouts
         # doing what the tempo was already doing for nothing — and it is the same drive
@@ -7998,7 +8055,7 @@ class Game:
                     # WINS, trailing 3 TIES — and a chip shot is near-automatic, so
                     # kicking beats gambling the final play on a TD. Kick even a
                     # long shot here: it's the only remaining chance.
-                    if self.down == self.gameRules.downsPerSeries or playsAvailable <= 1:
+                    if self.down == self.gameRules.downsPerSeries or not self._snapFitsBeforeKick(playsAvailable):
                         self.play.insights['clockMgmt'] = {
                             'decision': 'desperationFG',
                             'reason': 'Last play, kick the FG to ' + ('win' if _fgDiff > -self._fgValue() else 'tie'),
@@ -8064,14 +8121,20 @@ class Game:
                             # Fall through to weighted play caller below
                         else:
                             self.play.insights['clockMgmt'] = {
-                                'decision': 'desperationFG',
-                                'reason': 'Coach chose the tying FG over a TD attempt',
+                                'decision': 'setupFG',
+                                'reason': 'Coach settles for the tying FG, draining the clock to kick on the last play',
                                 'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'down': self.down,
                                 'fgProbability': round(despFgProb * 100, 1),
                                 'coachClockIQ': round(gameIQ, 2),
                             }
-                            self.play.playType = PlayType.FieldGoal
-                            return
+                            # ⚠️ SETTLING IS NOT KICKING NOW (fixed 2026-11-19). The kick
+                            # used to go on this snap, so from a stopped clock with plays to
+                            # spare it left the opponent 16-27s to win in regulation. Like
+                            # the winning-FG branch above, fall through to a play this snap
+                            # (the drain mode biases it toward an in-bounds run) and kick on
+                            # the last one.
 
             # Game-winning FG: tied in Q4 with chip-shot range and little time —
             # take the safe winner instead of risking a turnover trying for a TD.
@@ -8092,7 +8155,7 @@ class Game:
                         # before the clock forces the kick (playsAvailable <= 1).
                         # A tied team kicking a chip shot wins outright; gambling
                         # the final play on a TD is wrong.
-                        if self.down == self.gameRules.downsPerSeries or playsAvailable <= 1:
+                        if self.down == self.gameRules.downsPerSeries or not self._snapFitsBeforeKick(playsAvailable):
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'gameWinningFG',
                                 'reason': 'Tied, in chip-shot range, kick to win',
@@ -14716,9 +14779,16 @@ class Game:
         # tempo so the offense maximises chances at a TD before settling for
         # the kick. iqOffset in calculatePreSnapTime tightens or loosens the
         # FG-snap target per coach.
-        if (self._isFgDrainMode() and hasattr(self, 'play') and self.play is not None
-                and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
-            target = 7
+        if (hasattr(self, 'play') and self.play is not None
+                and getattr(self.play, 'playType', None) == PlayType.FieldGoal
+                and self._isFgDrainMode(forKick=True)):
+            # ⚠️ SNAP AT ~3s, NOT 7 (fixed 2026-11-19). The kick takes 4-6s and a kickoff
+            # takes no time in this engine (an instant touchback, clock stopped), so every
+            # second left after the kick is a snap for the opponent from its own 20. At 7
+            # the kick ended at 0:01-0:06 (plus a +-3s jitter) and the opponent got a
+            # Hail Mary. calculatePreSnapTime adds the coach's IQ offset (+-2s) and no jitter.
+            from constants import FG_DRAIN_SNAP_TARGET_SECS
+            target = FG_DRAIN_SNAP_TARGET_SECS
             # Drain only to the deadline actually in play: the FRAME buzzer in frames, the
             # game clock in standard, the possession budget in chess (_offenseEffectiveSecs
             # abstracts all three). Using the raw game clock here drained the WHOLE game
@@ -14954,7 +15024,9 @@ class Game:
         else:
             iqOffset = 0
 
-        finalTime = max(8, baseTime + iqOffset + batched_randint(-3, 3))
+        # A FG drain is aimed at a target second; jitter there only leaves the opponent time.
+        _jitter = 0 if intent == 'setupFG' else batched_randint(-3, 3)
+        finalTime = max(8, baseTime + iqOffset + _jitter)
 
         # ── Weather on the tempo ──
         # ⚠️ ABOVE the two clamps below, not under them. Both exist to guarantee the

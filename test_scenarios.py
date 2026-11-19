@@ -134,9 +134,12 @@ expect("after the fix flag, isGameOver -> True (game ends)", s.gameOver() is Tru
 
 # ── 7. Last-play FG: kick the game-winner/tier instead of running ────────
 # Trailing by 1-2 (FG wins) or 3 (FG ties), or tied (FG wins): on the LAST
-# realistic play (down 4, or only ~1 snap fits), kick the FG — don't gamble the
-# final play on a TD. The gate is the play-count estimate (which accounts for
-# timeouts/spikes needed to stop the clock), NOT a fixed clock threshold.
+# realistic play, kick the FG — don't gamble the final play on a TD (2026-06-25).
+# ⚠️ "Last" is now `_snapFitsBeforeKick` (2026-11-19): from a STOPPED clock a kick
+# leaves the opponent whatever it does not use (kickoffs take no time), so one more
+# snap is run whenever it fits: 7s of live ball, then 1s to snap the kick after a
+# timeout or 3s without one. `_estimateAvailablePlays <= 1` kicked a play early:
+# 1st down, 0:13 stopped, two timeouts, the kick left 0:09.
 print("7. A game-winning/tying FG is kicked on the last play, not deferred to a run")
 def fgCall(deficit, clock, down, ballOn=16, offTO=1):
     s = Scenario()
@@ -144,12 +147,15 @@ def fgCall(deficit, clock, down, ballOn=16, offTO=1):
                 down=down, distance=10, ballOn=ballOn, offTimeouts=offTO, defTimeouts=3,
                 clockRunning=False)
     return s.callPlay()
-expect("trailing by 2, 1st down, 14s, 1 timeout (the reported bug) -> kicks the winner",
-       fgCall(2, 14, 1) is PlayType.FieldGoal)
-expect("trailing by 2, no timeouts, 12s -> kicks (last play)", fgCall(2, 12, 1, offTO=0) is PlayType.FieldGoal)
-expect("trailing by 3 (FG ties), last play -> kicks the tying FG", fgCall(3, 12, 1) is PlayType.FieldGoal)
-expect("tied (FG wins), last play -> kicks the winner", fgCall(0, 12, 1) is PlayType.FieldGoal)
-expect("3rd down, no timeouts (can't spike), ~1 play left -> kicks", fgCall(2, 20, 3, offTO=0) is PlayType.FieldGoal)
+expect("trailing by 2, 1st down, 7s stopped, 1 timeout -> kicks the winner", fgCall(2, 7, 1) is PlayType.FieldGoal)
+expect("trailing by 2, no timeouts, 9s stopped -> kicks (last play)", fgCall(2, 9, 1, offTO=0) is PlayType.FieldGoal)
+expect("trailing by 3 (FG ties), 7s stopped -> kicks the tying FG", fgCall(3, 7, 1) is PlayType.FieldGoal)
+expect("tied (FG wins), 7s stopped -> kicks the winner", fgCall(0, 7, 1) is PlayType.FieldGoal)
+expect("trailing by 2, 1st down, 14s stopped, 1 timeout -> one more snap first",
+       fgCall(2, 14, 1) is not PlayType.FieldGoal)
+expect("trailing by 2, no timeouts, 12s stopped -> one more snap first",
+       fgCall(2, 12, 1, offTO=0) is not PlayType.FieldGoal)
+expect("tied, 12s stopped, 1 timeout -> one more snap first", fgCall(0, 12, 1) is not PlayType.FieldGoal)
 expect("4th down in range, trailing -> kicks", fgCall(2, 25, 4) is PlayType.FieldGoal)
 # Plays remain (90s): should NOT auto-kick — play on for the TD. Frequency check
 # since the defer carries a small coach-miss chance.
