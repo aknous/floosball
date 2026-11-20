@@ -1820,6 +1820,32 @@ class Game:
         except Exception:
             return False
 
+    def _kickDrainsClock(self) -> bool:
+        """The field goal just called lets the clock run to ~3s before its snap.
+
+        At the end of a game, a kick that ties or takes the lead (`_isFgDrainMode`). At the
+        end of the FIRST HALF, any kick at any score (fixed 2026-11-20): the possession is
+        free and the clock resets at the break, so time the kick leaves only goes to the
+        opponent (a kickoff takes no time here). Prod game 6945, the season-15 Floos Bowl:
+        KCS, down 13, kicked from 0:14 and LAE got the ball back at 0:09.
+
+        Not in Frames (a settled frame's clock is game time the total still needs), chess
+        clock (draining spends the possession budget) or a seconds drive clock (draining
+        spends the drive)."""
+        play = getattr(self, 'play', None)
+        if play is None or play.playType is not PlayType.FieldGoal:
+            return False
+        if self._isFgDrainMode(forKick=True):
+            return True
+        if self.currentQuarter != 2 or self._periodEnd()[0] != 'half':
+            return False
+        if not self.format.usesQuarterBreaks() or getattr(self.format, 'key', '') == 'chess_clock':
+            return False
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds'):
+            return False
+        return self._offenseEffectiveSecs() <= 60
+
     def _logPressureCorrelation(self) -> None:
         """Append one JSONL entry per team to logs/pressure_correlation.jsonl
         capturing pressure level, game outcome, ELO delta, form state, and
@@ -2317,8 +2343,8 @@ class Game:
         return plays
 
     def _snapFitsBeforeKick(self, playsAvailable: int) -> bool:
-        """At the end of a game with a kick that ties or takes the lead in hand: does one
-        more snap fit before it? Running another play is worth it only on a STOPPED clock,
+        """At the end of a game with a kick that ties or takes the lead in hand, or at the end
+        of the first half with any kick in range: does one more snap fit before it? Running another play is worth it only on a STOPPED clock,
         because a kick snapped from a stopped clock cannot drain and leaves the opponent
         whatever the kick does not use (a kickoff takes no time here).
 
@@ -2894,8 +2920,7 @@ class Game:
         # time on the clock, so a timeout here only hands the opponent the seconds it saves:
         # a tied team kicking at 0:14 stopped the clock and gave back ~9. It is still
         # spent when the dead-ball administration alone would run the clock out.
-        if (self.play.playType is PlayType.FieldGoal
-                and self._isFgDrainMode(forKick=True)
+        if (self._kickDrainsClock()
                 and self.gameClockSeconds > DEAD_BALL_ADMIN_SECONDS + 1):
             return
         # ⚠️ CHECK NO-HUDDLE BEFORE SPENDING A TIMEOUT. Standing at the line is the cheaper
@@ -8041,7 +8066,11 @@ class Game:
                 # `_fourthDownCaller` instead, which has its own end-of-half branch. Only
                 # the play count decides it here, which is why that count being right
                 # matters so much.
-                if eohPlaysAvailable <= 1:
+                # ⚠️ `_estimateAvailablePlays` already holds back the kick's snap, so 1
+                # means one more play AND the kick still fit (fixed 2026-11-20, as at the
+                # end of the game): prod game 6945, 2nd & 10 from a stopped 0:14 with two
+                # timeouts, the kick went on that snap and left LAE 0:09.
+                if not self._snapFitsBeforeKick(eohPlaysAvailable):
                     self.play.insights['clockMgmt'] = {
                         'decision': 'endOfHalfFG',
                         'reason': 'End of half, take the FG on the last play (any score)',
@@ -14801,9 +14830,7 @@ class Game:
         # tempo so the offense maximises chances at a TD before settling for
         # the kick. iqOffset in calculatePreSnapTime tightens or loosens the
         # FG-snap target per coach.
-        if (hasattr(self, 'play') and self.play is not None
-                and getattr(self.play, 'playType', None) == PlayType.FieldGoal
-                and self._isFgDrainMode(forKick=True)):
+        if self._kickDrainsClock():
             # ⚠️ SNAP AT ~3s, NOT 7 (fixed 2026-11-19). The kick takes 4-6s and a kickoff
             # takes no time in this engine (an instant touchback, clock stopped), so every
             # second left after the kick is a snap for the opponent from its own 20. At 7
