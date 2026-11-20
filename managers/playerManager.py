@@ -4958,23 +4958,37 @@ class PlayerManager:
             cands = [(self._planRating(brain, team, e[0], k, tilt, True), e[0],
                       'rookie' if e[0] is extra else 'prospect', e) for e in waiting]
             # A different free agent for each open slot (the next ones on this team's
-            # board at its pick). When a later season's projected pool runs dry, the plan
-            # assumes a free agent of the quality this offseason offers at its pick: that
-            # pool cannot see players whose deals end beyond the horizon, cuts, washed-out
-            # prospects or new players, so "nobody" overstates the hole. Replacement level
-            # only when this offseason has nobody either.
+            # board at its pick). In a later season the plan takes the better of the next
+            # one in the projected pool and the free agent of the quality this offseason
+            # offers at its pick ("typical"): that pool cannot see players whose deals end
+            # beyond the horizon, cuts, washed-out prospects or new players, so a thin or
+            # empty pool overstates the hole. Replacement level only when this offseason
+            # has nobody either.
+            # ⚠️ A LATER SEASON NEVER PLANS ON LESS THAN THE TYPICAL FREE AGENT (fixed
+            # 2026-11-20). The typical one stood in only when the projected pool was EMPTY,
+            # and that pool is thin, so a plan keeping a starter (one more leftover in it)
+            # signed a 64 where the plan letting him go (pool empty) got a 70-75: keeping
+            # the better player read as worse. Prod, season-15 offseason: the Slippers let
+            # Trackstar Ducat (WR 87) go on that gap. A visible leftover is not all the
+            # market will hold (it cannot see cuts, washouts or new players), so the plan
+            # takes the better of the two.
             for i, fa in enumerate(self._planMarket(brain, team, position, faOrder, k,
                                                     contractShift, known, openSlots)
                                    if openSlots else []):
-                if fa is not None:
-                    cands.append((self._planRating(brain, team, fa, k, tilt, False), fa,
-                                  'market', None))
-                    continue
                 typical = None
                 if k > 1:
                     now = self._planMarket(brain, team, position, faOrder, 1, contractShift,
                                            known, openSlots)
                     typical = now[i] if i < len(now) else None
+                if fa is not None:
+                    faRating = self._planRating(brain, team, fa, k, tilt, False)
+                    if typical is not None:
+                        typicalRating = self._planRating(brain, team, typical, 1, tilt, False)
+                        if typicalRating > faRating:
+                            cands.append((typicalRating, None, 'typical', None))
+                            continue
+                    cands.append((faRating, fa, 'market', None))
+                    continue
                 if typical is not None:
                     cands.append((self._planRating(brain, team, typical, 1, tilt, False),
                                   None, 'typical', None))
