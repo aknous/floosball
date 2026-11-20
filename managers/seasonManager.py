@@ -6880,10 +6880,9 @@ class SeasonManager:
         needOffseasonStart = self.timingManager.mode in (TimingMode.OFFSEASON_TEST, TimingMode.FAST_WEEKLY) and BROADCASTING_AVAILABLE
         if needOffseasonStart:
             # Broadcast offseason_start with draft order + roster snapshots.
-            # Rookie draft uses the worst-first order from playoffs. The FA
-            # draft later updates the draft order to the tier-sorted sequence
-            # via a lighter fa_draft_order_update event that doesn't reset
-            # accumulated transactions.
+            # Both drafts use the worst-first order from the playoffs. The FA
+            # draft re-sends it via a lighter fa_draft_order_update event that
+            # doesn't reset accumulated transactions.
             try:
                 faOrderEarly = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
                 draftOrderList = [
@@ -9032,13 +9031,12 @@ class SeasonManager:
             logger.error("No free agency order available (playoffs must be completed first)")
             return
 
-        # Rookie draft uses the worst-first freeAgencyOrder from playoffs (rebuild
-        # path). FA draft, however, gives MEGA-market teams priority so funding
-        # Reuse the tier-sorted draft order computed during pre_fa preview,
-        # so picks fire against the same order users saw during the wait.
-        # Fallback to rookie order if preview wasn't computed (e.g., offline
-        # mode). The fa_draft_order_update event was also broadcast during
-        # the preview — don't re-fire it here.
+        # The FA draft uses the same worst-first freeAgencyOrder as the rookie
+        # draft (no funding-tier reordering; see _broadcastFaDraftPreview). Reuse
+        # the order stored during the pre_fa preview so picks fire against the
+        # order users saw during the wait, falling back to freeAgencyOrder if the
+        # preview didn't run. The fa_draft_order_update event was also broadcast
+        # during the preview, so don't re-fire it here.
         freeAgencyOrder = getattr(self, '_pendingFaDraftOrder', None)
         if not freeAgencyOrder:
             freeAgencyOrder = self.currentSeason.freeAgencyOrder
@@ -10234,7 +10232,7 @@ class SeasonManager:
         logger.info("FA voting window opened mid-season — stays open through end of regular season")
 
     async def _broadcastFaDraftPreview(self) -> None:
-        """Compute the tier-sorted FA draft order + current FA pool and
+        """Set the FA draft order (worst-first, same as the rookie draft) + current FA pool and
         broadcast them so the OffseasonPanel renders the team board as a single
         Appeal-ranked list and the FA pool list during the pre-FA wait.
 
