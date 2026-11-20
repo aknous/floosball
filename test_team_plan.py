@@ -180,7 +180,14 @@ def test_a_later_season_reads_the_market_after_this_fa_draft():
     """Owner, 2026-11-06: teams were "assuming they will all actually make it to FA even
     though most of them will probably get signed". With two other teams missing an RB,
     the two best free-agent RBs are gone by next offseason; what is left for later
-    seasons is the third, plus other teams' expiring players their GMs will not keep."""
+    seasons is the third, plus other teams' expiring players their GMs will not keep.
+
+    ⚠️ AND NEVER LESS THAN THE TYPICAL FREE AGENT (owner, 2026-11-20, option A). The
+    typical one (this offseason's quality at the team's pick) used to stand in only when
+    that later pool was empty, so a thin pool read worse than an empty one and keeping a
+    starter could look worse than letting him go (prod: the Slippers let Trackstar Ducat
+    walk on it). Picking first here, the team's typical free agent is the 90, so later
+    seasons plan on 90 rather than the leftover 75."""
     other1, other2, me = FakeTeam(1, 'Other1'), FakeTeam(2, 'Other2'), FakeTeam(3, 'Club')
     other1.rosterDict, other2.rosterDict = {}, {}
     # The team's own RB covers next season and walks after it, so it shops a season later.
@@ -190,7 +197,7 @@ def test_a_later_season_reads_the_market_after_this_fa_draft():
     h.freeAgents = [_freeAgent(800 + i, r, Position.RB, f'FA {r}') for i, r in enumerate((90, 88, 75))]
     order = [me, other1, other2]
     levels = h.positionOutlook(brain, me, Position.RB, faOrder=order, intent={})
-    assert levels == [80.0, 75.0, 75.0], levels
+    assert levels == [80.0, 90.0, 90.0], levels
     # A free agent it signs this offseason stays: with no RB at all it takes the 90 (first
     # in the order) and keeps him.
     me.rosterDict = {}
