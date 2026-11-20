@@ -62,6 +62,7 @@ def init_db():
     _seedAchievements()
     _collapseLiveGenerationalNames()
     _backfillProspectContracts()
+    _restoreS15Resigns()
     _backfillHomeTeams()
     _backfillFacilityRankings()
     _backfillTradeMoves()
@@ -4050,6 +4051,109 @@ def _backfillHomeTeams():
             logger.info(f"Home teams backfilled: {drafted} from the draft, {first} from a first team")
     except Exception as e:
         logger.warning(f"Home team backfill skipped: {e}")
+
+
+_S15_RESIGN_MARKER = 'resigns_restored_s15'
+S15_SLIPPERS_ID, S15_WAFFLES_ID = 14, 19
+S15_DUCAT_ID, S15_VAZOR_ID, S15_DAYWOMAN_ID, S15_CHISHOLM_ID = 317, 224, 379, 506
+
+
+def _restoreS15Resigns():
+    """ONE-SHOT (owner, 2026-11-20): undo two season-15 step-3 re-sign decisions.
+
+    - The Slippers re-sign WR Trackstar Ducat (87) for 4 seasons. Their plan let him go
+      for prospect Butte Chisholm (74) because a later season's market read a 64
+      leftover with him kept and a 70-75 typical free agent without him (fixed in
+      `positionPlan` the same day); the commitment to promote Chisholm into his slot
+      is dropped.
+    - The Waffles re-sign TE Tesil Vazor (85) for 2 seasons instead of K Carmela
+      Daywoman (79), who walks: her old one-season deal is expired, as at step 3.
+    The recap rows flip (walked <-> resign), so the offseason board and `previousTeam`
+    (restored from them on resume) agree; nothing is announced (no news was published).
+    `team_resign_count` follows the re-sign rules: +1 for a re-sign, 0 for a walk.
+
+    ⚠️ AT BOOT, NOT AGAINST THE LIVE DATABASE: the running sim writes rosters back from
+    memory, and `init_db` runs before players load. ⚠️ GUARDED on the state it was written
+    against (season 15's offseason past step 3, rookie draft not run, the three players
+    where step 3 left them); anything else records a skip. Remove once it has run on prod.
+    """
+    import json as _json
+    from sqlalchemy import text
+    from database.models import AppSetting
+    session = SessionLocal()
+    try:
+        if session.query(AppSetting).filter(AppSetting.key == _S15_RESIGN_MARKER).first():
+            return
+        state = session.execute(text(
+            "SELECT current_season, in_offseason, offseason_completed_steps FROM simulation_state "
+            "WHERE id = 1")).fetchone()
+        rows = {r[0]: r for r in session.execute(text(
+            "SELECT id, team_id, term_remaining FROM players WHERE id IN (:a, :b, :c)"),
+            {'a': S15_DUCAT_ID, 'b': S15_VAZOR_ID, 'c': S15_DAYWOMAN_ID})}
+        steps = []
+        try:
+            steps = _json.loads(state[2] or '[]') if state else []
+        except Exception:
+            steps = []
+        reason = None
+        if not state or state[0] != 15 or not state[1]:
+            reason = f'not the season-15 offseason ({state[0] if state else None})'
+        elif 'frontoffice_decisions' not in steps:
+            reason = 'step 3 has not run'
+        elif 'rookie_draft' in steps:
+            reason = 'the rookie draft already ran'
+        elif S15_DUCAT_ID not in rows or rows[S15_DUCAT_ID][1] is not None:
+            reason = 'Ducat is not a free agent'
+        elif S15_VAZOR_ID not in rows or rows[S15_VAZOR_ID][1] is not None:
+            reason = 'Vazor is not a free agent'
+        elif (S15_DAYWOMAN_ID not in rows or rows[S15_DAYWOMAN_ID][1] != S15_WAFFLES_ID
+              or rows[S15_DAYWOMAN_ID][2] != 4):
+            reason = 'Daywoman is not on her Waffles re-sign'
+        if reason:
+            session.add(AppSetting(key=_S15_RESIGN_MARKER, value=f'skipped: {reason}'))
+            session.commit()
+            logger.warning(f"Season-15 re-sign restore skipped: {reason}")
+            return
+
+        def resign(pid, teamId, seasons):
+            session.execute(text(
+                "UPDATE players SET team_id = :t, term = :n, term_remaining = :n, "
+                "free_agent_years = 0, team_resign_count = 2 WHERE id = :p"),
+                {'t': teamId, 'n': seasons, 'p': pid})
+            session.execute(text(
+                "UPDATE season_recap_events SET event_type = 'resign', detail = :d "
+                "WHERE season = 15 AND event_type = 'walked' AND player_id = :p"),
+                {'d': f'{seasons} season(s)', 'p': pid})
+        resign(S15_DUCAT_ID, S15_SLIPPERS_ID, 4)
+        resign(S15_VAZOR_ID, S15_WAFFLES_ID, 2)
+        session.execute(text(
+            "UPDATE players SET team_id = NULL, term = 1, term_remaining = 0, "
+            "free_agent_years = 0, team_resign_count = 0 WHERE id = :p"),
+            {'p': S15_DAYWOMAN_ID})
+        session.execute(text(
+            "UPDATE season_recap_events SET event_type = 'walked', detail = NULL "
+            "WHERE season = 15 AND event_type = 'resign' AND player_id = :p"),
+            {'p': S15_DAYWOMAN_ID})
+        row = session.query(AppSetting).filter(AppSetting.key == 'prospect_commitments').first()
+        if row is not None:
+            try:
+                data = _json.loads(row.value or '{}')
+                team = (data.get('teams') or {}).get(str(S15_SLIPPERS_ID)) or {}
+                team.pop(str(S15_CHISHOLM_ID), None)
+                if not team:
+                    (data.get('teams') or {}).pop(str(S15_SLIPPERS_ID), None)
+                row.value = _json.dumps(data)
+            except Exception as e:
+                logger.warning(f"Season-15 re-sign restore: commitments unchanged: {e}")
+        session.add(AppSetting(key=_S15_RESIGN_MARKER, value='done'))
+        session.commit()
+        logger.info("Season-15 re-sign restore: Ducat back with the Slippers (4 seasons), "
+                    "Vazor with the Waffles (2 seasons), Daywoman to free agency")
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Season-15 re-sign restore failed: {e}")
+    finally:
+        session.close()
 
 
 def _backfillProspectContracts():
