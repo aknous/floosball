@@ -5252,19 +5252,26 @@ class PlayerManager:
         is available. The need value alone mostly does this (that prospect sets the
         bar, so the rookie scores 0), but when no rookie left fills a need the
         tie-break could still land on one.
-        Kickers are passed over at the top `ROOKIE_DRAFT_TOP_SLOTS` unless a kicker is
-        all that is left (owner, 2026-10-01). Ties go to the rookie least blocked at his
+        Kickers are passed over at every slot unless a kicker is all that is left
+        (owner, 2026-11-20; it was the top `ROOKIE_DRAFT_TOP_SLOTS` from 2026-10-01).
+        Ties go to the rookie least blocked at his
         position, then the higher ceiling, then a position the team is thin at. Then the
         clear-need preference (`preferClearNeed`)."""
-        from constants import ROOKIE_DRAFT_TOP_SLOTS
         if not eligible:
             return None
         self._planCache = {}
         self._planMarketCache = {}
         faOrder = faOrder if faOrder is not None else getattr(self, '_draftFaOrder', None)
         pool = [r for r in eligible if not self.blockedByOwnProspect(brain, team, r)] or list(eligible)
-        if slotNumber <= int(ROOKIE_DRAFT_TOP_SLOTS):
-            pool = [r for r in pool if r.position != FloosPlayer.Position.K] or pool
+        # ⚠️ NO KICKER WHILE ANY OTHER ROOKIE IS LEFT, AT EVERY SLOT (owner, 2026-11-20).
+        # A good kicker is rarely kept past his first deal (prod seasons 1-15, rated 84+ at
+        # contract end: QB 95% kept, RB 85%, WR 88%, TE 60%, K 32%), so a kicker pick mostly
+        # buys one contract. When no other rookie adds to the plan, the best non-kicker is
+        # still the pick: a prospect the plan never promotes is sold in season (usually
+        # for a first-round pick). It used to apply to the top ROOKIE_DRAFT_TOP_SLOTS only;
+        # in the season-15 mock the Oysters took Jimmy Mars 3rd (their plan had no other
+        # need) and two kickers went in the top 8.
+        pool = [r for r in pool if r.position != FloosPlayer.Position.K] or pool
         choice = max(pool, key=lambda r: (
             round(self.rookiePlanValue(brain, team, r, intent, contractShift, faOrder), 6),
             self.rookiePlanMargin(brain, team, r, intent, contractShift, faOrder),
