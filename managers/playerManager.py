@@ -3971,6 +3971,14 @@ class PlayerManager:
             byPos.setdefault(getattr(r, 'position', None), []).append(r)
         for pos, group in byPos.items():
             group.sort(key=lambda p: -_consensus(p))
+            # ⚠️ EVERY UNDRAFTED KICKER IS A FREE AGENT (owner, 2026-11-20). No pick takes a
+            # kicker while any other rookie is left (`chooseRookiePick`), so the whole
+            # kicker class goes undrafted; washing it out would leave no young kickers
+            # entering the league. They go straight into the FA draft instead, and the
+            # pool cull handles any nobody signs.
+            if pos == FloosPlayer.Position.K:
+                keep += group
+                continue
             need = max(0, int(deficits.get(pos, 0)))
             keep += group[:need]
             drop += group[need:]
@@ -5868,7 +5876,7 @@ class PlayerManager:
 
         self.sortPlayersByPosition()
         logger.info(f"Rookie draft complete: {len(picks)} drafted, {len(undrafted)} undrafted "
-                    f"kept as free agents for position supply, {len(outcome['washedOut'])} "
+                    f"kept as free agents (every kicker, plus position supply), {len(outcome['washedOut'])} "
                     f"washed out")
         yield {'type': 'complete', 'picks': picks, 'undrafted': undrafted}
 

@@ -199,17 +199,21 @@ def testOnlyTheSurplusWashesOut(monkeypatch):
     removed = []
     monkeypatch.setattr(pm, '_removeUnsignedPlayer', lambda p: removed.append(p))
     monkeypatch.setattr(pm, 'addToPositionList', lambda p: None)
-    # The pool already covers every position except kickers, which are two short.
+    # The pool already covers every position except running backs, which are two short.
     monkeypatch.setattr(pm, 'positionSupplyDeficits',
-                        lambda n, countProspects=False: {FP.Position.K: 2})
-    ks = [_prospect(pm, FP.Position.K, seed=s) for s in (70, 85, 78)]
+                        lambda n, countProspects=False: {FP.Position.RB: 2})
+    rbs = [_prospect(pm, FP.Position.RB, seed=s) for s in (70, 85, 78)]
     wrs = [_prospect(pm, FP.Position.WR, seed=s) for s in (75, 80)]
-    out = pm.washOutUndrafted(ks + wrs, 4)
+    # Every undrafted kicker is a free agent, shortage or not (owner, 2026-11-20): no pick
+    # takes a kicker while another rookie is left, so the class would otherwise vanish.
+    ks = [_prospect(pm, FP.Position.K, seed=s) for s in (70, 88)]
+    out = pm.washOutUndrafted(rbs + wrs + ks, 4)
     keptIds = set(out['kept'])
-    assert {k.id for k in ks if k.playerRating >= sorted(x.playerRating for x in ks)[1]} <= keptIds
-    assert len([k for k in ks if k.id in keptIds]) == 2
+    assert {r.id for r in rbs if r.playerRating >= sorted(x.playerRating for x in rbs)[1]} <= keptIds
+    assert len([r for r in rbs if r.id in keptIds]) == 2
     assert all(w in removed for w in wrs)
-    assert all(not r.is_upcoming_rookie and r.is_undrafted for r in ks + wrs)
+    assert {k.id for k in ks} <= keptIds and not any(k in removed for k in ks)
+    assert all(not r.is_upcoming_rookie and r.is_undrafted for r in rbs + wrs + ks)
 
 
 def testAPlayerWithARecordIsNeverWashedOut(monkeypatch):
