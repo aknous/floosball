@@ -9622,15 +9622,27 @@ def get_draft_class(response: Response,
             return scouting_report.scoutingReport(p, peers)
         except Exception:
             return None
-    entries = [{
-        "playerId": getattr(p, 'id', None),
-        "name": p.name,
-        "position": p.position.name,
-        "rating": round(getattr(p, 'playerRating', 0), 1),
-        "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
-        "projection": _prospectProjection(p),
-        "scoutingReport": _report(p),
-    } for p in ranked]
+    # ⚠️ KICKERS ARE NOT DRAFTED (owner, 2026-11-20): no pick takes one while another rookie
+    # is left, and every undrafted kicker becomes a free agent. A numbered spot in the
+    # ranking would promise a pick that never comes, so kickers follow everyone else,
+    # unranked, flagged `headedToFreeAgency`.
+    def _isKicker(p):
+        return getattr(getattr(p, 'position', None), 'name', None) == 'K'
+    ranked = [p for p in ranked if not _isKicker(p)] + [p for p in ranked if _isKicker(p)]
+    entries = []
+    for p in ranked:
+        kicker = _isKicker(p)
+        entries.append({
+            "playerId": getattr(p, 'id', None),
+            "name": p.name,
+            "position": p.position.name,
+            "rating": round(getattr(p, 'playerRating', 0), 1),
+            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+            "projection": _prospectProjection(p),
+            "scoutingReport": _report(p),
+            "rank": None if kicker else len(entries) + 1,
+            "headedToFreeAgency": kicker,
+        })
     response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=60")
     return build_success_response({
         "season": season,
