@@ -106,10 +106,37 @@ expect(f"...it punts instead ({c[PlayType.Punt]}/40)", c[PlayType.Punt] == 40)
 c = calls(defTimeouts=0, **GAME_6867)
 expect(f"opponent out of timeouts -> still never kneel ({c[PlayType.Kneel]}/40)",
        c[PlayType.Kneel] == 0)
-s.situation(defTimeouts=2, **{**GAME_6867, 'down': 2})
+s.situation(defTimeouts=1, **{**GAME_6867, 'down': 2})
 detail = s.g._kneelOutDetail(s.g.offensiveTeam is s.g.homeTeam)
-expect("an earlier down still kneels it out (another kneel follows a timeout)",
+expect("an earlier down still kneels it out (another kneel follows the timeout)",
        detail is not None)
+s.situation(defTimeouts=2, **{**GAME_6867, 'down': 2})
+expect("...but not against two timeouts: kneel, timeout, kneel, timeout, then 4th down",
+       s.g._kneelOutDetail(s.g.offensiveTeam is s.g.homeTeam) is None)
+
+print("\n9. The defense's timeouts count unless the defense itself has given up")
+# Prod game 6946: PHI up 12, 3rd & 7 on its own 43, 0:21, NYS holding one timeout.
+# It knelt (the kneel math ignored the timeout for any lead over 8 inside 1:00), NYS
+# called time and PHI punted on 4th down. NYS's own timeout rule only quits past 16.
+GAME_6946 = dict(quarter=4, clock=21, offense='home', offScore=35, defScore=23,
+                 down=3, distance=7, ballOn=57, offTimeouts=0, clockRunning=True)
+s.situation(defTimeouts=1, **GAME_6946)
+expect("up 12, opponent holding a timeout -> not a kneel-out",
+       s.g._kneelOutDetail(True) is None)
+random.seed(4)
+kneels = 0
+for _ in range(40):
+    s.situation(defTimeouts=1, **GAME_6946)
+    kneels += s.callPlay() == PlayType.Kneel
+expect(f"...so the snap is played for the first down ({kneels}/40 kneels)", kneels == 0)
+s.situation(defTimeouts=0, **GAME_6946)
+expect("opponent out of timeouts -> kneel it out", s.g._kneelOutDetail(True) is not None)
+s.situation(defTimeouts=0, **GAME_6946)
+expect(f"...and the play caller kneels ({s.callPlay().name})",
+       s.g.play.playType == PlayType.Kneel)
+s.situation(defTimeouts=1, **{**GAME_6946, 'offScore': 45})
+expect("up 22 (the defense will not spend its timeout) -> kneel it out",
+       s.g._kneelOutDetail(True) is not None)
 
 print()
 if fails:
