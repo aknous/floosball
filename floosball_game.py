@@ -3740,6 +3740,26 @@ class Game:
             return False
         return self._framesMatchResultIfAdd(self._fgValue()) == 'win'
 
+    def _oppTimeoutsAgainstKneel(self) -> int:
+        """The timeouts the DEFENSE will spend against a kneel, by its own rule.
+
+        The defense keeps calling timeouts unless the game is lost by its own test
+        (`_checkDefensiveTimeout` returns on `_isGarbageTime` of its clock margin), so the
+        kneel arithmetic reads the same test. ⚠️ It used its own "too far to come back"
+        bar (8 points inside 1:00, 16 above), which disagreed with the defense's (two
+        max possessions, 16, inside 2:00). Prod game 6946: PHI up 12 on 3rd & 7 with 0:21
+        left, NYS holding a timeout; the kneel read 40s of drain, knelt, NYS called time
+        and PHI had to punt on 4th down. Counting the timeout, the snap is played for the
+        first down that would have ended it.
+        """
+        if self.defensiveTeam is None:
+            return 0
+        defIsHome = (self.defensiveTeam == self.homeTeam)
+        tos = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
+        if self._isGarbageTime(self._clockMargin(forDefense=True)):
+            return 0
+        return tos
+
     def _kneelOutDetail(self, isHome: bool):
         """The numbers behind a game-ending KNEEL-OUT, or None when kneeling cannot end it.
 
@@ -3800,13 +3820,7 @@ class Game:
                     return None
 
         oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-        # Opponent timeouts only matter while the game is close enough for them to come
-        # back; how far they have to come is a POINTS gap, which in frames is the margin
-        # inside the live frame rather than the running total.
-        maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
-        _comebackDiff = self._frameScoreDiff()
-        _comebackDiff = _comebackDiff if _comebackDiff is not None else scoreDiff
-        effectiveOppTos = oppTimeouts if _comebackDiff <= maxComebackPts else 0
+        effectiveOppTos = self._oppTimeoutsAgainstKneel()
         # ⚠️ A FINAL-SNAP KNEEL DRAINS ONLY ITS SNAP. It is a turnover on downs, which
         # stops the clock, so there is no play-clock runoff after it whatever the
         # opponent's timeouts (`Play.kneel`, `kneelEndsPossession`). It ends the game only
@@ -7981,12 +7995,7 @@ class Game:
                 # clock was running or stopped before this kneel (a stopped-clock kneel
                 # STARTS the clock, then the play clock runs off; see the drain in the
                 # game loop). A timed-out kneel drains only the 4s snap.
-                maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
-                # How far the opponent has to come back is a POINTS gap — in frames that's
-                # the margin inside the live frame, not the running total.
-                _comebackDiff = self._frameScoreDiff()
-                _comebackDiff = _comebackDiff if _comebackDiff is not None else scoreDiff
-                effectiveOppTos = oppTimeouts if _comebackDiff <= maxComebackPts else 0
+                effectiveOppTos = self._oppTimeoutsAgainstKneel()
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
