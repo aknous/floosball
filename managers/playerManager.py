@@ -5280,11 +5280,15 @@ class PlayerManager:
         # in the season-15 mock the Oysters took Jimmy Mars 3rd (their plan had no other
         # need) and two kickers went in the top 8.
         pool = [r for r in pool if r.position != FloosPlayer.Position.K] or pool
-        choice = max(pool, key=lambda r: (
+        keys = {id(r): (
             round(self.rookiePlanValue(brain, team, r, intent, contractShift, faOrder), 6),
             self.rookiePlanMargin(brain, team, r, intent, contractShift, faOrder),
             self.rookieCeiling(brain, team, r),
-            -self.countTeamProspectsAtPosition(team, r.position)))
+            -self.countTeamProspectsAtPosition(team, r.position)) for r in pool}
+        choice = max(pool, key=lambda r: keys[id(r)])
+        # Kept for the draft's per-pick log line (`rookieDraftPickGenerator`), best first.
+        self._lastRookiePickScores = sorted(((r, keys[id(r)]) for r in pool),
+                                            key=lambda x: x[1], reverse=True)
         return self.preferClearNeed(brain, team, pool, choice, intent) if preferNeed else choice
 
     def prospectRanking(self, brain=None, teams=None) -> list:
@@ -5807,9 +5811,28 @@ class PlayerManager:
             # let a 76 WR go for Griffin Star, took Ivy Linguine #2, and the Jetskis took
             # Griffin Star #3).
             committed = PlayerManager.committedRookie(self, team, eligible)
+            self._lastRookiePickScores = None
             pick = committed or self.chooseRookiePick(brain, team, eligible, slotNumber)
             if committed is not None:
                 logger.info(f"Team plan: {team.name} drafts {committed.name} #{slotNumber} as planned")
+            else:
+                # WHY THIS PICK (owner, 2026-11-22): a pick prod made could not be explained
+                # afterwards, because a replay draws the GMs' scouting misreads afresh. Each
+                # candidate's plan value, how blocked he is at his position (margin) and the
+                # team's read of his ceiling, best first, so the reasoning is in the log.
+                try:
+                    scores = self._lastRookiePickScores or []
+                    def _fmt(r, k):
+                        return (f"{r.name} ({r.position.name}, value {k[0]:.1f}, "
+                                f"margin {k[1]:.1f}, ceiling {k[2]:.0f})")
+                    chosen = next((k for r, k in scores if r is pick), None)
+                    others = [_fmt(r, k) for r, k in scores if r is not pick][:4]
+                    logger.info(
+                        f"Rookie draft pick: {team.name} #{slotNumber} took "
+                        + (_fmt(pick, chosen) if chosen else f"{pick.name} ({pick.position.name})")
+                        + ("; next: " + "; ".join(others) if others else ""))
+                except Exception as e:
+                    logger.debug(f"pick reasoning unavailable: {e}")
             # Say when the star rules moved the pick (the superstar lock, or comparable
             # upside at a clear need), and what it would have been without them.
             try:

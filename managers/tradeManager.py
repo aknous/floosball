@@ -1575,17 +1575,22 @@ class TradeMarket:
             self._coreCache[id(team)] = set()
             return set()
 
-        core = set()
-        for p in roster[:int(TRADE_CORE_SIZE)]:
+        # ⚠️ THE STAR BAR COMES FIRST, THEN THE TOP TWO (fixed 2026-11-22). It took the top
+        # two by position-weighted value and then dropped anyone under the bar, so a
+        # lower-rated player at a heavier position could take a core spot and fail it:
+        # the Sand Dollars' second spot went to a 78 RB ahead of Chubble Roon (TE 94,
+        # All-Pro), whose core premium was skipped, and Rhyme's offer cleared his ask.
+        def _eligible(p):
             if (getattr(p, 'playerRating', 0) or 0) < TRADE_CORE_MIN_RATING:
-                continue
+                return False
             if TRADE_CORE_EXCLUDES_DECLINING:
                 try:
                     if self.brain.classifyArc(p) == ARC_REGRESSING:
-                        continue
+                        return False
                 except Exception:
                     pass
-            core.add(id(p))
+            return True
+        core = {id(p) for p in [p for p in roster if _eligible(p)][:int(TRADE_CORE_SIZE)]}
         self._coreCache[id(team)] = core
         return core
 

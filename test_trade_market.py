@@ -734,6 +734,28 @@ def test_the_core_must_actually_be_STARS():
     print(f"PASS below {TRADE_CORE_MIN_RATING:g} nobody is untouchable")
 
 
+def test_the_star_bar_comes_before_the_top_two():
+    """⚠️ THE CORE IS THE TEAM'S TWO BEST STARS, NOT ITS TWO MOST VALUABLE PLAYERS WHO THEN
+    HAVE TO BE STARS (fixed 2026-11-22). Ranked by position-weighted value first, the
+    Sand Dollars' second spot went to a 78 RB ahead of Chubble Roon (TE 94, All-Pro),
+    the RB failed the bar, and Roon was sold without his core premium."""
+    club = FakeTeam(1, 'Sand', wins=18, losses=10)
+    club.rosterDict['qb'] = FakePlayer(10, 88, Position.QB)
+    club.rosterDict['rb'] = FakePlayer(11, 78, Position.RB)
+    club.rosterDict['te'] = FakePlayer(12, 94, Position.TE)
+    market = _market([club, FakeTeam(9, 'Other')], week=20)
+    # The real brain ranks by position-weighted value (POSITION_VALUE), which is what
+    # pushed the TE behind the RB; the stub ranks by rating, so weight it here.
+    from constants import POSITION_VALUE
+    market.brain.decisionValue = lambda p, coach=None, rng=None, team=None: \
+        float(p.playerRating) * POSITION_VALUE[p.position.name]
+    core = market._coreOf(club)
+    assert id(club.rosterDict['te']) in core, "the 94 TE was left out of the core"
+    assert id(club.rosterDict['qb']) in core
+    assert id(club.rosterDict['rb']) not in core
+    print("PASS the core is the two best stars")
+
+
 def test_a_declining_star_is_still_an_asset():
     """⚠️ SELLING HIGH ON A FADING VETERAN IS ONE OF THE FEW GENUINELY SMART THINGS A FRONT
     OFFICE CAN DO. The core is who you build AROUND, and a player on the way down is not
