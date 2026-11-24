@@ -2027,6 +2027,27 @@ RUN_CONTACT_SWING = 0.30   # rating points -> percentage points in a contact con
 RUN_MOVE_ELECT_BASE = 0.18 # baseline chance of trying a move instead of lowering a shoulder
 RUN_MOVE_ELECT_FLAIR = 0.55  # ...scaled by flair, so flashy backs try things plodders don't
 RUN_MOVE_BONUS = 5         # a move that lands beats the tackler by this much
+
+# Gap selection (`Play.selectRunGap`, 2026-11-23). Vision is how accurately the back
+# reads each gap; every back runs the CALLED gap unless another one looks clearly
+# better; leaving it costs quality because the defense is flowing while he cuts, and
+# agility is what makes the cut sharp; discipline is resisting the home-run bounce.
+# ⚠️ It replaced discipline TIERS that locked any back at 70+ into the called gap even
+# when it was stuffed, while a back under 70 read freely: crossing 70 cost 1.35 yards
+# a carry, more than any physical attribute, and vision did nothing for a disciplined
+# back. On prod's season-16 rosters that left xFactor (computed from focus and
+# discipline) at -0.42 against yards per carry and the overall rating at +0.27.
+RUN_GAP_READ_V2 = _os.environ.get('FLOOS_GAP_READ') != 'off'   # FLOOS_GAP_READ=off: the old discipline tiers
+RUN_GAP_VISION_ERR_REF = 92         # vision where the read error is RUN_GAP_VISION_ERR_AT_REF
+RUN_GAP_VISION_ERR_AT_REF = 5.0     # ± quality points; the old tiers' scale (±5/15/25 at 92/77/62)
+RUN_GAP_VISION_ERR_PER_PT = 10 / 15  # extra error per vision point below the reference
+RUN_GAP_VISION_ERR_MIN = 3.0
+RUN_GAP_VISION_ERR_MAX = 30.0
+RUN_GAP_SWITCH_MARGIN = 10.0        # how much better another gap must LOOK to leave the called one
+RUN_GAP_CUT_COST = 25.0             # quality lost cutting to another gap, at agility 60
+RUN_GAP_CUT_AGILITY_RELIEF = 0.6    # share of that cost an agility-100 back avoids
+RUN_GAP_BOUNCE_CUT_MULT = 2.0       # bouncing outside is a longer cut than a cutback
+RUN_GAP_BOUNCE_LURE_PER_PT = 0.6    # bounce overrated per discipline point under 80
 # Entry-state modifier on the gate-2 / gate-3 roll. The negatives are deliberately
 # steep: breaking a tackle should keep a run ALIVE, not routinely convert it into a
 # housecall. Without that, every broken tackle cascaded to the open field.

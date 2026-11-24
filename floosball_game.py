@@ -18578,7 +18578,54 @@ class Play():
         quality = np.random.normal(meanQuality, stdDev)
         return max(0, min(100, quality))
     
-    def selectRunGap(self, gapList: list, rbVision: int, rbDiscipline: int):
+    def selectRunGap(self, gapList: list, rbVision: int, rbDiscipline: int, rbAgility: int = 80):
+        """STAGE 2: the back reads the gaps and picks one.
+
+        Vision is how accurately he reads each gap, continuously (the old tiers' scale:
+        ±5 quality at 92, ±15 at 77, ±25 at 62). He runs the CALLED gap unless another
+        one looks clearly better (`RUN_GAP_SWITCH_MARGIN`). Leaving it costs quality,
+        because the defense flows while he cuts, and agility is what keeps that cost down;
+        bouncing outside is the longest cut. Discipline is resisting the home-run bounce:
+        an undisciplined back overrates the outside lane and chases it.
+
+        ⚠️ THE OLD RULE PUNISHED DISCIPLINE AND IGNORED VISION. Discipline tiers locked
+        a back at 70+ into the called gap even when it was stuffed while a back under 70
+        read freely, so crossing 70 cost 1.35 yards a carry (5.1 against 3.75, all backs
+        swept with nothing else changed), and a disciplined back never used his vision.
+        Kept as `_selectRunGapLegacy` behind `RUN_GAP_READ_V2`.
+
+        Returns the chosen gap dict: `quality` (what he saw), `actualQuality` (what is
+        really there, less any cut cost), `isDesigned`, `type`.
+        """
+        from constants import (RUN_GAP_READ_V2, RUN_GAP_VISION_ERR_REF,
+                               RUN_GAP_VISION_ERR_AT_REF, RUN_GAP_VISION_ERR_PER_PT,
+                               RUN_GAP_VISION_ERR_MIN, RUN_GAP_VISION_ERR_MAX,
+                               RUN_GAP_SWITCH_MARGIN, RUN_GAP_CUT_COST,
+                               RUN_GAP_CUT_AGILITY_RELIEF, RUN_GAP_BOUNCE_CUT_MULT,
+                               RUN_GAP_BOUNCE_LURE_PER_PT)
+        if not RUN_GAP_READ_V2:
+            return self._selectRunGapLegacy(gapList, rbVision, rbDiscipline)
+        err = RUN_GAP_VISION_ERR_AT_REF + (RUN_GAP_VISION_ERR_REF - rbVision) * RUN_GAP_VISION_ERR_PER_PT
+        err = round(max(RUN_GAP_VISION_ERR_MIN, min(RUN_GAP_VISION_ERR_MAX, err)))
+        lure = max(0.0, 80 - rbDiscipline) * RUN_GAP_BOUNCE_LURE_PER_PT
+        seen = []
+        for gap in gapList:
+            q = gap['quality'] + batched_randint(-err, err)
+            if gap['type'] == 'bounce':
+                q += lure
+            seen.append({'type': gap['type'], 'quality': max(0, min(100, q)),
+                         'actualQuality': gap['quality'], 'isDesigned': gap['isDesigned']})
+        best = max(seen, key=lambda g: g['quality'])
+        designed = next((g for g in seen if g['isDesigned']), best)
+        if best is designed or best['quality'] - designed['quality'] <= RUN_GAP_SWITCH_MARGIN:
+            return designed
+        lean = max(0.0, min(1.0, (rbAgility - 60) / 40))
+        cost = RUN_GAP_CUT_COST * (1 - RUN_GAP_CUT_AGILITY_RELIEF * lean)
+        if best['type'] == 'bounce':
+            cost *= RUN_GAP_BOUNCE_CUT_MULT
+        return dict(best, actualQuality=max(0, best['actualQuality'] - cost))
+
+    def _selectRunGapLegacy(self, gapList: list, rbVision: int, rbDiscipline: int):
         """
         STAGE 2: RB finds and selects a gap based on vision and discipline.
         High vision = accurately perceives gap quality
@@ -18824,11 +18871,13 @@ class Play():
                 'isDesigned': (gapType == designedGapType)
             })
         
-        # STAGE 2: RB selects gap based on vision and discipline
+        # STAGE 2: RB reads the gaps (vision), stays on the call unless another is clearly
+        # better, cuts to it (agility) and resists the bounce (discipline)
         selectedGap = self.selectRunGap(
             gapList,
             self.runner.attributes.vision,
-            self.runner.attributes.discipline
+            self.runner.attributes.discipline,
+            self.runner.attributes.agility,
         )
         
         # ── Three-gate yardage model ──
