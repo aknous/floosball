@@ -75,8 +75,11 @@ def test_a_prospect_due_to_take_over_covers_the_position():
     and a prospect projected to 86 takes over after him, so a QB rookie adds almost
     nothing and the pick goes to the position with a hole."""
     team = FakeTeam(1, 'Melons')
+    # The RB starter was 70; with backs priced above QBs (POSITION_VALUE, 2026-11-24) a
+    # rookie replacing a 70 RB outweighs the QB slot opening a season later, which is not
+    # what this test is about. At 76 the QB need still shows once the prospect is gone.
     team.rosterDict = {'qb': _starter(86, term=1, name='Moonshine'),
-                       'rb': _starter(70, Position.RB, name='Weak RB', pid=901)}
+                       'rb': _starter(76, Position.RB, name='Weak RB', pid=901)}
     prospect = FakePlayer(950, 79, Position.QB, 'Connery'); prospect.prospect_seasons = 1
     team.prospects = [prospect]
     rookies = [FakePlayer(1, 80, Position.QB, 'QB Rookie'), FakePlayer(2, 75, Position.RB, 'RB Rookie')]

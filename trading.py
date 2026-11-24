@@ -183,7 +183,7 @@ def playerValue(rating: float, termRemaining: int, week: int = None,
     rebuilder reads it as +11.9 and takes it — which is the trade the plan describes.
 
     ⚠️ `positionWeight` IS NOT OPTIONAL POLISH — WITHOUT IT A KICKER PRICES LIKE A
-    QUARTERBACK. `POSITION_VALUE` runs QB 1.00 down to K 0.35, and it exists, in its own
+    QUARTERBACK. `POSITION_VALUE` runs K 0.30 up to RB 1.00 (QB 0.75), and it exists, in its own
     words, to stop "best available" handing a team a great kicker while the QB slot rots.
     The trade scale dropped it entirely: `perceivedValue` applies it, the market then
     DIVIDED IT BACK OUT to recover a rating, and nothing re-applied it. Measured, a club

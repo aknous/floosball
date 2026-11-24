@@ -310,6 +310,32 @@ def test_a_late_pick_fills_a_hole_over_a_better_asset():
     print("PASS the last pick takes the RB the club is missing")
 
 
+
+def _qbFirstPrices(fn):
+    """Run a test under the position prices it was written for (QB 1.00 ... K 0.35).
+
+    These tests exercise the lock, need, clear-need and ranking rules through a choice
+    between a QB and another position, and their fixtures relied on the QB being the most
+    valuable position. `POSITION_VALUE` was re-priced on 2026-11-24 (RB 1.00 / WR 0.95 /
+    QB 0.75 / TE 0.74 / K 0.30), which flips those choices on price alone and says nothing
+    about the rules. The dict is mutated in place because every module imported it by name.
+    """
+    import functools
+    from constants import POSITION_VALUE
+    old = {'QB': 1.00, 'RB': 0.78, 'WR': 0.72, 'TE': 0.60, 'K': 0.35}
+
+    @functools.wraps(fn)
+    def run(*a, **kw):
+        saved = dict(POSITION_VALUE)
+        POSITION_VALUE.update(old)
+        try:
+            return fn(*a, **kw)
+        finally:
+            POSITION_VALUE.clear()
+            POSITION_VALUE.update(saved)
+    return run
+
+@_qbFirstPrices
 def test_a_walk_year_starter_is_a_hole_coming():
     """A starter on his last year counts as nobody: that slot is about to open."""
     starter = FakePlayer(99, 90, Position.QB, 'Walk Year QB')
@@ -321,6 +347,7 @@ def test_a_walk_year_starter_is_a_hole_coming():
     print("PASS a walk-year starter does not block the QB")
 
 
+@_qbFirstPrices
 def test_a_walk_year_starter_the_team_will_re_sign_still_blocks_the_position():
     """Fixed 2026-11-06: the need bar counted every walk-year starter as gone, so a team
     drafted behind one it planned to keep (prod snapshot, season 13: the Exoticos took a
@@ -390,6 +417,7 @@ def test_a_top_pick_skips_a_position_a_superstar_holds():
     print("PASS the #1 pick passes on the QB behind its 94 QB")
 
 
+@_qbFirstPrices
 def test_a_star_who_is_leaving_or_fading_does_not_lock_the_position():
     """A walk-year star, a retiring one, one past his longevity, or a 4-star leaves the
     position unlocked. Whether the team then drafts there is need's call: a walk-year or
@@ -416,6 +444,7 @@ def test_a_star_who_is_leaving_or_fading_does_not_lock_the_position():
     print("PASS a leaving, fading or 4-star starter leaves the position unlocked")
 
 
+@_qbFirstPrices
 def test_a_walk_year_star_the_team_will_re_sign_still_locks_the_position():
     """Owner, 2026-11-04: a star with one season left locks the position when the team
     intends to re-sign him next offseason (the re-sign limit decides that until
@@ -453,6 +482,7 @@ def test_need_takes_the_clear_need_over_a_qb_behind_a_kept_star():
     print("PASS need takes the clear need behind a kept star")
 
 
+@_qbFirstPrices
 def test_the_clear_need_rule_still_moves_a_need_pick_off_a_kept_star():
     """When need itself lands behind a kept 4-star and a clear-need rookie of comparable
     ceiling exists, `preferClearNeed` takes him. Under need-based picks that happens
@@ -633,6 +663,7 @@ def test_the_prospect_ranking_is_the_public_read_and_kickers_fall():
     print("PASS the ranking reads the public consensus, and kickers fall")
 
 
+@_qbFirstPrices
 def test_the_prospect_ranking_measures_against_the_starters_teams_have():
     """Owner, 2026-11-13: against a flat replacement level the top six of the season-14
     class were all QBs, while league QB starters average 81 and TEs 78. A prospect who

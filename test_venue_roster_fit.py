@@ -63,13 +63,16 @@ expect("a neutral venue changes nothing at all",
        all(positionValue(P(p), 0.0) == POSITION_VALUE[p] for p in POSITION_VALUE))
 
 # ── it tips close calls, it does not rewrite the hierarchy ────────────────
-# ⚠️ The single most important assertion here. At the most extreme run venue in the
-# league a quarterback must STILL be worth more than a back, or the venue has stopped
-# being a lean and become a different sport.
+# ⚠️ The single most important assertion here. At the most extreme venue in the league
+# the position order must survive, or the venue has stopped being a lean and become a
+# different sport. Since the 2026-11-24 re-price the order is RB > WR > QB > TE > K, so the
+# pass-favoring venue (which lifts the QB and lowers the back) is the test for RB over QB.
 worst = min(bias, key=lambda t: -bias[t])
 extreme = max(abs(v) for v in bias.values())
-expect(f"even at the most run-favoring venue, QB still outranks RB (bias {extreme:+.2f})",
-       positionValue(P('QB'), extreme) > positionValue(P('RB'), extreme))
+expect(f"even at the most pass-favoring venue, RB still outranks QB (bias {-extreme:+.2f})",
+       positionValue(P('RB'), -extreme) > positionValue(P('QB'), -extreme))
+expect(f"even at the most run-favoring venue, WR still outranks QB (bias {extreme:+.2f})",
+       positionValue(P('WR'), extreme) > positionValue(P('QB'), extreme))
 expect("even at the most pass-favoring venue, RB still outranks TE",
        positionValue(P('RB'), -extreme) > positionValue(P('TE'), -extreme))
 swing = positionValue(P('QB'), 1.0) / POSITION_VALUE['QB']
