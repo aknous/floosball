@@ -893,6 +893,22 @@ def returnMediumPassPlay():
 def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
+def qbReadErrorRange(vision) -> int:
+    """± openness points a QB misreads each target by, from his vision.
+
+    Continuous on the old tiers' scale (±5 at 95, ±15 at 80, ±25 at 65); the tiers it
+    replaced (`QB_SKILL_V2` off) jumped 10 points of read error at vision 70 and again
+    at 90."""
+    from constants import QB_SKILL_V2, QB_READ_ERR_REF, QB_READ_ERR_AT_REF, QB_READ_ERR_PER_PT
+    if QB_SKILL_V2:
+        return round(max(3.0, min(30.0, QB_READ_ERR_AT_REF + (QB_READ_ERR_REF - vision) * QB_READ_ERR_PER_PT)))
+    if vision >= 90:
+        return 5
+    if vision >= 70:
+        return 15
+    return 25
+
+
 def flairOf(player) -> float:
     """0..1 — how likely this player is to TRY something audacious.
 
@@ -18558,6 +18574,12 @@ class Play():
             rbSkill = rbAgility
             blockingImpact = 0.2  # Minimal blocking help
         
+        # The blockers make the hole; the back's skill is reading and hitting it, which
+        # the gap choice, the cut and the three gates already resolve. Inside, the hole is
+        # nearly all blocking; the bounce is the back making something from nothing.
+        from constants import RUN_BLOCKING_V2, RUN_GAP_BLOCKING_IMPACT
+        if RUN_BLOCKING_V2:
+            blockingImpact = RUN_GAP_BLOCKING_IMPACT.get(gapType, blockingImpact)
         # Calculate gap effectiveness
         offenseStrength = (rbSkill * (1 - blockingImpact)) + (blockingRating * blockingImpact)
         skillDifferential = offenseStrength - defenseRunCoverage
@@ -18850,7 +18872,14 @@ class Play():
             else:
                 self.game.awayHalfRunPlays += 1
 
-        blockerRating = blocker.attributes.blocking if blocker else 50
+        # The run model reads the GAME-DAY copy (league compression, fatigue, form, the
+        # soft cap), like the passing game. It read the profile, so backs and blockers
+        # played at full strength while every passer and receiver played compressed.
+        from constants import RUN_READS_GAME_ATTRIBUTES
+        _ra = (getattr(self.runner, 'gameAttributes', None) if RUN_READS_GAME_ATTRIBUTES else None) or self.runner.attributes
+        def _blockerAttrs(b):
+            return (getattr(b, 'gameAttributes', None) if RUN_READS_GAME_ATTRIBUTES else None) or b.attributes
+        blockerRating = _blockerAttrs(blocker).blocking if blocker else 50
         # Mental state: frustrated TE blocks sloppily, locked-in TE sustains blocks
         # Scale by /15 to match pass blocking drift (raw drift is ±12-50, too large for 0-100 scale)
         if blocker:
@@ -18860,8 +18889,8 @@ class Play():
         for gapType in ['A-gap', 'B-gap', 'C-gap', 'bounce']:
             quality = self.calculateGapQuality(
                 gapType,
-                self.runner.attributes.power,
-                self.runner.attributes.agility,
+                _ra.power,
+                _ra.agility,
                 blockerRating,
                 effectiveRunDef
             )
@@ -18875,9 +18904,9 @@ class Play():
         # better, cuts to it (agility) and resists the bounce (discipline)
         selectedGap = self.selectRunGap(
             gapList,
-            self.runner.attributes.vision,
-            self.runner.attributes.discipline,
-            self.runner.attributes.agility,
+            _ra.vision,
+            _ra.discipline,
+            _ra.agility,
         )
         
         # ── Three-gate yardage model ──
@@ -18888,22 +18917,23 @@ class Play():
         # and produces the 30+ yard scamper.
         gapQuality = selectedGap['actualQuality']
         gapType = selectedGap['type']
+        self._runBlockerRating = blockerRating   # gate 1: the block engages the man in the hole
 
         # Gap-weighted hybrid rating (kept from old model — informs Gate 1
         # since gap selection drives line-of-scrimmage matchup style)
         if gapType == 'A-gap':
-            rbRating = (self.runner.attributes.power * 1.5 + self.runner.attributes.agility * 0.5) / 2
+            rbRating = (_ra.power * 1.5 + _ra.agility * 0.5) / 2
         elif gapType == 'B-gap':
-            rbRating = (self.runner.attributes.power + self.runner.attributes.agility) / 2
+            rbRating = (_ra.power + _ra.agility) / 2
         elif gapType == 'C-gap':
-            rbRating = (self.runner.attributes.power * 0.5 + self.runner.attributes.agility * 1.5) / 2
+            rbRating = (_ra.power * 0.5 + _ra.agility * 1.5) / 2
         else:  # bounce
-            rbRating = self.runner.attributes.agility
+            rbRating = _ra.agility
 
         rbMental = self._mentalDrift(self.runner) / 15
 
         # GATE 1 — Line of scrimmage (power)
-        linePower = (self.runner.attributes.power * 1.4 +
+        linePower = (_ra.power * 1.4 +
                      rbRating * 0.6 +
                      blockerRating * 0.7) / 2.7
         linePower += rbMental + runnerPressureMod
@@ -18917,17 +18947,17 @@ class Play():
         gate1Chance = max(40, min(85, 45 + lineMatchup * 1.2))
 
         # GATE 2 — Second level (agility/vision vs box tackling)
-        secondLevel = (self.runner.attributes.agility * 1.3 +
-                       self.runner.attributes.vision * 0.5 +
-                       self.runner.attributes.playMakingAbility * 0.2) / 2
+        secondLevel = (_ra.agility * 1.3 +
+                       _ra.vision * 0.5 +
+                       _ra.playMakingAbility * 0.2) / 2
         secondLevel += rbMental + runnerPressureMod
         # LB-S box: blend of run defense (LB) and coverage (S) ratings
         secondLevelDef = effectiveRunDef * 0.55 + self.defense.defensePassCoverageRating * 0.45
         gate2Chance = max(6, min(45, 15 + (secondLevel - secondLevelDef) * 1.3))
 
         # GATE 3 — Open field (speed vs safety angles)
-        openField = (self.runner.attributes.speed * 1.7 +
-                     self.runner.attributes.playMakingAbility * 0.3) / 2
+        openField = (_ra.speed * 1.7 +
+                     _ra.playMakingAbility * 0.3) / 2
         openField += rbMental
         openFieldDef = self.defense.defensePassCoverageRating * 0.95
         gate3Chance = max(8, min(55, 22 + (openField - openFieldDef) * 1.2))
@@ -19644,7 +19674,7 @@ class Play():
             return d.get('rb') or d.get('te')
         return d.get('qb') or d.get('wr1')
 
-    def _contactContest(self, carrier, tackler, baseChance, breaksUsed):
+    def _contactContest(self, carrier, tackler, baseChance, breaksUsed, defenseRelief=0.0):
         """One tackle attempt. Returns (broke, moveName).
 
         The carrier either lowers a shoulder and runs through it, or elects a
@@ -19688,7 +19718,7 @@ class Play():
             # Run through it: power carries the contact, discipline keeps the feet.
             carrierRating = getattr(a, 'power', 80) * 0.75 + getattr(a, 'discipline', 80) * 0.25
 
-        chance = baseChance + (carrierRating - defRating) * RUN_CONTACT_SWING
+        chance = baseChance + (carrierRating - (defRating - defenseRelief)) * RUN_CONTACT_SWING
         if breaksUsed:
             chance -= RUN_SECOND_BREAK_PENALTY   # a second break is genuinely rare
         broke = batched_randint(1, 100) <= max(2, min(95, chance))
@@ -19747,7 +19777,13 @@ class Play():
             attempts += 1
             # The back meets the front a yard or two deep, not at the line itself.
             firstContactYards = batched_randint(0, 2)
-            broke, mv = self._contactContest(carrier, tackler, base, breaks)
+            # A block that holds engages the defender in the hole, so he arrives with
+            # less to hit the back with. Not on the bounce: the back left the blocking.
+            from constants import RUN_BLOCKING_V2, RUN_BLOCK_CONTACT_K, RUN_BLOCK_CONTACT_PIVOT
+            blockEdge = 0.0
+            if RUN_BLOCKING_V2 and gapType != 'bounce':
+                blockEdge = (getattr(self, '_runBlockerRating', RUN_BLOCK_CONTACT_PIVOT) - RUN_BLOCK_CONTACT_PIVOT) * RUN_BLOCK_CONTACT_K
+            broke, mv = self._contactContest(carrier, tackler, base, breaks, defenseRelief=blockEdge)
             if mv:
                 moves.append(mv)
             if not broke:
@@ -20248,12 +20284,7 @@ class Play():
         calledDepth = {'long': PassType.long, 'deep': PassType.deep}.get(_called)
         # Calculate how accurately QB perceives openness
         # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
-        if qbVision >= 90:
-            visionErrorRange = 5
-        elif qbVision >= 70:
-            visionErrorRange = 15
-        else:
-            visionErrorRange = 25
+        visionErrorRange = qbReadErrorRange(qbVision)
         
         # Awakened (powered-up) receivers get the QB's attention: a perceived-
         # openness nudge so the read favors them. Empty set when the awakened
@@ -20376,9 +20407,20 @@ class Play():
             PassType.deep:     {'acc': 0.40, 'arm': 0.60},
             PassType.hailMary: {'acc': 0.20, 'arm': 0.80},
         }
+        from constants import QB_SKILL_V2 as _v2, QB_ARM_TIER_WEIGHTS
+        if _v2:
+            # Arm matters beyond the deep ball: velocity beats a closing defender on an
+            # intermediate throw. Accuracy still leads where most passes go.
+            tierWeights = {getattr(PassType, k): {'acc': 1 - v, 'arm': v} for k, v in QB_ARM_TIER_WEIGHTS.items()}
         w = tierWeights.get(passType, tierWeights[PassType.medium])
         skillBlend = qbAccuracy * w['acc'] + qbArmStrength * w['arm']
-        baseAccuracy = (skillBlend + qbXFactor) / 2 + qbPressureMod
+        # ⚠️ X-FACTOR WAS HALF OF EVERY THROW. Averaged 50/50 with the accuracy/arm blend,
+        # composure counted as much as both throwing attributes together, and on the
+        # season-16 rosters a QB's completion rate tracked his accuracy at only +0.24.
+        # Now the throwing attributes carry the throw and X-Factor is a modifier.
+        from constants import QB_SKILL_V2, QB_THROW_XFACTOR_WEIGHT
+        xw = QB_THROW_XFACTOR_WEIGHT if QB_SKILL_V2 else 0.5
+        baseAccuracy = skillBlend * (1 - xw) + qbXFactor * xw + qbPressureMod
 
         # Mental state: QB in rhythm throws sharper, rattled QB throws errant
         # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale

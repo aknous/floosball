@@ -2038,6 +2038,35 @@ RUN_MOVE_BONUS = 5         # a move that lands beats the tackler by this much
 # back. On prod's season-16 rosters that left xFactor (computed from focus and
 # discipline) at -0.42 against yards per carry and the overall rating at +0.27.
 RUN_GAP_READ_V2 = _os.environ.get('FLOOS_GAP_READ') != 'off'   # FLOOS_GAP_READ=off: the old discipline tiers
+# The run model's ingredients (gap quality, gap choice, the three gates, the TE's
+# blocking) read the GAME-DAY attribute copy, like the passing game. They read the
+# profile, so league compression never reached a back or his blocker.
+RUN_READS_GAME_ATTRIBUTES = _os.environ.get('FLOOS_RUN_GAME_ATTRS') != 'off'
+
+# QB passing skill (`Play.calculateThrowQuality`, `Play.selectPassTarget`, 2026-11-23).
+# Throw quality averaged the accuracy/arm blend 50/50 with X-Factor, so composure counted
+# as much as both throwing attributes; on the season-16 rosters completion rate tracked
+# accuracy at +0.24. The QB's read used vision tiers (jumps at 70 and 90).
+# The TE's blocking makes the hole (`Play.calculateGapQuality`, 2026-11-23). Each gap's
+# quality blended the back's own power/agility with the blocker's rating at 0.7 / 0.5 /
+# 0.4 / 0.2 blocking, so the back helped make his own hole and was counted twice (his
+# skill also decides the gap choice, the cut and every gate). A 100-power TE was worth
+# only +0.4 yards a carry over a 60.
+RUN_BLOCKING_V2 = _os.environ.get('FLOOS_RUN_BLOCKING') != 'off'
+RUN_GAP_BLOCKING_IMPACT = {'A-gap': 0.9, 'B-gap': 0.8, 'C-gap': 0.6, 'bounce': 0.2}
+# At the first contact (gate 1, not the bounce) the tackler's rating drops by this much
+# per point the blocker is above the PIVOT, the league's average TE blocking (78.2 on the
+# season-16 rosters, 77.5-80.8 across snapshots), so an average block changes nothing.
+RUN_BLOCK_CONTACT_K = 0.75
+RUN_BLOCK_CONTACT_PIVOT = 78
+QB_SKILL_V2 = _os.environ.get('FLOOS_QB_SKILL') != 'off'
+QB_THROW_XFACTOR_WEIGHT = 0.2      # X-Factor's share of a throw's base quality (was 0.5)
+# Arm strength's share of the throwing blend by depth (accuracy takes the rest). Was
+# 0.05 / 0.20 / 0.40 / 0.60 / 0.80, so arm only mattered on the quarter of throws that go long.
+QB_ARM_TIER_WEIGHTS = {'short': 0.10, 'medium': 0.35, 'long': 0.55, 'deep': 0.70, 'hailMary': 0.80}
+QB_READ_ERR_REF = 95               # vision where the read error is QB_READ_ERR_AT_REF
+QB_READ_ERR_AT_REF = 5.0           # ± openness points (old tiers: ±5 at 90+, ±15 at 70-89, ±25 below)
+QB_READ_ERR_PER_PT = 10 / 15
 RUN_GAP_VISION_ERR_REF = 92         # vision where the read error is RUN_GAP_VISION_ERR_AT_REF
 RUN_GAP_VISION_ERR_AT_REF = 5.0     # ± quality points; the old tiers' scale (±5/15/25 at 92/77/62)
 RUN_GAP_VISION_ERR_PER_PT = 10 / 15  # extra error per vision point below the reference
@@ -5147,7 +5176,15 @@ MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
 # auto-win gap without erasing skill order. Profile ratings stay
 # untouched; only `gameAttributes` is compressed. Set factor=1.0 to
 # disable.
-LEAGUE_COMPRESSION_FACTOR = float(_os.environ.get('FLOOS_COMPRESSION', '0.45'))  # 1.0 = none, 0.5 = aggressive
+# ⚠️ OFF since 2026-11-23 (owner). It covered 12 attributes but not the locker-room
+# ones, and until RUN_READS_GAME_ATTRIBUTES it never reached the running game at all,
+# so backs played at full strength while passers and receivers played at 45% of their
+# gap. Measured on the season-16 rosters, 8,000 games a side, off vs 0.45: upsets (a
+# team 3+ worse by average starter rating winning) 36.7% -> 25.6%, 21+ blowouts 18.1%
+# -> 23.2%, one-score games 44.9% -> 39.6%, scoring 41.4 -> 41.1; over 50 full seasons
+# the within-season win SD 4.17 -> 4.89 and the best record took the title 40% -> 44%.
+# With it off, LEAGUE_COMPRESSION_MEAN below does nothing.
+LEAGUE_COMPRESSION_FACTOR = float(_os.environ.get('FLOOS_COMPRESSION', '1.0'))  # 1.0 = none, 0.45 = the old setting
 # Center of the compression curve — this is the effective baseline every player
 # plays at, so it also sets the league's overall scoring level (higher = more
 # offense). Raised 80 -> 84 to recover the scoring the attribute remap cost:
