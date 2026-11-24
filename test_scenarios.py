@@ -257,7 +257,11 @@ print("9. A confident RB runs for more than a rattled one")
 # threshold and this check failed on a working mechanism (measured: +0.478 at N=400,
 # +0.609 at N=1500). Give this one its own larger sample rather than lowering the bar,
 # which would stop it detecting a genuine regression.
-RB_CONF_N = 1500
+# ⚠️ STILL UNDERPOWERED AT 1500 (2026-11-23): over seeds 2-6 the gap measured
+# 0.29-0.85 (mean 0.55) before the gap-selection rework and 0.34-0.80 (mean 0.49)
+# after, so a bar AT the effect size passed or failed on the seed. 3000 carries a side
+# and a +0.3 bar: a dead mechanism measures ~0 and still fails it.
+RB_CONF_N = 3000
 
 def rbYpc(conf):
     s = Scenario(); g = s.game; tot = 0
@@ -269,7 +273,7 @@ def rbYpc(conf):
     return tot / RB_CONF_N
 reseed(2); rbHi = rbYpc(5)
 reseed(2); rbLo = rbYpc(-5)
-expect("confident RB averages more yards than a rattled RB", rbHi > rbLo + 0.5)
+expect("confident RB averages more yards than a rattled RB", rbHi > rbLo + 0.3)
 
 # ── 10. Aggression (P2) — confident forces it, rattled bails ─────────────
 # The effect is real but modest (bail is a small fraction of dropbacks); assert
