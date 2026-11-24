@@ -413,13 +413,13 @@ def test_a_kicker_does_not_price_like_a_quarterback():
     kicker priced exactly like a 78 quarterback. Measured consequence: a club paid THREE
     FIRST-ROUND PICKS for a 78-rated K on a walk year.
 
-    `POSITION_VALUE` runs QB 1.00 down to K 0.35 and exists, in its own words, to stop
+    `POSITION_VALUE` prices K far below the field (0.30 against RB 1.00 / QB 0.75) and exists, in its own words, to stop
     "best available" handing a team a great kicker while the QB slot rots."""
     from constants import POSITION_VALUE
     qb = trading.playerValue(78, 1, 15, 1.0, POSITION_VALUE['QB'])
     k = trading.playerValue(78, 1, 15, 1.0, POSITION_VALUE['K'])
     assert qb > k, (qb, k)
-    assert abs(k / qb - POSITION_VALUE['K']) < 0.01
+    assert abs(k / qb - POSITION_VALUE['K'] / POSITION_VALUE['QB']) < 0.01
     print(f"PASS a 78 kicker is worth {k / qb:.0%} of a 78 quarterback")
 
 
@@ -429,8 +429,10 @@ def test_a_pick_is_weighted_for_an_UNKNOWN_position():
     yields whatever the board offers, so the honest figure is the roster-shape average."""
     from constants import POSITION_VALUE
     avg = trading.averagePositionWeight()
-    assert POSITION_VALUE['K'] < avg < POSITION_VALUE['QB']
-    assert abs(avg - 0.695) < 0.01, avg
+    assert min(POSITION_VALUE.values()) < avg < max(POSITION_VALUE.values())
+    shape = (POSITION_VALUE['QB'] + POSITION_VALUE['RB'] + 2 * POSITION_VALUE['WR']
+             + POSITION_VALUE['TE'] + POSITION_VALUE['K']) / 6   # one of each slot, two WRs
+    assert abs(avg - shape) < 0.01, (avg, shape)
 
     # ⚠️ AND `pickValue` HAS TO USE IT. Asserting the helper alone proves nothing about
     # the valuation: defaulting a pick to weight 1.00 left this whole file green until

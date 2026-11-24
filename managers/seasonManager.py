@@ -10000,7 +10000,7 @@ class SeasonManager:
         that position is worth having. The largest weighted deficit wins.
 
         ⚠️ KICKER IS WEIGHTED TO ZERO. Raw need would nominate K regularly — weak clubs
-        are weak everywhere — and `POSITION_VALUE` prices a kicker at 0.35, so a
+        are weak everywhere — and `POSITION_VALUE` prices a kicker lowest (0.30), so a
         guaranteed 88 kicker every season is the least useful star the league could
         manufacture. TE is included at 0.5 for the same reason, less sharply.
 

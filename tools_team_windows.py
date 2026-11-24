@@ -31,7 +31,7 @@ import sqlite3
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(os.environ.get('DATABASE_DIR', os.path.join(HERE, 'data')), 'floosball.db')
 
-POSITION_VALUE = {1: 1.00, 2: 0.78, 3: 0.72, 4: 0.60, 5: 0.35}   # QB RB WR TE K
+POSITION_VALUE = {1: 0.75, 2: 1.00, 3: 0.95, 4: 0.74, 5: 0.30}   # QB RB WR TE K (mirrors constants.POSITION_VALUE)
 POSITION_NAME = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
 DECLINE_HIGH = 0.22      # TRADE_WINDOW_DECLINE_HIGH
 ASCENT_HIGH = 0.50       # TRADE_WINDOW_ASCENT_HIGH

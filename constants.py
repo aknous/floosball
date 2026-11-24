@@ -3217,12 +3217,26 @@ def rookieDraftEnabled() -> bool:
 # the free-agent pool) move slowly within a day.
 FO_DESK_PROJECTION_TTL_SECS = 600
 
+# ⚠️ RE-PRICED 2026-11-24 FROM WHAT WINS IN THIS ENGINE (owner: "change how teams value each
+# position"). The table above was set off an older `FLOOS_POS_FORCE` measurement that scaled
+# only the game-day copy (so it undercounted backs, whose run model then read the profile) and
+# ran under league compression. Re-measured on the attribute-pass engine (compression off, run
+# game on the game-day copy): every attribute of one slot's WHOLE player (both ways) scaled
+# +12% on half the league and -12% on the other, 4,000 games on the season-16 week-0 rosters,
+# divided by the rating gap that produced (~17.5 points at every slot): wins per rating point
+# RB 0.59 / WR 0.56 / QB 0.44 / TE 0.43 / K 0.18, i.e. relative to the best RB 1.00 / WR 0.95 /
+# QB 0.75 / TE 0.74 / K 0.30 (each about ±0.06 of noise). Was QB 1.00 / RB 0.78 / WR 0.72 /
+# TE 0.60 / K 0.35. ⚠️ A receiver's value is mostly his CORNERBACK role and a QB's defensive
+# role (safety) is the smallest; on offense alone the order is RB > QB > TE > WR. ⚠️ Owner
+# chose to price what wins HERE rather than make QBs matter more (as in the NFL); the engine's
+# backs swing ~1.8x the NFL's true spread in yards per carry, to be revisited with the physical
+# engine. The order RB > WR > QB keeps the owner's 2026-09-13 RB-WR-TE priority.
 POSITION_VALUE = {
-    'QB': 1.00,
-    'RB': 0.78,
-    'WR': 0.72,
-    'TE': 0.60,
-    'K':  0.35,
+    'QB': 0.75,
+    'RB': 1.00,
+    'WR': 0.95,
+    'TE': 0.74,
+    'K':  0.30,
 }
 
 # Scouting -> career-arc vision. A GM's read of a player is a blend of the
@@ -4070,7 +4084,11 @@ TRADE_WINDOW_ENABLED = True
 # fading man is: QB 24%, RB 19%, WR 17%, TE 14%, K 8%. At 0.30 nothing short of two starters
 # qualified and an aging franchise quarterback — the textbook closing window — read as wide
 # open. The measured median regressing share is 17%, so this sits just above it.
-TRADE_WINDOW_DECLINE_HIGH = 0.22
+# ⚠️ RE-SIZED 0.22 -> 0.20 WITH THE 2026-11-24 POSITION_VALUE RE-PRICE: the six now weigh
+# 4.69 and one fading man is RB 21.3%, WR 20.3%, QB 16.0%, TE 15.8%, K 6.4%, so at 0.22 no
+# single fading starter could close a window. Same intent: one fading player at the most
+# valuable position closes it, a fading kicker does not (and now neither does a QB alone).
+TRADE_WINDOW_DECLINE_HIGH = 0.20
 # ⚠️ A MAJORITY STILL RISING (2026-11-02; was 0.70). The old bar was set off a spread measured
 # while `classifyArc` called every past-peak player with headroom "developing"; with the label
 # meaning "still rising" no non-contender on the season-11 prod snapshot reached 0.70 (max

@@ -47,9 +47,11 @@ class Coach:
 
 brain = FrontOfficeBrain(playerManager=None)
 
-print("\n1. Position priority is QB > RB > WR > TE > K")
+print("\n1. Position priority is RB > WR > QB > TE > K")
+# Re-priced 2026-11-24 from what wins in this engine (constants.POSITION_VALUE); RB above
+# WR is still the owner's 2026-09-13 call.
 order = [k for k, _ in sorted(POSITION_VALUE.items(), key=lambda kv: -kv[1])]
-expect(f"order is {' > '.join(order)}", order == ['QB','RB','WR','TE','K'])
+expect(f"order is {' > '.join(order)}", order == ['RB','WR','QB','TE','K'])
 # ⚠️ RB ABOVE WR IS THE OWNER'S CALL *and* the engine's own FLOOS_POS_FORCE measurement
 # (QB +2.52, RB +1.25, WR +0.91, TE +0.54, K -0.93 wins a season). The table used to
 # contradict both.
